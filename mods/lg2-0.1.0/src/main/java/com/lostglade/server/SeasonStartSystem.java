@@ -93,6 +93,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.NoiseColumn;
 import net.minecraft.world.level.block.Block;
@@ -162,6 +163,10 @@ public final class SeasonStartSystem {
 	private static final int WORLD_REVEAL_SNAPSHOT_VERSION = 1;
 	private static final Set<Relative> ABSOLUTE_TELEPORT = EnumSet.noneOf(Relative.class);
 	private static final int DISSOLVE_BATCH_BLOCKS = 96;
+	// The vertical columns are deliberately wider batches: they only cover the
+	// already-reserved startup footprint and must be finished before the scene
+	// opens to players.
+	private static final int VERTICAL_SCENE_BATCH_BLOCKS = 4_096;
 	// A one-chunk exterior buffer keeps the physical shell out of the client's
 	// edge-culling zone. The startup biome turns this buffer into black fog, so
 	// it cannot reveal the ordinary world behind the shell.
@@ -705,6 +710,7 @@ public final class SeasonStartSystem {
 	private static WorldRevealPhase worldRevealPhase = WorldRevealPhase.NONE;
 	private static ServerBossEvent sharedLaunchBossBar = null;
 	private static Difficulty difficultyBeforeSeasonStart = null;
+	private static PristineWorldFreezeState pristineWorldFreeze = null;
 	private static volatile BlockPos serverAnchor = null;
 	private static Direction.Axis serverStructureAxis = Direction.Axis.Z;
 
@@ -754,6 +760,7 @@ public final class SeasonStartSystem {
 		worldRevealPhase = WorldRevealPhase.NONE;
 		sharedLaunchBossBar = null;
 		difficultyBeforeSeasonStart = null;
+		pristineWorldFreeze = null;
 		serverAnchor = null;
 		serverStructureAxis = Direction.Axis.Z;
 		PLAYER_STATES.clear();
@@ -1887,9 +1894,11 @@ public final class SeasonStartSystem {
 		}
 		if ((active || worldRevealActive) && !completed) {
 			enforcePeacefulDifficulty(server);
+			enforcePristineWorldFreeze(server.overworld());
 			return;
 		}
 		restoreSeasonStartDifficulty(server);
+		restorePristineWorldFreeze(server, server.overworld());
 	}
 
 	private static void enforcePeacefulDifficulty(MinecraftServer server) {
@@ -1945,6 +1954,11 @@ public final class SeasonStartSystem {
 			return;
 		}
 		ensureBootstrap(server);
+		// A new season always begins at the first morning of day zero.  Keep this
+		// separate from gameTime: the latter is the server's tick clock and drives
+		// the start animation, while dayTime is what vanilla's day counter displays.
+		resetSeasonStartClock(overworld);
+		enforcePristineWorldFreeze(overworld);
 		active = true;
 		completed = false;
 		sceneBoundaryPhysicsFrozen = true;
@@ -2015,7 +2029,6 @@ public final class SeasonStartSystem {
 		releaseSceneBuildFlight(server);
 		SeasonStartVoiceSystem.resetSceneState();
 		stopWorldRevealEarthquakeSound(overworld);
-		forceStartupClearWeather(overworld);
 		enforcePeacefulDifficulty(server);
 		// Also terminates any ability sessions from a previous race, including XP-draining ones.
 		ServerRaceSystem.beginSeasonStartRaces(server, get().startupRaceId);
@@ -4384,6 +4397,7 @@ public final class SeasonStartSystem {
 		if (serverAnchor == null || WORLD_REVEAL_TERRAIN.isEmpty()) {
 			return;
 		}
+		BoxGeometry outerGeometry = computeOuterBoxGeometry(serverAnchor);
 		BoxGeometry barrierGeometry = computeBarrierGeometry(serverAnchor);
 		WORLD_REVEAL_BARRIER_COLLISION.clear();
 		WORLD_REVEAL_SURFACE_Y.clear();
@@ -4397,6 +4411,11 @@ public final class SeasonStartSystem {
 			}
 			BlockPos pos = placement.pos();
 			BlockState state = placement.state();
+			// Blocks above and below the sealed box are retained for the final
+			// restoration, but are never part of the visible terrain reveal.
+			if (!isInsideBoxVolume(outerGeometry, pos)) {
+				continue;
+			}
 			WORLD_REVEAL_TARGET_STATES.put(pos.asLong(), state);
 			boolean insideBarrier = pos.getX() >= barrierGeometry.minX + 1
 					&& pos.getX() <= barrierGeometry.maxX - 1
@@ -4464,6 +4483,13 @@ public final class SeasonStartSystem {
 		return state != null && !state.isAir() && (state.blocksMotion() || !state.getFluidState().isEmpty());
 	}
 
+	private static boolean isInsideBoxVolume(BoxGeometry geometry, BlockPos pos) {
+		return geometry != null && pos != null
+				&& pos.getX() >= geometry.minX && pos.getX() <= geometry.maxX
+				&& pos.getY() >= geometry.floorY && pos.getY() <= geometry.roofY
+				&& pos.getZ() >= geometry.minZ && pos.getZ() <= geometry.maxZ;
+	}
+
 	/**
 	 * The reveal plan is pure data. Build it from a frozen scene snapshot on a
 	 * worker thread so reaching 100% can never monopolise the server tick.
@@ -4481,7 +4507,9 @@ public final class SeasonStartSystem {
 		for (BlockPos pos : ServerStructureBreakSystem.getStructurePositions(anchor, serverStructureAxis)) {
 			structureFootprint.add(pos.asLong());
 		}
-		List<TerrainPlacement> terrainSnapshot = List.copyOf(WORLD_REVEAL_TERRAIN);
+		List<TerrainPlacement> terrainSnapshot = WORLD_REVEAL_TERRAIN.stream()
+				.filter(placement -> placement != null && isInsideBoxVolume(outer, placement.pos()))
+				.toList();
 		Map<Long, Integer> surfaceSnapshot = Map.copyOf(WORLD_REVEAL_SURFACE_Y);
 		Set<Long> footprintSnapshot = Set.copyOf(structureFootprint);
 		long randomSeed = level.getSeed() ^ anchor.asLong() ^ 0x6C6732777265616CL;
@@ -6008,6 +6036,7 @@ public final class SeasonStartSystem {
 		}
 		clearStartupWorldgenDisplay(level);
 		restorePostStartMorning(level);
+		restorePristineWorldFreeze(server, level);
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (!isSeasonStartEligiblePlayer(player)) {
 				continue;
@@ -6144,7 +6173,9 @@ public final class SeasonStartSystem {
 		long currentDayTime = Math.max(0L, level.getDayTime());
 		long dayBase = (currentDayTime / 24000L) * 24000L;
 		long morning = dayBase + WORLD_REVEAL_POST_START_MORNING_TIME;
-		if (currentDayTime >= morning) {
+		// A sealed start scene is held exactly at 1000.  That is already the
+		// intended morning of day zero, not the following day.
+		if (currentDayTime > morning) {
 			morning += 24000L;
 		}
 		level.setDayTime(morning);
@@ -6153,11 +6184,78 @@ public final class SeasonStartSystem {
 		level.setThunderLevel(0.0F);
 	}
 
+	/** Resets the player-visible calendar without resetting the server tick clock. */
+	private static void resetSeasonStartClock(ServerLevel level) {
+		if (level == null) {
+			return;
+		}
+		level.setDayTime(WORLD_REVEAL_POST_START_MORNING_TIME);
+		forceStartupClearWeather(level);
+	}
+
+	/**
+	 * Keeps the pregenerated overworld pristine throughout the sealed intro and
+	 * reveal. The animation still uses the server tick clock; only the vanilla
+	 * rules that can mutate ordinary terrain are frozen and later restored.
+	 */
+	private static void enforcePristineWorldFreeze(ServerLevel level) {
+		if (level == null || level.getServer() == null) {
+			return;
+		}
+		GameRules rules = level.getGameRules();
+		MinecraftServer server = level.getServer();
+		if (pristineWorldFreeze == null) {
+			pristineWorldFreeze = new PristineWorldFreezeState(
+					rules.get(GameRules.ADVANCE_TIME),
+					rules.get(GameRules.ADVANCE_WEATHER),
+					rules.get(GameRules.SPAWN_MOBS),
+					rules.get(GameRules.MOB_GRIEFING),
+					rules.get(GameRules.RANDOM_TICK_SPEED),
+					rules.get(GameRules.PROJECTILES_CAN_BREAK_BLOCKS),
+					rules.get(GameRules.TNT_EXPLODES),
+					rules.get(GameRules.SPREAD_VINES),
+					rules.get(GameRules.FIRE_SPREAD_RADIUS_AROUND_PLAYER)
+			);
+			stateDirty = true;
+		}
+		if (rules.get(GameRules.ADVANCE_TIME)) rules.set(GameRules.ADVANCE_TIME, false, server);
+		if (rules.get(GameRules.ADVANCE_WEATHER)) rules.set(GameRules.ADVANCE_WEATHER, false, server);
+		if (rules.get(GameRules.SPAWN_MOBS)) rules.set(GameRules.SPAWN_MOBS, false, server);
+		if (rules.get(GameRules.MOB_GRIEFING)) rules.set(GameRules.MOB_GRIEFING, false, server);
+		if (rules.get(GameRules.RANDOM_TICK_SPEED) != 0) rules.set(GameRules.RANDOM_TICK_SPEED, 0, server);
+		if (rules.get(GameRules.PROJECTILES_CAN_BREAK_BLOCKS)) rules.set(GameRules.PROJECTILES_CAN_BREAK_BLOCKS, false, server);
+		if (rules.get(GameRules.TNT_EXPLODES)) rules.set(GameRules.TNT_EXPLODES, false, server);
+		if (rules.get(GameRules.SPREAD_VINES)) rules.set(GameRules.SPREAD_VINES, false, server);
+		if (rules.get(GameRules.FIRE_SPREAD_RADIUS_AROUND_PLAYER) != 0) {
+			rules.set(GameRules.FIRE_SPREAD_RADIUS_AROUND_PLAYER, 0, server);
+		}
+	}
+
+	private static void restorePristineWorldFreeze(MinecraftServer server, ServerLevel level) {
+		if (server == null || level == null || pristineWorldFreeze == null) {
+			return;
+		}
+		GameRules rules = level.getGameRules();
+		PristineWorldFreezeState saved = pristineWorldFreeze;
+		rules.set(GameRules.ADVANCE_TIME, saved.advanceTime(), server);
+		rules.set(GameRules.ADVANCE_WEATHER, saved.advanceWeather(), server);
+		rules.set(GameRules.SPAWN_MOBS, saved.spawnMobs(), server);
+		rules.set(GameRules.MOB_GRIEFING, saved.mobGriefing(), server);
+		rules.set(GameRules.RANDOM_TICK_SPEED, saved.randomTickSpeed(), server);
+		rules.set(GameRules.PROJECTILES_CAN_BREAK_BLOCKS, saved.projectilesCanBreakBlocks(), server);
+		rules.set(GameRules.TNT_EXPLODES, saved.tntExplodes(), server);
+		rules.set(GameRules.SPREAD_VINES, saved.spreadVines(), server);
+		rules.set(GameRules.FIRE_SPREAD_RADIUS_AROUND_PLAYER, saved.fireSpreadRadius(), server);
+		pristineWorldFreeze = null;
+		stateDirty = true;
+	}
+
 	/** Keeps the sealed start scene in a stable clear morning until the reveal ends. */
 	private static void enforceStartupEnvironment(ServerLevel level) {
 		if (level == null) {
 			return;
 		}
+		enforcePristineWorldFreeze(level);
 		long currentDayTime = Math.max(0L, level.getDayTime());
 		long lockedMorning = (currentDayTime / 24000L) * 24000L + WORLD_REVEAL_POST_START_MORNING_TIME;
 		if (level.getDayTime() != lockedMorning) {
@@ -6227,6 +6325,14 @@ public final class SeasonStartSystem {
 	private static SceneBuildTask createSceneBuildTask(ServerLevel level, BlockPos anchor, SceneBuildMode mode) {
 		BoxGeometry outer = computeOuterBoxGeometry(anchor);
 		BoxGeometry barrier = computeBarrierGeometry(anchor);
+		BoxGeometry verticalBelow = new BoxGeometry(
+				outer.minX, outer.maxX, outer.minZ, outer.maxZ,
+				level.getMinY(), outer.floorY - 1
+		);
+		BoxGeometry verticalAbove = new BoxGeometry(
+				outer.minX, outer.maxX, outer.minZ, outer.maxZ,
+				outer.roofY + 1, level.getMaxY() - 1
+		);
 		BoxGeometry boundary = new BoxGeometry(
 				outer.minX - WORLD_REVEAL_BOUNDARY_RESTORE_RADIUS,
 				outer.maxX + WORLD_REVEAL_BOUNDARY_RESTORE_RADIUS,
@@ -6266,7 +6372,7 @@ public final class SeasonStartSystem {
 			protectPlayersDuringSceneBuild(level, level.players());
 		}
 		return new SceneBuildTask(
-				anchor.immutable(), outer, barrier, boundary, stale,
+				anchor.immutable(), outer, barrier, boundary, stale, verticalBelow, verticalAbove,
 				mode, mode == SceneBuildMode.WORLD_REVEAL_RECOVERY || hadExistingShell,
 				reuseExistingShell, captureRestorationData, reusePersistedSnapshot, structureFootprint
 		);
@@ -6289,9 +6395,12 @@ public final class SeasonStartSystem {
 			return false;
 		}
 		SceneBuildPhase budgetPhase = task.phase;
-		int remainingBudget = budgetPhase == SceneBuildPhase.SNAPSHOT
-				? SCENE_SNAPSHOT_BATCH_BLOCKS
-				: SCENE_BUILD_BATCH_BLOCKS;
+		int remainingBudget = switch (budgetPhase) {
+			case SNAPSHOT -> SCENE_SNAPSHOT_BATCH_BLOCKS;
+			case VERTICAL_SNAPSHOT_BELOW, VERTICAL_SNAPSHOT_ABOVE,
+					VERTICAL_CLEAR_BELOW, VERTICAL_CLEAR_ABOVE -> VERTICAL_SCENE_BATCH_BLOCKS;
+			default -> SCENE_BUILD_BATCH_BLOCKS;
+		};
 		while (remainingBudget > 0 && task.phase == budgetPhase && task.phase != SceneBuildPhase.FINALIZE) {
 			long total = resolveSceneBuildPhaseTotal(level, task);
 			if (task.cursor >= total) {
@@ -6309,6 +6418,8 @@ public final class SeasonStartSystem {
 				case BOUNDARY_SNAPSHOT -> captureBoundaryRestoreSnapshotCell(level, task, pos);
 				case ENTITY_SNAPSHOT -> captureSceneEntitySnapshotCell(level, task.sceneEntityCandidates.get((int) task.cursor++));
 				case SNAPSHOT -> captureSceneSnapshotCell(level, task, pos);
+				case VERTICAL_SNAPSHOT_BELOW, VERTICAL_SNAPSHOT_ABOVE -> captureVerticalSceneSnapshotCell(level, task, pos);
+				case VERTICAL_CLEAR_BELOW, VERTICAL_CLEAR_ABOVE -> clearVerticalSceneBlock(level, pos);
 				case CLEAR_STALE -> clearStaleSceneBlock(level, pos);
 				case BUILD_OUTER -> buildOuterSceneBlock(level, task, pos);
 				case BUILD_BARRIER -> buildBarrierSceneBlock(level, task, pos);
@@ -6375,6 +6486,17 @@ public final class SeasonStartSystem {
 		}
 	}
 
+	private static void captureVerticalSceneSnapshotCell(ServerLevel level, SceneBuildTask task, BlockPos pos) {
+		BlockState state = level.getBlockState(pos);
+		if (state == null || state.isAir()) {
+			return;
+		}
+		WORLD_REVEAL_TERRAIN.add(new TerrainPlacement(pos.immutable(), state));
+		if (task.snapshotAccumulator != null) {
+			task.snapshotAccumulator.addTerrain(pos, state);
+		}
+	}
+
 	private static void captureBoundaryRestoreSnapshotCell(ServerLevel level, SceneBuildTask task, BlockPos pos) {
 		if (level == null || task == null || pos == null
 				|| (pos.getX() >= task.outer.minX && pos.getX() <= task.outer.maxX
@@ -6425,6 +6547,12 @@ public final class SeasonStartSystem {
 	private static void clearStaleSceneBlock(ServerLevel level, BlockPos pos) {
 		BlockState state = level.getBlockState(pos);
 		if (isStartupShellBlock(state) || state.is(Blocks.BARRIER) || state.is(Blocks.LIGHT)) {
+			setSceneBlockSilently(level, pos, Blocks.AIR.defaultBlockState());
+		}
+	}
+
+	private static void clearVerticalSceneBlock(ServerLevel level, BlockPos pos) {
+		if (!level.getBlockState(pos).isAir()) {
 			setSceneBlockSilently(level, pos, Blocks.AIR.defaultBlockState());
 		}
 	}
@@ -6482,13 +6610,13 @@ public final class SeasonStartSystem {
 				task.snapshotAccumulator.terrain.size(), task.snapshotAccumulator.boundary.size());
 		task.phase = task.mode == SceneBuildMode.WORLD_REVEAL_RECOVERY
 				? SceneBuildPhase.FINALIZE
-				: task.reuseExistingShell ? SceneBuildPhase.BUILD_LIGHTS : SceneBuildPhase.BUILD_OUTER;
+				: task.reuseExistingShell ? SceneBuildPhase.BUILD_LIGHTS : SceneBuildPhase.VERTICAL_CLEAR_BELOW;
 		task.cursor = 0L;
 		return true;
 	}
 
 	private static void advanceSceneBuildPhase(MinecraftServer server, SceneBuildTask task) {
-		if (task.phase == SceneBuildPhase.SNAPSHOT) {
+		if (task.phase == SceneBuildPhase.VERTICAL_SNAPSHOT_ABOVE) {
 			finalizeSceneSnapshot(task);
 			if (task.snapshotAccumulator != null) {
 				writeWorldRevealSnapshotAsync(server, task);
@@ -6500,11 +6628,17 @@ public final class SeasonStartSystem {
 		task.phase = switch (task.phase) {
 			case BOUNDARY_SNAPSHOT -> task.captureEntities ? SceneBuildPhase.ENTITY_SNAPSHOT : SceneBuildPhase.SNAPSHOT;
 			case ENTITY_SNAPSHOT -> SceneBuildPhase.SNAPSHOT;
-			case SNAPSHOT -> task.mode == SceneBuildMode.WORLD_REVEAL_RECOVERY ? SceneBuildPhase.FINALIZE
+			case SNAPSHOT -> task.snapshotAccumulator != null ? SceneBuildPhase.VERTICAL_SNAPSHOT_BELOW
+					: task.mode == SceneBuildMode.WORLD_REVEAL_RECOVERY ? SceneBuildPhase.FINALIZE
 					: task.reuseExistingShell ? SceneBuildPhase.BUILD_LIGHTS
 					: task.generatorFallback ? SceneBuildPhase.CLEAR_STALE : SceneBuildPhase.BUILD_OUTER;
+			case VERTICAL_SNAPSHOT_BELOW -> SceneBuildPhase.VERTICAL_SNAPSHOT_ABOVE;
+			case VERTICAL_SNAPSHOT_ABOVE -> task.mode == SceneBuildMode.WORLD_REVEAL_RECOVERY ? SceneBuildPhase.FINALIZE
+					: task.reuseExistingShell ? SceneBuildPhase.BUILD_LIGHTS : SceneBuildPhase.VERTICAL_CLEAR_BELOW;
 			case SNAPSHOT_PERSIST -> task.mode == SceneBuildMode.WORLD_REVEAL_RECOVERY ? SceneBuildPhase.FINALIZE
-					: task.reuseExistingShell ? SceneBuildPhase.BUILD_LIGHTS : SceneBuildPhase.BUILD_OUTER;
+					: task.reuseExistingShell ? SceneBuildPhase.BUILD_LIGHTS : SceneBuildPhase.VERTICAL_CLEAR_BELOW;
+			case VERTICAL_CLEAR_BELOW -> SceneBuildPhase.VERTICAL_CLEAR_ABOVE;
+			case VERTICAL_CLEAR_ABOVE -> SceneBuildPhase.BUILD_OUTER;
 			case CLEAR_STALE -> SceneBuildPhase.BUILD_OUTER;
 			case BUILD_OUTER -> SceneBuildPhase.BUILD_BARRIER;
 			case BUILD_BARRIER -> SceneBuildPhase.BUILD_LIGHTS;
@@ -8406,8 +8540,10 @@ public final class SeasonStartSystem {
 		}
 		LevelData.RespawnData respawnData = level.getRespawnData();
 		BlockPos sharedSpawn = respawnData == null ? null : respawnData.pos();
-		int centerX = sharedSpawn == null ? 0 : sharedSpawn.getX();
-		int centerZ = sharedSpawn == null ? 0 : sharedSpawn.getZ();
+		int requestedX = sharedSpawn == null ? 0 : sharedSpawn.getX();
+		int requestedZ = sharedSpawn == null ? 0 : sharedSpawn.getZ();
+		int centerX = centerOfChunk(requestedX);
+		int centerZ = centerOfChunk(requestedZ);
 		int maxSupportY = Integer.MIN_VALUE;
 		for (int x = -ServerStructureBreakSystem.STRUCTURE_HALF_WIDTH; x <= ServerStructureBreakSystem.STRUCTURE_HALF_WIDTH; x++) {
 			for (int z = -ServerStructureBreakSystem.STRUCTURE_HALF_DEPTH; z <= ServerStructureBreakSystem.STRUCTURE_HALF_DEPTH; z++) {
@@ -8422,9 +8558,14 @@ public final class SeasonStartSystem {
 		if (anchorY > maxAnchorY) {
 			anchorY = maxAnchorY;
 		}
-		// Bootstrap follows the world's chosen spawn column and then lifts the
-		// whole server footprint onto the supporting surface around that spawn.
+		// The starter structure is centred in a chunk. Together with the aligned
+		// outer geometry below this makes the sealed scene a stable chunk grid for
+		// every newly generated world, irrespective of vanilla's spawn coordinate.
 		return new BlockPos(centerX, anchorY, centerZ);
+	}
+
+	private static int centerOfChunk(int coordinate) {
+		return Math.floorDiv(coordinate, 16) * 16 + 8;
 	}
 
 	private static int resolveBootstrapSupportY(ServerLevel level, int x, int z) {
@@ -8653,7 +8794,16 @@ public final class SeasonStartSystem {
 	}
 
 	private static BoxGeometry computeOuterBoxGeometry(BlockPos anchor) {
-		int halfExtent = Math.max(get().boxHalfWidth, get().boxHalfDepth);
+		int minimumSide = Math.max(get().boxHalfWidth, get().boxHalfDepth) * 2 + 1;
+		int chunkSide = Math.max(1, (minimumSide + 15) / 16);
+		// An odd number keeps the server and its barrier room centred. With the
+		// current 71-block request this deliberately yields a 5x5 chunk box.
+		if ((chunkSide & 1) == 0) {
+			chunkSide++;
+		}
+		int sideLength = chunkSide * 16;
+		int minX = (Math.floorDiv(anchor.getX(), 16) - chunkSide / 2) * 16;
+		int minZ = (Math.floorDiv(anchor.getZ(), 16) - chunkSide / 2) * 16;
 		int barrierFloorY = anchor.getY() - 1;
 		// The visible world-generation projection needs its own floor below the
 		// barrier-room floor.  Keeping it just below the barrier's five-block base
@@ -8662,10 +8812,10 @@ public final class SeasonStartSystem {
 		int floorY = barrierFloorY - BARRIER_FLOOR_DEPTH - 1;
 		int roofY = barrierFloorY + get().boxHeight - 1;
 		return new BoxGeometry(
-				anchor.getX() - halfExtent,
-				anchor.getX() + halfExtent,
-				anchor.getZ() - halfExtent,
-				anchor.getZ() + halfExtent,
+				minX,
+				minX + sideLength - 1,
+				minZ,
+				minZ + sideLength - 1,
 				floorY,
 				roofY
 		);
@@ -8856,7 +9006,7 @@ public final class SeasonStartSystem {
 
 	private static List<PersistedSnapshotBlock> readSnapshotBlocks(DataInputStream input, int paletteSize) throws IOException {
 		int count = input.readInt();
-		if (count < 0 || count > 1_000_000) {
+		if (count < 0 || count > 3_000_000) {
 			throw new IOException("Invalid season-start snapshot block count");
 		}
 		List<PersistedSnapshotBlock> entries = new ArrayList<>(count);
@@ -8953,6 +9103,7 @@ public final class SeasonStartSystem {
 			serverAnchor = parseBlockPos(state.serverAnchor);
 			serverStructureAxis = parseServerAxis(state.serverAxis);
 			difficultyBeforeSeasonStart = parseDifficulty(state.difficultyBeforeSeasonStart);
+			pristineWorldFreeze = PristineWorldFreezeState.fromPersisted(state.pristineWorldFreeze);
 			sharedLaunchCollectedBitcoins = Math.max(0, state.sharedLaunchCollectedBitcoins);
 			sharedLaunchRequiredBitcoins = Math.max(0, state.sharedLaunchRequiredBitcoins);
 			sharedLaunchBitcoinSpawned = Math.max(0, state.sharedLaunchBitcoinSpawned);
@@ -9010,6 +9161,7 @@ public final class SeasonStartSystem {
 		state.serverAnchor = serializeBlockPos(serverAnchor);
 		state.serverAxis = serializeServerAxis(serverStructureAxis);
 		state.difficultyBeforeSeasonStart = difficultyBeforeSeasonStart == null ? "" : difficultyBeforeSeasonStart.getKey();
+		state.pristineWorldFreeze = pristineWorldFreeze == null ? null : pristineWorldFreeze.toPersisted();
 		state.sharedLaunchCollectedBitcoins = sharedLaunchCollectedBitcoins;
 		state.sharedLaunchRequiredBitcoins = sharedLaunchRequiredBitcoins;
 		state.sharedLaunchBitcoinSpawned = sharedLaunchBitcoinSpawned;
@@ -9577,7 +9729,11 @@ public final class SeasonStartSystem {
 		BOUNDARY_SNAPSHOT,
 		ENTITY_SNAPSHOT,
 		SNAPSHOT,
+		VERTICAL_SNAPSHOT_BELOW,
+		VERTICAL_SNAPSHOT_ABOVE,
 		SNAPSHOT_PERSIST,
+		VERTICAL_CLEAR_BELOW,
+		VERTICAL_CLEAR_ABOVE,
 		CLEAR_STALE,
 		BUILD_OUTER,
 		BUILD_BARRIER,
@@ -9596,6 +9752,8 @@ public final class SeasonStartSystem {
 		private final BoxGeometry barrier;
 		private final BoxGeometry boundary;
 		private final BoxGeometry stale;
+		private final BoxGeometry verticalBelow;
+		private final BoxGeometry verticalAbove;
 		private final SceneBuildMode mode;
 		private final boolean generatorFallback;
 		private final boolean reuseExistingShell;
@@ -9619,6 +9777,8 @@ public final class SeasonStartSystem {
 				BoxGeometry barrier,
 				BoxGeometry boundary,
 				BoxGeometry stale,
+				BoxGeometry verticalBelow,
+				BoxGeometry verticalAbove,
 				SceneBuildMode mode,
 				boolean generatorFallback,
 				boolean reuseExistingShell,
@@ -9631,6 +9791,8 @@ public final class SeasonStartSystem {
 			this.barrier = barrier;
 			this.boundary = boundary;
 			this.stale = stale;
+			this.verticalBelow = verticalBelow;
+			this.verticalAbove = verticalAbove;
 			this.mode = mode;
 			this.generatorFallback = generatorFallback;
 			this.reuseExistingShell = reuseExistingShell;
@@ -9652,6 +9814,8 @@ public final class SeasonStartSystem {
 			return switch (this.phase) {
 				case BOUNDARY_SNAPSHOT -> this.boundary;
 				case SNAPSHOT, BUILD_OUTER -> this.outer;
+				case VERTICAL_SNAPSHOT_BELOW, VERTICAL_CLEAR_BELOW -> this.verticalBelow;
+				case VERTICAL_SNAPSHOT_ABOVE, VERTICAL_CLEAR_ABOVE -> this.verticalAbove;
 				case CLEAR_STALE -> this.stale;
 				case BUILD_BARRIER, BUILD_LIGHTS -> this.barrier;
 				case ENTITY_SNAPSHOT, SNAPSHOT_PERSIST, FINALIZE -> this.outer;
@@ -9897,6 +10061,7 @@ public final class SeasonStartSystem {
 		private String serverAnchor;
 		private String serverAxis;
 		private String difficultyBeforeSeasonStart;
+		private PersistedPristineWorldFreezeState pristineWorldFreeze;
 		private int sharedLaunchCollectedBitcoins;
 		private int sharedLaunchRequiredBitcoins;
 		private int sharedLaunchBitcoinSpawned;
@@ -9906,6 +10071,58 @@ public final class SeasonStartSystem {
 		private boolean sharedLaunchRaceControlsTriggered;
 		private boolean menuExplanationActive;
 		private Map<String, PersistedPlayerState> players;
+	}
+
+	private record PristineWorldFreezeState(
+			boolean advanceTime,
+			boolean advanceWeather,
+			boolean spawnMobs,
+			boolean mobGriefing,
+			int randomTickSpeed,
+			boolean projectilesCanBreakBlocks,
+			boolean tntExplodes,
+			boolean spreadVines,
+			int fireSpreadRadius
+	) {
+		private static PristineWorldFreezeState fromPersisted(PersistedPristineWorldFreezeState state) {
+			return state == null ? null : new PristineWorldFreezeState(
+					state.advanceTime,
+					state.advanceWeather,
+					state.spawnMobs,
+					state.mobGriefing,
+					Math.max(0, state.randomTickSpeed),
+					state.projectilesCanBreakBlocks,
+					state.tntExplodes,
+					state.spreadVines,
+					Math.max(0, state.fireSpreadRadius)
+			);
+		}
+
+		private PersistedPristineWorldFreezeState toPersisted() {
+			PersistedPristineWorldFreezeState state = new PersistedPristineWorldFreezeState();
+			state.advanceTime = advanceTime;
+			state.advanceWeather = advanceWeather;
+			state.spawnMobs = spawnMobs;
+			state.mobGriefing = mobGriefing;
+			state.randomTickSpeed = randomTickSpeed;
+			state.projectilesCanBreakBlocks = projectilesCanBreakBlocks;
+			state.tntExplodes = tntExplodes;
+			state.spreadVines = spreadVines;
+			state.fireSpreadRadius = fireSpreadRadius;
+			return state;
+		}
+	}
+
+	private static final class PersistedPristineWorldFreezeState {
+		private boolean advanceTime;
+		private boolean advanceWeather;
+		private boolean spawnMobs;
+		private boolean mobGriefing;
+		private int randomTickSpeed;
+		private boolean projectilesCanBreakBlocks;
+		private boolean tntExplodes;
+		private boolean spreadVines;
+		private int fireSpreadRadius;
 	}
 
 	private static final class PersistedPlayerState {

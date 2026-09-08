@@ -6,6 +6,8 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -17,13 +19,13 @@ final class ServerTabPlaceholders {
 	private static final int TAB_LOGO_GLYPHS_BASE = 0xF100;
 	private static final int TAB_LOGO_FRAME_COUNT = 48;
 	private static final int TAB_LOGO_FRAME_TICKS = 2;
-	private static final int TPS_SAMPLE_WINDOW = 120;
+	private static final int TPS_SAMPLE_INTERVAL_TICKS = 20;
+	private static final long NANOS_PER_SECOND = 1_000_000_000L;
 	private static final long MAX_TPS_SAMPLE_NANOS = 5_000_000_000L;
-	private static final long[] TICK_INTERVAL_SAMPLES_NANOS = new long[TPS_SAMPLE_WINDOW];
-	private static int tickIntervalSampleCount;
-	private static int nextTickIntervalSample;
-	private static long tickIntervalSampleTotalNanos;
-	private static long previousTickStartNanos = Long.MIN_VALUE;
+	private static final BigDecimal TPS_SAMPLE_BASE = BigDecimal.valueOf(NANOS_PER_SECOND)
+			.multiply(BigDecimal.valueOf(TPS_SAMPLE_INTERVAL_TICKS));
+	private static final RollingTpsAverage TPS_ONE_MINUTE = new RollingTpsAverage(60);
+	private static long previousTpsSampleNanos = Long.MIN_VALUE;
 
 	private ServerTabPlaceholders() {
 	}
@@ -34,7 +36,7 @@ final class ServerTabPlaceholders {
 			refreshAllHeaders(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> resetTpsMeasurement());
-		ServerTickEvents.START_SERVER_TICK.register(server -> recordTickStart());
+		ServerTickEvents.START_SERVER_TICK.register(ServerTabPlaceholders::recordTickStart);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if ((server.getTickCount() % TAB_LOGO_FRAME_TICKS) == 0) {
 				refreshAllHeaders(server);
@@ -63,7 +65,7 @@ final class ServerTabPlaceholders {
 		}
 
 		TabComponent header = TabComponent.fromColoredText(buildHeaderText(server));
-		TabComponent footer = TabComponent.fromColoredText(buildFooterText(server, player));
+		TabComponent footer = TabComponent.fromColoredText(buildFooterText(player));
 		applyNoShadow(header);
 		applyNoShadow(footer);
 		ServerTabIntegration.setHeaderFooter(player, header, footer);
@@ -76,11 +78,9 @@ final class ServerTabPlaceholders {
 				+ "§7" + dateTime;
 	}
 
-	private static String buildFooterText(MinecraftServer server, ServerPlayer player) {
-		String pingValue = formatPing(player);
-		String tpsValue = formatTps();
-		return "\n§a\uED81 §7" + pingValue
-				+ " §8• §a\uED82 §7" + tpsValue;
+	private static String buildFooterText(ServerPlayer player) {
+		return "\n§a\uED81 §7" + formatPing(player)
+				+ " §8• §a\uED82 §7" + formatTps();
 	}
 
 	private static String tabLogoGlyph(MinecraftServer server) {
@@ -97,56 +97,42 @@ final class ServerTabPlaceholders {
 		return latencyMillis < 0 ? "-" : latencyMillis + " мс";
 	}
 
+	/**
+	 * Uses the same one-minute, time-weighted rolling TPS calculation as TabTPS:
+	 * samples are taken every 20 ticks, so brief lag spikes are represented without
+	 * the noisy per-tick averaging that used to be used here.
+	 */
 	private static String formatTps() {
-		if (tickIntervalSampleCount == 0 || tickIntervalSampleTotalNanos <= 0L) {
-			return "-";
-		}
-		double averageTickIntervalNanos = tickIntervalSampleTotalNanos / (double) tickIntervalSampleCount;
-		double tps = Math.min(20.0D, 1_000_000_000.0D / averageTickIntervalNanos);
-		if (Math.abs(tps - Math.rint(tps)) < 0.05D) {
-			return Long.toString(Math.round(tps));
-		}
-		return String.format(Locale.ROOT, "%.1f", tps);
+		double tps = Math.min(20.0D, TPS_ONE_MINUTE.average());
+		return String.format(Locale.ROOT, "%.2f", tps);
 	}
 
-	/**
-	 * Measures the period between actual server tick starts. Unlike the vanilla average
-	 * tick-work-time metric, this includes the scheduler delay between ticks and therefore
-	 * reports the TPS players are actually receiving.
-	 */
-	private static void recordTickStart() {
+	private static void recordTickStart(MinecraftServer server) {
+		if (server == null || server.getTickCount() % TPS_SAMPLE_INTERVAL_TICKS != 0) {
+			return;
+		}
+
 		long now = System.nanoTime();
-		long previous = previousTickStartNanos;
-		previousTickStartNanos = now;
+		long previous = previousTpsSampleNanos;
+		previousTpsSampleNanos = now;
 		if (previous == Long.MIN_VALUE) {
 			return;
 		}
 
 		long elapsedNanos = now - previous;
 		if (elapsedNanos <= 0L || elapsedNanos > MAX_TPS_SAMPLE_NANOS) {
-			resetTpsSamples();
+			resetTpsMeasurement();
+			previousTpsSampleNanos = now;
 			return;
 		}
 
-		if (tickIntervalSampleCount == TPS_SAMPLE_WINDOW) {
-			tickIntervalSampleTotalNanos -= TICK_INTERVAL_SAMPLES_NANOS[nextTickIntervalSample];
-		} else {
-			tickIntervalSampleCount++;
-		}
-		TICK_INTERVAL_SAMPLES_NANOS[nextTickIntervalSample] = elapsedNanos;
-		tickIntervalSampleTotalNanos += elapsedNanos;
-		nextTickIntervalSample = (nextTickIntervalSample + 1) % TPS_SAMPLE_WINDOW;
+		BigDecimal currentTps = TPS_SAMPLE_BASE.divide(BigDecimal.valueOf(elapsedNanos), 30, RoundingMode.HALF_UP);
+		TPS_ONE_MINUTE.add(currentTps, elapsedNanos);
 	}
 
 	private static void resetTpsMeasurement() {
-		previousTickStartNanos = Long.MIN_VALUE;
-		resetTpsSamples();
-	}
-
-	private static void resetTpsSamples() {
-		tickIntervalSampleCount = 0;
-		nextTickIntervalSample = 0;
-		tickIntervalSampleTotalNanos = 0L;
+		previousTpsSampleNanos = Long.MIN_VALUE;
+		TPS_ONE_MINUTE.reset();
 	}
 
 	private static void applyNoShadow(TabComponent component) {
@@ -185,5 +171,47 @@ final class ServerTabPlaceholders {
 			case '-' -> '\uED9D';
 			default -> character;
 		};
+	}
+
+	/** Minimal embedded form of TabTPS' MIT-licensed time-weighted rolling average. */
+	private static final class RollingTpsAverage {
+		private final BigDecimal[] samples;
+		private final long[] durations;
+		private long totalDurationNanos;
+		private BigDecimal weightedTotal;
+		private int nextIndex;
+
+		private RollingTpsAverage(int size) {
+			this.samples = new BigDecimal[size];
+			this.durations = new long[size];
+			this.weightedTotal = BigDecimal.ZERO;
+			reset();
+		}
+
+		private void reset() {
+			totalDurationNanos = samples.length * NANOS_PER_SECOND;
+			weightedTotal = BigDecimal.valueOf(20L)
+					.multiply(BigDecimal.valueOf(NANOS_PER_SECOND))
+					.multiply(BigDecimal.valueOf(samples.length));
+			for (int index = 0; index < samples.length; index++) {
+				samples[index] = BigDecimal.valueOf(20L);
+				durations[index] = NANOS_PER_SECOND;
+			}
+			nextIndex = 0;
+		}
+
+		private void add(BigDecimal tps, long durationNanos) {
+			totalDurationNanos -= durations[nextIndex];
+			weightedTotal = weightedTotal.subtract(samples[nextIndex].multiply(BigDecimal.valueOf(durations[nextIndex])));
+			samples[nextIndex] = tps;
+			durations[nextIndex] = durationNanos;
+			totalDurationNanos += durationNanos;
+			weightedTotal = weightedTotal.add(tps.multiply(BigDecimal.valueOf(durationNanos)));
+			nextIndex = (nextIndex + 1) % samples.length;
+		}
+
+		private double average() {
+			return weightedTotal.divide(BigDecimal.valueOf(totalDurationNanos), 30, RoundingMode.HALF_UP).doubleValue();
+		}
 	}
 }
