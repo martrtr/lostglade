@@ -3865,6 +3865,12 @@ public final class SeasonStartSystem {
 			finishSeasonStart(server);
 			return;
 		}
+		// Once the core is full, the finale exclusively owns narration. In
+		// particular, do not reopen the personal menu explanation while waiting
+		// for shared_launch_complete to finish.
+		if (sharedLaunchCollectedBitcoins >= sharedLaunchRequiredBitcoins) {
+			return;
+		}
 		if (countSharedPlayers() <= 0) {
 			return;
 		}
@@ -7453,6 +7459,14 @@ public final class SeasonStartSystem {
 			pendingMenuExplanationTick = Long.MIN_VALUE;
 			SeasonStartVoiceSystem.resetSceneState();
 			SeasonStartVoiceSystem.fireTrigger(server, "shared_launch_complete", null);
+			if (pendingSharedFinishTick == Long.MIN_VALUE) {
+				pendingSharedFinishTick = nowTick
+						+ resolveTriggerSequenceDurationTicks("shared_launch_complete")
+						+ SHARED_FINISH_DELAY_TICKS;
+			}
+			refreshSharedLaunchBossBar(server);
+			stateDirty = true;
+			return;
 		}
 		ensureSharedServerPowerNarration(server);
 		ensureSharedRaceControlsNarration(server);
@@ -7460,11 +7474,6 @@ public final class SeasonStartSystem {
 				&& getSharedLaunchPercent() >= MENU_EXPLANATION_UNLOCK_PERCENT
 				&& pendingMenuExplanationTick == Long.MIN_VALUE) {
 			pendingMenuExplanationTick = nowTick + MENU_EXPLANATION_DELAY_TICKS;
-		}
-		if (sharedLaunchCollectedBitcoins >= sharedLaunchRequiredBitcoins && pendingSharedFinishTick == Long.MIN_VALUE) {
-			pendingSharedFinishTick = nowTick
-					+ resolveTriggerSequenceDurationTicks("shared_launch_complete")
-					+ SHARED_FINISH_DELAY_TICKS;
 		}
 		refreshSharedLaunchBossBar(server);
 		stateDirty = true;
