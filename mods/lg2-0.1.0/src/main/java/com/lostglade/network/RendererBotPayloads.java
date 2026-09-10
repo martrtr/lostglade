@@ -18,7 +18,7 @@ public final class RendererBotPayloads {
 	// RendererBotLiveStreamStartS2CPayload gained a field. Keep an old renderer
 	// bot from accepting the handshake and decoding the following varints from a
 	// shifted byte offset.
-	public static final int PROTOCOL_VERSION = 24;
+	public static final int PROTOCOL_VERSION = 25;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
 	private static final int MAX_HIDDEN_CAMERA_ENTITIES = 32;
@@ -40,6 +40,7 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotItemIconC2SPayload.TYPE, RendererBotItemIconC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingStartedC2SPayload.TYPE, RendererBotVideoRecordingStartedC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingCompleteC2SPayload.TYPE, RendererBotVideoRecordingCompleteC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
+		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoFileChunkC2SPayload.TYPE, RendererBotVideoFileChunkC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotAudioFrameC2SPayload.TYPE, RendererBotAudioFrameC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotCaptureFailureC2SPayload.TYPE, RendererBotCaptureFailureC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotLiveStreamFailureC2SPayload.TYPE, RendererBotLiveStreamFailureC2SPayload.STREAM_CODEC);
@@ -66,17 +67,18 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playS2C().registerLarge(RendererBotShadowEntityPacketsS2CPayload.TYPE, RendererBotShadowEntityPacketsS2CPayload.STREAM_CODEC, MAX_SHADOW_PAYLOAD_BYTES);
 	}
 
-	public record RendererBotHelloC2SPayload(int protocolVersion) implements CustomPacketPayload {
+	public record RendererBotHelloC2SPayload(int protocolVersion, boolean volunteerRenderer) implements CustomPacketPayload {
 		public static final Type<RendererBotHelloC2SPayload> TYPE = new Type<>(id("renderer_bot_hello"));
 		public static final StreamCodec<FriendlyByteBuf, RendererBotHelloC2SPayload> STREAM_CODEC =
 				CustomPacketPayload.codec(RendererBotHelloC2SPayload::write, RendererBotHelloC2SPayload::new);
 
 		public RendererBotHelloC2SPayload(FriendlyByteBuf buffer) {
-			this(buffer.readVarInt());
+			this(buffer.readVarInt(), buffer.readBoolean());
 		}
 
 		private void write(FriendlyByteBuf buffer) {
 			buffer.writeVarInt(this.protocolVersion);
+			buffer.writeBoolean(this.volunteerRenderer);
 		}
 
 		@Override
@@ -859,6 +861,34 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotVideoRecordingCompleteC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** Ordered MP4 chunks sent only when the renderer is a remote volunteer. */
+	public record RendererBotVideoFileChunkC2SPayload(
+			UUID requestId,
+			int chunkIndex,
+			boolean finalChunk,
+			byte[] bytes
+	) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoFileChunkC2SPayload> TYPE = new Type<>(id("renderer_bot_video_file_chunk"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoFileChunkC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoFileChunkC2SPayload::write, RendererBotVideoFileChunkC2SPayload::new);
+
+		public RendererBotVideoFileChunkC2SPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readVarInt(), buffer.readBoolean(), buffer.readByteArray());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeVarInt(this.chunkIndex);
+			buffer.writeBoolean(this.finalChunk);
+			buffer.writeByteArray(this.bytes);
+		}
+
+		@Override
+		public Type<RendererBotVideoFileChunkC2SPayload> type() {
 			return TYPE;
 		}
 	}

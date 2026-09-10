@@ -169,5 +169,9 @@
   "key.lg2.race_defense": "Способность расы: защита",
   "key.lg2.race_ability": "Способность расы: абилка",
   "key.lg2.race_shnyaga": "Способность расы: шняга",
+  "key.category.lg2.camera": "Камера Lostglade",
+  "key.lg2.camera_renderer_volunteer": "Отдать GPU для рендера камер",
+  "message.lg2.camera_renderer_volunteer.enabled": "GPU для рендера камер: включён",
+  "message.lg2.camera_renderer_volunteer.disabled": "GPU для рендера камер: выключен",
   "item.lg2.ancient_ukr_gas_mask": "\u041f\u0440\u043e\u0442\u0438\u0432\u043e\u0433\u0430\u0437"
 }

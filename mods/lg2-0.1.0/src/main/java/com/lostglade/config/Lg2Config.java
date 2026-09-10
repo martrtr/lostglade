@@ -88,6 +88,15 @@ public final class Lg2Config {
 		return data;
 	}
 
+	/** Client-only preference, persisted in that player's local lg2.json. */
+	public static synchronized void setCameraRendererVolunteerEnabled(boolean enabled) {
+		if (data.cameraRendererVolunteerEnabled == enabled) {
+			return;
+		}
+		data.cameraRendererVolunteerEnabled = enabled;
+		write(data);
+	}
+
 	private static ConfigData readOrCreate() {
 		if (!Files.exists(PATH)) {
 			ConfigData defaults = ConfigData.defaults();
@@ -381,6 +390,10 @@ public final class Lg2Config {
 		public int cameraRenderInFlightPixels = 1024;
 		public int cameraRenderSamplesPerAxis = 2;
 		public String cameraRendererBotPlayerName = "";
+		/** Server-side admission control for opt-in player GPU renderers. */
+		public boolean cameraRendererAllowPlayerVolunteers = true;
+		/** Client-side opt-in. Never enabled automatically. */
+		public boolean cameraRendererVolunteerEnabled = false;
 		public int cameraRendererBotTimeoutMs = 15_000;
 		public int monitorRenderThreads = Math.max(1, Math.min(4, Math.max(1, (Runtime.getRuntime().availableProcessors() - 1) / 2)));
 		public int monitorMediaIoThreads = Math.max(1, Math.min(2, Math.max(1, Runtime.getRuntime().availableProcessors() / 4)));

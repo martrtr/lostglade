@@ -82,27 +82,6 @@ public final class CameraVideoRecordingSystem {
 			Lg2Messages.actionBar(player, "message.lg2.camera.video.no_renderer");
 			return false;
 		}
-		HandCameraAudioTrack audioTrack = null;
-		MicrophoneSystem.MicrophonePcmRecorder audioRecorder = null;
-		if (isHoldingCameraWithMicrophoneInOtherHand(player)) {
-			try {
-				audioTrack = HandCameraAudioTrack.create(handle.requestId().toString());
-				audioRecorder = MicrophoneSystem.startPlayerPcmRecorder(player, audioTrack::writeFrame);
-				if (audioRecorder == null) {
-					audioTrack.abort();
-					audioTrack = null;
-				} else {
-					audioTrack.attach(audioRecorder);
-				}
-			} catch (Exception exception) {
-				Lg2.LOGGER.warn("Failed to start hand camera audio recording for {}", player.getUUID(), exception);
-				if (audioTrack != null) {
-					audioTrack.abortQuietly();
-				}
-				audioTrack = null;
-			}
-		}
-
 		ActiveRecording state = new ActiveRecording(
 				player.getUUID(),
 				handle.requestId(),
@@ -112,8 +91,7 @@ public final class CameraVideoRecordingSystem {
 				player.position().z,
 				settings.mapsWide(),
 				settings.mapsHigh(),
-				System.currentTimeMillis(),
-				audioTrack
+				System.currentTimeMillis()
 		);
 		RECORDINGS_BY_PLAYER.put(player.getUUID(), state);
 		handle.completionFuture().whenComplete((result, throwable) -> {
@@ -142,6 +120,7 @@ public final class CameraVideoRecordingSystem {
 			}
 			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
 			if (player != null) {
+				recording.startAudioCapture(player);
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.started");
 				CameraCaptureSystem.notifyShutterCaptured(player);
 			}
@@ -404,7 +383,7 @@ public final class CameraVideoRecordingSystem {
 		private final int mapsWide;
 		private final int mapsHigh;
 		private final long startedAtMs;
-		private final HandCameraAudioTrack audioTrack;
+		private HandCameraAudioTrack audioTrack;
 		private volatile boolean stopRequested;
 		private boolean startedFeedbackSent;
 
@@ -417,8 +396,7 @@ public final class CameraVideoRecordingSystem {
 				double z,
 				int mapsWide,
 				int mapsHigh,
-				long startedAtMs,
-				HandCameraAudioTrack audioTrack
+				long startedAtMs
 		) {
 			this.playerId = playerId;
 			this.requestId = requestId;
@@ -429,7 +407,7 @@ public final class CameraVideoRecordingSystem {
 			this.mapsWide = mapsWide;
 			this.mapsHigh = mapsHigh;
 			this.startedAtMs = startedAtMs;
-			this.audioTrack = audioTrack;
+			this.audioTrack = null;
 			this.stopRequested = false;
 			this.startedFeedbackSent = false;
 		}
@@ -484,6 +462,24 @@ public final class CameraVideoRecordingSystem {
 			}
 			this.startedFeedbackSent = true;
 			return true;
+		}
+
+		private synchronized void startAudioCapture(ServerPlayer player) {
+			if (this.audioTrack != null || !isHoldingCameraWithMicrophoneInOtherHand(player)) {
+				return;
+			}
+			try {
+				HandCameraAudioTrack track = HandCameraAudioTrack.create(this.requestId.toString());
+				MicrophoneSystem.MicrophonePcmRecorder recorder = MicrophoneSystem.startPlayerPcmRecorder(player, track::writeFrame);
+				if (recorder == null) {
+					track.abortQuietly();
+					return;
+				}
+				track.attach(recorder);
+				this.audioTrack = track;
+			} catch (Exception exception) {
+				Lg2.LOGGER.warn("Failed to start hand camera audio recording for {}", this.playerId, exception);
+			}
 		}
 
 		private Path finishAudioCapture() throws IOException {

@@ -49,6 +49,7 @@ public final class ServerStructureBreakSystem {
 	private static final String DISPLAY_ROOT_TAG = "lg2_server_display";
 	private static final String DISPLAY_ANCHOR_PREFIX = "lg2_anchor:";
 	private static final String DISPLAY_AXIS_PREFIX = "lg2_axis:";
+	private static final String DISPLAY_FACING_PREFIX = "lg2_facing:";
 
 	private static final Map<StructureKey, ActiveBreakSession> ACTIVE_BREAKS = new HashMap<>();
 	private static final Set<GuardedBlockPos> INTERNAL_REMOVAL_POSITIONS = new HashSet<>();
@@ -88,6 +89,9 @@ public final class ServerStructureBreakSystem {
 		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
 			if (entity instanceof Display.ItemDisplay display && display.getTags().contains(DISPLAY_ROOT_TAG)) {
 				ItemDisplayHitboxHelper.clear(display);
+				if (world instanceof ServerLevel level) {
+					reconcileLoadedStructureDisplay(level, display);
+				}
 				return;
 			}
 			if (!(entity instanceof ItemEntity itemEntity)) {
@@ -127,6 +131,45 @@ public final class ServerStructureBreakSystem {
 		display.addTag(DISPLAY_ROOT_TAG);
 		display.addTag(DISPLAY_ANCHOR_PREFIX + anchor.getX() + "," + anchor.getY() + "," + anchor.getZ());
 		display.addTag(DISPLAY_AXIS_PREFIX + (axis == Direction.Axis.X ? "x" : "z"));
+	}
+
+	public static void setStructureDisplayFacing(Display.ItemDisplay display, Direction facing) {
+		if (display == null || facing == null || !facing.getAxis().isHorizontal()) {
+			return;
+		}
+		display.getTags().removeIf(tag -> tag.startsWith(DISPLAY_FACING_PREFIX));
+		display.addTag(DISPLAY_FACING_PREFIX + facing.getSerializedName());
+	}
+
+	public static Direction resolveStructureDisplayFacing(Display.ItemDisplay display, Direction fallback) {
+		if (display != null) {
+			for (String tag : display.getTags()) {
+				if (!tag.startsWith(DISPLAY_FACING_PREFIX)) {
+					continue;
+				}
+				Direction direction = Direction.byName(tag.substring(DISPLAY_FACING_PREFIX.length()));
+				if (direction != null && direction.getAxis().isHorizontal()) {
+					return direction;
+				}
+			}
+			Direction derived = Direction.fromYRot(display.getYRot());
+			if (derived.getAxis().isHorizontal()) {
+				return derived;
+			}
+		}
+		return fallback != null && fallback.getAxis().isHorizontal() ? fallback : Direction.NORTH;
+	}
+
+	private static void reconcileLoadedStructureDisplay(ServerLevel level, Display.ItemDisplay display) {
+		Optional<BlockPos> anchor = parseAnchorTag(display);
+		Optional<Direction.Axis> axis = parseAxisTag(display);
+		if (anchor.isEmpty() || axis.isEmpty()) {
+			return;
+		}
+		Display.ItemDisplay keeper = resolveSingleStructureDisplay(level, anchor.get(), axis.get());
+		if (keeper != null && !keeper.isRemoved()) {
+			setStructureDisplayFacing(keeper, resolveStructureDisplayFacing(keeper, axis.get() == Direction.Axis.X ? Direction.EAST : Direction.NORTH));
+		}
 	}
 
 	public static boolean isServerStructureDisplay(Entity entity) {
@@ -206,6 +249,9 @@ public final class ServerStructureBreakSystem {
 			if (exactMatch) {
 				if (keeper == null) {
 					keeper = itemDisplay;
+				} else if (!hasFacingTag(keeper) && hasFacingTag(itemDisplay)) {
+					keeper.discard();
+					keeper = itemDisplay;
 				} else {
 					itemDisplay.discard();
 				}
@@ -237,6 +283,10 @@ public final class ServerStructureBreakSystem {
 			}
 		}
 		return keeper;
+	}
+
+	private static boolean hasFacingTag(Display.ItemDisplay display) {
+		return display != null && display.getTags().stream().anyMatch(tag -> tag.startsWith(DISPLAY_FACING_PREFIX));
 	}
 
 	private static Optional<DisplayStructureKey> resolveStructureAtDisplayPosition(ServerLevel level, Display.ItemDisplay display) {

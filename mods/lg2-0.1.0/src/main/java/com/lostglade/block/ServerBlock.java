@@ -146,14 +146,18 @@ public class ServerBlock extends SimplePolymerBlock {
 		if (display == null) {
 			return;
 		}
+		Direction displayForward = created
+				? forward
+				: ServerStructureBreakSystem.resolveStructureDisplayFacing(display, forward);
 
 		display.setPos(origin.getX() + 0.5D, origin.getY() + 1.5D, origin.getZ() + 0.5D);
-		display.setYRot(Mth.wrapDegrees(forward.toYRot()));
+		display.setYRot(Mth.wrapDegrees(displayForward.toYRot()));
 		display.setXRot(0.0F);
 		display.getSlot(0).set(new ItemStack(ModBlocks.SERVER_ITEM));
 		if (created) {
 			ServerStructureBreakSystem.applyStructureDisplayTags(display, origin, axis);
 		}
+		ServerStructureBreakSystem.setStructureDisplayFacing(display, displayForward);
 		applyFixedItemDisplayTransform(display, level);
 		ItemDisplayHitboxHelper.clear(display);
 		if (created) {

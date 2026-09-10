@@ -37,9 +37,12 @@ public final class RendererBotClientVideoRecording {
 	private static final String DEFAULT_FFMPEG_BIN = "ffmpeg";
 	private static final int REQUIRED_SETTLED_RENDERS = Math.max(1, Integer.getInteger("lg2.rendererBotStableCaptureProbes", 2));
 	private static final long FINISH_TIMEOUT_MS = Long.getLong("lg2.rendererBotVideoFinishTimeoutMs", 30_000L);
+	private static final long STOPPED_WARMUP_TIMEOUT_MS = Long.getLong("lg2.rendererBotVideoStoppedWarmupTimeoutMs", 12_000L);
 	private static final int MIN_RECORDING_FRAMES = Math.max(2, Integer.getInteger("lg2.rendererBotVideoMinFrames", 2));
 	private static final int MAX_CATCH_UP_SECONDS = Math.max(1, Integer.getInteger("lg2.rendererBotVideoMaxCatchUpSeconds", 3));
 	private static final int MAX_TARGET_FPS = 20;
+	private static final int REMOTE_VIDEO_CHUNK_BYTES = 192 * 1024;
+	private static final long MAX_REMOTE_VIDEO_UPLOAD_BYTES = 96L * 1024L * 1024L;
 	private static final double TARGET_RENDER_SCALE = Math.max(1.0D, doubleProperty("lg2.rendererBotVideoRenderScale", 2.0D));
 	private static final int MIN_RENDER_WIDTH = Math.max(128, Integer.getInteger("lg2.rendererBotVideoMinRenderWidth", 1024));
 	private static final int MIN_RENDER_HEIGHT = Math.max(128, Integer.getInteger("lg2.rendererBotVideoMinRenderHeight", 768));
@@ -139,6 +142,13 @@ public final class RendererBotClientVideoRecording {
 		long now = System.currentTimeMillis();
 		for (PendingRecording current : activeRecordings) {
 			if (current == null) {
+				continue;
+			}
+			if (current.stopRequested
+					&& !current.recordingStarted()
+					&& current.stopRequestedAtNanos != 0L
+					&& System.nanoTime() - current.stopRequestedAtNanos >= STOPPED_WARMUP_TIMEOUT_MS * 1_000_000L) {
+				abortRecording(current.payload().requestId(), "Renderer bot video scene did not become ready after stopping");
 				continue;
 			}
 			long elapsedMs = current.recordingStartedAtMs == 0L ? 0L : now - current.recordingStartedAtMs;
@@ -459,14 +469,7 @@ public final class RendererBotClientVideoRecording {
 			Lg2.LOGGER.info("Renderer bot finished video recording {} with {} frames ({} ms)", current.payload().requestId(), current.frameCount, durationMs);
 			client.execute(() -> {
 				clearIfMatching(current.payload().requestId());
-				ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload(
-						current.payload().requestId(),
-						durationMs,
-						targetFps,
-						current.finalPath().toAbsolutePath().toString(),
-						current.firstPreviewFrame,
-						current.firstFullFrame
-				));
+				sendCompletedRecording(current, durationMs, targetFps);
 			});
 		} catch (Exception exception) {
 			client.execute(() -> {
@@ -475,6 +478,37 @@ public final class RendererBotClientVideoRecording {
 			});
 			Lg2.LOGGER.warn("Renderer bot failed to finish video recording {}", current.payload().requestId(), exception);
 		}
+	}
+
+	private static void sendCompletedRecording(PendingRecording recording, long durationMs, int targetFps) {
+		boolean remoteVolunteer = RendererBotVolunteerClient.isVolunteerRenderer() && !RendererBotClientMode.isEnabled();
+		String videoPath = recording.finalPath().toAbsolutePath().toString();
+		if (remoteVolunteer) {
+			try {
+				long size = Files.size(recording.finalPath());
+				if (size <= 0L || size > MAX_REMOTE_VIDEO_UPLOAD_BYTES) {
+					throw new IOException("Remote renderer video is too large to upload: " + size + " bytes");
+				}
+				byte[] videoBytes = Files.readAllBytes(recording.finalPath());
+				int chunks = Math.max(1, (videoBytes.length + REMOTE_VIDEO_CHUNK_BYTES - 1) / REMOTE_VIDEO_CHUNK_BYTES);
+				for (int index = 0; index < chunks; index++) {
+					int start = index * REMOTE_VIDEO_CHUNK_BYTES;
+					int end = Math.min(videoBytes.length, start + REMOTE_VIDEO_CHUNK_BYTES);
+					byte[] chunk = java.util.Arrays.copyOfRange(videoBytes, start, end);
+					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoFileChunkC2SPayload(
+							recording.payload().requestId(), index, index + 1 == chunks, chunk
+					));
+				}
+				videoPath = "";
+			} catch (IOException exception) {
+				sendFailure(recording.payload().requestId(), exception.getMessage());
+				return;
+			}
+		}
+		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload(
+				recording.payload().requestId(), durationMs, targetFps, videoPath,
+				recording.firstPreviewFrame, recording.firstFullFrame
+		));
 	}
 
 	private static void abortAll(String message) {

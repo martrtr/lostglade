@@ -79,6 +79,11 @@ import it.unimi.dsi.fastutil.longs.LongSet;
 import xyz.nucleoid.packettweaker.PacketContext;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -165,6 +170,8 @@ public final class RendererBotCameraSystem {
 	private static final Map<UUID, BotHandshake> READY_BOTS = new ConcurrentHashMap<>();
 	private static final Map<UUID, PendingCapture> PENDING_CAPTURES = new ConcurrentHashMap<>();
 	private static final Map<UUID, PendingVideoRecording> PENDING_VIDEO_RECORDINGS = new ConcurrentHashMap<>();
+	private static final Map<UUID, RemoteVideoUpload> REMOTE_VIDEO_UPLOADS = new ConcurrentHashMap<>();
+	private static final long MAX_REMOTE_VIDEO_UPLOAD_BYTES = 96L * 1024L * 1024L;
 	private static final Map<UUID, ActiveLiveStream> ACTIVE_LIVE_STREAMS = new ConcurrentHashMap<>();
 	private static final Map<String, UUID> LIVE_STREAMS_BY_OWNER = new ConcurrentHashMap<>();
 	private static final Object MAP_TILE_QUEUE_LOCK = new Object();
@@ -200,7 +207,12 @@ public final class RendererBotCameraSystem {
 						READY_BOTS.remove(context.player().getUUID());
 						return;
 					}
-					READY_BOTS.put(context.player().getUUID(), new BotHandshake(context.player().getUUID(), context.player().getScoreboardName()));
+					boolean dedicatedBot = RendererBotPresenceSystem.isRendererBot(context.player());
+					boolean volunteer = payload.volunteerRenderer() && !dedicatedBot
+							&& Lg2Config.get().cameraRendererAllowPlayerVolunteers;
+					READY_BOTS.put(context.player().getUUID(), new BotHandshake(
+							context.player().getUUID(), context.player().getScoreboardName(), volunteer
+					));
 				}
 		);
 		ServerPlayNetworking.registerGlobalReceiver(
@@ -362,6 +374,16 @@ public final class RendererBotCameraSystem {
 				}
 		);
 		ServerPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoFileChunkC2SPayload.TYPE,
+				(payload, context) -> {
+					MinecraftServer server = context.player().level().getServer();
+					if (server == null) {
+						return;
+					}
+					server.execute(() -> receiveRemoteVideoChunk(context.player(), payload));
+				}
+		);
+		ServerPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload.TYPE,
 				(payload, context) -> {
 					MinecraftServer server = context.player().level().getServer();
@@ -373,7 +395,16 @@ public final class RendererBotCameraSystem {
 						if (recording == null || !recording.botUuid().equals(context.player().getUUID())) {
 							return;
 						}
-						recording.completionFuture().complete(new VideoRecordingResult(payload.durationMs(), payload.fps(), payload.videoPath(), payload.previewPixels(), payload.fullPixels()));
+						Path uploadedVideo = consumeCompletedRemoteVideo(recording, payload.requestId());
+						if (uploadedVideo == null && (payload.videoPath() == null || payload.videoPath().isBlank())) {
+							failVideoRecording(payload.requestId(), recording, "Удалённый renderer-клиент не передал MP4");
+							return;
+						}
+						recording.completionFuture().complete(new VideoRecordingResult(
+								payload.durationMs(), payload.fps(),
+								uploadedVideo != null ? uploadedVideo.toString() : payload.videoPath(),
+								payload.previewPixels(), payload.fullPixels()
+						));
 						PENDING_VIDEO_RECORDINGS.remove(payload.requestId());
 						releaseBotCameraIfNeeded(recording.server(), recording.botUuid(), recording.resetCameraOnFinish());
 					});
@@ -489,7 +520,6 @@ public final class RendererBotCameraSystem {
 		if (bot == null) {
 			return null;
 		}
-
 		return requestCaptureInternal(
 				server,
 				bot,
@@ -593,7 +623,6 @@ public final class RendererBotCameraSystem {
 				z,
 				followTarget != null ? followTarget.getUUID() : null
 		);
-		long timeoutMillis = Math.max(500L, Lg2Config.get().cameraRendererBotTimeoutMs);
 		CompletableFuture<byte[]> previewFuture = new CompletableFuture<>();
 		CompletableFuture<byte[]> fullFuture = new CompletableFuture<>();
 		PendingCapture pending = new PendingCapture(
@@ -612,31 +641,14 @@ public final class RendererBotCameraSystem {
 				followTarget != null ? followTarget.getUUID() : null,
 				feedbackPlayerId,
 				feedbackShutterOrigin,
+				clampedPreviewWidth,
+				clampedPreviewHeight,
+				clampedFullWidth,
+				clampedFullHeight,
 				previewFuture,
 				fullFuture
 		);
 		PENDING_CAPTURES.put(requestId, pending);
-		applyTimeout(requestId, pending, timeoutMillis);
-		ServerPlayNetworking.send(
-				bot,
-				new RendererBotPayloads.RendererBotCaptureRequestS2CPayload(
-						requestId,
-						renderSessionId,
-						level.dimension().identifier().toString(),
-						x,
-						y,
-						z,
-						yaw,
-						pitch,
-						followTarget != null ? followTarget.getUUID() : null,
-						feedbackPlayerId,
-						clampedPreviewWidth,
-						clampedPreviewHeight,
-						clampedFullWidth,
-						clampedFullHeight,
-						Math.max(1, fovDegrees)
-				)
-		);
 
 		return new ClientCaptureHandle(requestId, previewFuture, fullFuture);
 	}
@@ -1321,7 +1333,9 @@ public final class RendererBotCameraSystem {
 	}
 
 	private static boolean canReuseLiveStream(ActiveLiveStream existing, ServerPlayer bot, LiveStreamSpec desiredSpec) {
-		if (existing == null || bot == null || desiredSpec == null || existing.isStale() || !existing.botUuid().equals(bot.getUUID())) {
+		if (existing == null || bot == null || desiredSpec == null
+				|| (existing.isStale() && !hasActiveVideoRecording(existing.botUuid()))
+				|| !existing.botUuid().equals(bot.getUUID())) {
 			return false;
 		}
 		LiveStreamSpec existingSpec = existing.spec();
@@ -1363,7 +1377,7 @@ public final class RendererBotCameraSystem {
 			return false;
 		}
 		ActiveLiveStream stream = ACTIVE_LIVE_STREAMS.get(streamId);
-		return stream != null && !stream.isStale();
+		return stream != null && (!stream.isStale() || hasActiveVideoRecording(stream.botUuid()));
 	}
 
 	/**
@@ -1526,7 +1540,6 @@ public final class RendererBotCameraSystem {
 				requester.getZ(),
 				requester.getUUID()
 		);
-		long timeoutMillis = Math.max(5_000L, Lg2Config.get().cameraRendererBotTimeoutMs);
 		CompletableFuture<VideoRecordingResult> completionFuture = new CompletableFuture<>();
 		PendingVideoRecording pending = new PendingVideoRecording(
 				requestId,
@@ -1543,42 +1556,12 @@ public final class RendererBotCameraSystem {
 				70,
 				requester.getUUID(),
 				clampedTargetFps,
+				fullWidth,
+				fullHeight,
+				Math.max(1, maxDurationSeconds),
 				completionFuture
 		);
 		PENDING_VIDEO_RECORDINGS.put(requestId, pending);
-		completionFuture.orTimeout(Math.max(timeoutMillis, maxDurationSeconds * 1_000L + 30_000L), TimeUnit.MILLISECONDS)
-				.exceptionally(throwable -> {
-					if (PENDING_VIDEO_RECORDINGS.remove(requestId, pending)) {
-						MinecraftServer callbackServer = pending.server();
-						if (callbackServer != null) {
-							callbackServer.execute(() -> releaseBotCameraIfNeeded(callbackServer, pending.botUuid(), pending.resetCameraOnFinish()));
-						}
-						completionFuture.completeExceptionally(throwable);
-					}
-					return null;
-				});
-
-		ServerPlayNetworking.send(
-				bot,
-				new RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload(
-						requestId,
-						renderSessionId,
-						requester.level().dimension().identifier().toString(),
-						requester.getX(),
-						requester.getY(),
-						requester.getZ(),
-						requester.getYRot(),
-						requester.getXRot(),
-						requester.getUUID(),
-						previewWidth,
-						previewHeight,
-						fullWidth,
-						fullHeight,
-						70,
-						clampedTargetFps,
-						Math.max(1, maxDurationSeconds)
-				)
-		);
 		return new VideoRecordingHandle(requestId, bot.getUUID(), completionFuture);
 	}
 
@@ -1591,6 +1574,9 @@ public final class RendererBotCameraSystem {
 			return;
 		}
 		recording.markStopRequested();
+		if (!recording.clientStartSent()) {
+			return;
+		}
 		ServerPlayer bot = server.getPlayerList().getPlayer(recording.botUuid());
 		if (bot == null || !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload.TYPE)) {
 			return;
@@ -1598,8 +1584,170 @@ public final class RendererBotCameraSystem {
 		ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(requestId));
 	}
 
+	private static PendingVideoRecording selectVideoRecordingForRenderer(UUID botUuid) {
+		if (botUuid == null) {
+			return null;
+		}
+		PendingVideoRecording selected = null;
+		for (PendingVideoRecording recording : PENDING_VIDEO_RECORDINGS.values()) {
+			if (recording == null || !botUuid.equals(recording.botUuid()) || recording.completionFuture().isDone()) {
+				continue;
+			}
+			// A renderer client has one OpenGL scene. Once a recording has been
+			// admitted it owns that scene until its encoder confirms completion.
+			if (recording.clientStartSent()) {
+				if (selected == null || !selected.clientStartSent() || recording.queuedAtMillis() < selected.queuedAtMillis()) {
+					selected = recording;
+				}
+				continue;
+			}
+			if (selected == null || (!selected.clientStartSent() && recording.queuedAtMillis() < selected.queuedAtMillis())) {
+				selected = recording;
+			}
+		}
+		return selected;
+	}
+
+	private static void dispatchReadyVideoRecording(
+			MinecraftServer server,
+			Map<ShadowSyncKey, ShadowDesiredState> desiredStates
+	) {
+		if (server == null) {
+			return;
+		}
+		ServerPlayer bot = selectBot(server);
+		if (bot == null) {
+			return;
+		}
+		PendingVideoRecording recording = selectVideoRecordingForRenderer(bot.getUUID());
+		PendingCapture activeCapture = selectPendingCaptureForRenderer(bot.getUUID());
+		if (recording == null || recording.clientStartSent()
+				|| (activeCapture != null && activeCapture.clientRequestSent())
+				|| desiredStates == null
+				|| !desiredStates.containsKey(new ShadowSyncKey(bot.getUUID(), recording.renderSessionId()))
+				|| !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload.TYPE)) {
+			return;
+		}
+		try {
+			ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload(
+					recording.requestId(),
+					recording.renderSessionId(),
+					recording.dimension().identifier().toString(),
+					recording.x(),
+					recording.y(),
+					recording.z(),
+					recording.yaw(),
+					recording.pitch(),
+					recording.followEntityUuid(),
+					128,
+					128,
+					recording.fullWidth(),
+					recording.fullHeight(),
+					recording.fovDegrees(),
+					recording.targetFps(),
+					recording.maxDurationSeconds()
+			));
+			recording.markClientStartSent();
+			armVideoRecordingTimeout(recording);
+			if (recording.stopRequested()
+					&& ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload.TYPE)) {
+				ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(recording.requestId()));
+			}
+		} catch (RuntimeException exception) {
+			failVideoRecording(recording.requestId(), recording, "Не удалось запустить запись на клиенте камеры");
+		}
+	}
+
+	private static void armVideoRecordingTimeout(PendingVideoRecording recording) {
+		if (recording == null || !recording.markTimeoutArmed()) {
+			return;
+		}
+		long timeoutMillis = Math.max(5_000L, Lg2Config.get().cameraRendererBotTimeoutMs);
+		recording.completionFuture()
+				.orTimeout(Math.max(timeoutMillis, recording.maxDurationSeconds() * 1_000L + 30_000L), TimeUnit.MILLISECONDS)
+				.exceptionally(throwable -> {
+					if (PENDING_VIDEO_RECORDINGS.remove(recording.requestId(), recording)) {
+						MinecraftServer callbackServer = recording.server();
+						if (callbackServer != null) {
+							callbackServer.execute(() -> releaseBotCameraIfNeeded(callbackServer, recording.botUuid(), recording.resetCameraOnFinish()));
+						}
+						recording.completionFuture().completeExceptionally(throwable);
+					}
+					return null;
+				});
+	}
+
+	private static PendingCapture selectPendingCaptureForRenderer(UUID botUuid) {
+		if (botUuid == null) {
+			return null;
+		}
+		PendingCapture selected = null;
+		for (PendingCapture capture : PENDING_CAPTURES.values()) {
+			if (capture == null || !botUuid.equals(capture.botUuid()) || capture.isDone()) {
+				continue;
+			}
+			if (capture.clientRequestSent()) {
+				if (selected == null || !selected.clientRequestSent() || capture.queuedAtMillis() < selected.queuedAtMillis()) {
+					selected = capture;
+				}
+			} else if (selected == null || (!selected.clientRequestSent() && capture.queuedAtMillis() < selected.queuedAtMillis())) {
+				selected = capture;
+			}
+		}
+		return selected;
+	}
+
+	private static void dispatchReadyPhotoCapture(
+			MinecraftServer server,
+			Map<ShadowSyncKey, ShadowDesiredState> desiredStates
+	) {
+		if (server == null) {
+			return;
+		}
+		ServerPlayer bot = selectBot(server);
+		if (bot == null || selectVideoRecordingForRenderer(bot.getUUID()) != null) {
+			return;
+		}
+		PendingCapture capture = selectPendingCaptureForRenderer(bot.getUUID());
+		if (capture == null || capture.clientRequestSent()
+				|| desiredStates == null
+				|| !desiredStates.containsKey(new ShadowSyncKey(bot.getUUID(), capture.renderSessionId()))
+				|| !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE)) {
+			return;
+		}
+		try {
+			ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotCaptureRequestS2CPayload(
+					capture.requestId(), capture.renderSessionId(), capture.dimension().identifier().toString(),
+					capture.x(), capture.y(), capture.z(), capture.yaw(), capture.pitch(),
+					capture.followEntityUuid(), capture.feedbackPlayerId(),
+					capture.previewWidth(), capture.previewHeight(), capture.fullWidth(), capture.fullHeight(), capture.fovDegrees()
+			));
+			capture.markClientRequestSent();
+			armCaptureTimeout(capture);
+		} catch (RuntimeException exception) {
+			failPending(capture.requestId(), capture, exception);
+		}
+	}
+
+	private static void armCaptureTimeout(PendingCapture capture) {
+		if (capture == null || !capture.markTimeoutArmed()) {
+			return;
+		}
+		applyTimeout(capture.requestId(), capture, Math.max(500L, Lg2Config.get().cameraRendererBotTimeoutMs));
+	}
+
 	public static boolean hasReadyBot(MinecraftServer server) {
 		return server != null && selectBot(server) != null;
+	}
+
+	/**
+	 * A hand-held video and a still photo cannot share one renderer client's
+	 * off-screen world target. Keep photo admission closed until the encoder has
+	 * returned its final frame rather than creating a request that must time out.
+	 */
+	public static boolean isPhotoCaptureBlockedByActiveVideo(MinecraftServer server) {
+		ServerPlayer bot = server == null ? null : selectBot(server);
+		return bot != null && hasActiveVideoRecording(bot.getUUID());
 	}
 
 	public static ServerPlayer readyBot(MinecraftServer server) {
@@ -1617,7 +1765,9 @@ public final class RendererBotCameraSystem {
 		List<ServerPlayer> recipients = new ArrayList<>();
 		for (UUID botUuid : READY_BOTS.keySet()) {
 			ServerPlayer bot = server.getPlayerList().getPlayer(botUuid);
-			if (bot == null || !RendererBotPresenceSystem.isRendererBot(bot)) {
+			BotHandshake handshake = READY_BOTS.get(botUuid);
+			if (bot == null || handshake == null
+					|| (!handshake.volunteerRenderer() && !RendererBotPresenceSystem.isRendererBot(bot))) {
 				continue;
 			}
 			if (isLevelActivelyRenderedByBot(server, botUuid, level.dimension())) {
@@ -1925,6 +2075,22 @@ public final class RendererBotCameraSystem {
 	}
 
 	private static ServerPlayer selectBot(MinecraftServer server) {
+		if (server == null || server.getPlayerList() == null) {
+			return null;
+		}
+		// A player has to opt in locally and the server owner may disable this
+		// admission path in lg2.json. Volunteers are preferred, leaving the hidden
+		// renderer client as a transparent fallback for the Contabo VPS.
+		if (Lg2Config.get().cameraRendererAllowPlayerVolunteers) {
+			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+				BotHandshake handshake = READY_BOTS.get(player.getUUID());
+				if (handshake == null || !handshake.volunteerRenderer()
+						|| !ServerPlayNetworking.canSend(player, RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE)) {
+					continue;
+				}
+				return player;
+			}
+		}
 		String configuredName = Lg2Config.get().cameraRendererBotPlayerName;
 		if (configuredName == null || configuredName.isBlank()) {
 			return null;
@@ -2130,6 +2296,10 @@ public final class RendererBotCameraSystem {
 		if (server == null || server.getPlayerList() == null) {
 			return false;
 		}
+		ServerPlayer bot = selectBot(server);
+		if (bot != null && hasActiveVideoRecording(bot.getUUID())) {
+			return false;
+		}
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (player == null
 					|| !player.isAlive()
@@ -2168,6 +2338,18 @@ public final class RendererBotCameraSystem {
 
 	private static void syncCameraHotbarWarmupStreams(MinecraftServer server) {
 		if (server == null || server.getPlayerList() == null) {
+			return;
+		}
+		// A recording needs the renderer client's single off-screen target and a
+		// stable shadow world.  The invisible 1x1 hotbar prewarm stream otherwise
+		// keeps being restarted while the client deliberately services the video.
+		ServerPlayer bot = selectBot(server);
+		if (bot != null && hasActiveVideoRecording(bot.getUUID())) {
+			for (String ownerKey : new ArrayList<>(LIVE_STREAMS_BY_OWNER.keySet())) {
+				if (ownerKey != null && ownerKey.startsWith("lg2:camera_hotbar_warmup:")) {
+					stopLiveStream(ownerKey);
+				}
+			}
 			return;
 		}
 		Set<String> desiredOwnerKeys = new HashSet<>();
@@ -2240,7 +2422,8 @@ public final class RendererBotCameraSystem {
 				stopLiveStreamInternal(stream, "Renderer bot live stream target is unavailable", true);
 				continue;
 			}
-			if (now - stream.lastActivityAtMillis() > LIVE_STREAM_ORPHAN_CLEANUP_MS) {
+			if (!hasActiveVideoRecording(stream.botUuid())
+					&& now - stream.lastActivityAtMillis() > LIVE_STREAM_ORPHAN_CLEANUP_MS) {
 				stopLiveStreamInternal(stream, "Renderer bot live stream timed out", true);
 			}
 		}
@@ -2268,7 +2451,8 @@ public final class RendererBotCameraSystem {
 				stopAudioCaptureInternal(capture, "Renderer bot audio capture target is unavailable", true);
 				continue;
 			}
-			if (now - capture.lastActivityAtMillis() > AUDIO_CAPTURE_ORPHAN_CLEANUP_MS) {
+			if (!hasActiveVideoRecording(capture.botUuid())
+					&& now - capture.lastActivityAtMillis() > AUDIO_CAPTURE_ORPHAN_CLEANUP_MS) {
 				stopAudioCaptureInternal(capture, "Renderer bot audio capture timed out", true);
 			}
 		}
@@ -2501,10 +2685,8 @@ public final class RendererBotCameraSystem {
 			}
 		}
 
-		for (PendingVideoRecording recording : PENDING_VIDEO_RECORDINGS.values()) {
-			if (recording == null || !botUuid.equals(recording.botUuid()) || recording.completionFuture().isDone()) {
-				continue;
-			}
+		PendingVideoRecording recording = selectVideoRecordingForRenderer(botUuid);
+		if (recording != null) {
 			if (recording.followEntityUuid() != null) {
 				return null;
 			}
@@ -2601,13 +2783,11 @@ public final class RendererBotCameraSystem {
 			}
 			appendVirtualTargetChunks(chunks, botLevel, target, viewDistance, false, false);
 		}
-		for (PendingVideoRecording recording : PENDING_VIDEO_RECORDINGS.values()) {
-			if (recording == null || !botUuid.equals(recording.botUuid()) || recording.completionFuture().isDone()) {
-				continue;
-			}
+		PendingVideoRecording recording = selectVideoRecordingForRenderer(botUuid);
+		if (recording != null) {
 			ScheduledServiceTarget target = resolveServiceTarget(server, recording.dimension(), recording.x(), recording.y(), recording.z(), recording.yaw(), recording.pitch(), recording.followEntityUuid());
 			if (target == null || target.level() != botLevel) {
-				continue;
+				return chunks;
 			}
 			// Hand-held recording follows a player. Like a normal player client it
 			// keeps one circular chunk window while moving, rather than re-evaluating
@@ -2914,6 +3094,8 @@ public final class RendererBotCameraSystem {
 			}
 			syncShadowState(server, bot, key, entry.getValue(), consumedDirtyChunks);
 		}
+		dispatchReadyVideoRecording(server, desiredStates);
+		dispatchReadyPhotoCapture(server, desiredStates);
 		// Send the render payload only after the selected target has a ticket and
 		// its shadow chunks were pushed to the renderer bot in this tick.
 		dispatchReadyMapTileRequests(server, activeMapTiles, desiredStates);
@@ -3104,7 +3286,11 @@ public final class RendererBotCameraSystem {
 		}
 		UUID botUuid = bot.getUUID();
 		int viewDistance = resolveShadowViewDistance(bot);
+		PendingVideoRecording rendererVideo = selectVideoRecordingForRenderer(botUuid);
+		PendingCapture rendererCapture = selectPendingCaptureForRenderer(botUuid);
+		boolean videoRecordingActive = rendererVideo != null && rendererVideo.clientStartSent();
 
+		if (!videoRecordingActive) {
 		for (ActiveLiveStream stream : ACTIVE_LIVE_STREAMS.values()) {
 			if (stream == null || !botUuid.equals(stream.botUuid())) {
 				continue;
@@ -3138,7 +3324,9 @@ public final class RendererBotCameraSystem {
 					spec.cameraPos() != null && spec.followEntityUuid() == null
 			);
 		}
+		}
 
+		if (!videoRecordingActive) {
 		for (ActiveAudioCapture capture : ACTIVE_AUDIO_CAPTURES.values()) {
 			if (capture == null || !botUuid.equals(capture.botUuid())) {
 				continue;
@@ -3169,10 +3357,12 @@ public final class RendererBotCameraSystem {
 					false
 			);
 		}
+		}
 
+		if (!videoRecordingActive) {
 		for (Map.Entry<UUID, PendingCapture> entry : PENDING_CAPTURES.entrySet()) {
 			PendingCapture capture = entry.getValue();
-			if (capture == null || !botUuid.equals(capture.botUuid()) || capture.isDone()) {
+			if (capture == null || capture != rendererCapture) {
 				continue;
 			}
 			ScheduledServiceTarget target = resolveServiceTarget(server, capture.dimension(), capture.x(), capture.y(), capture.z(), capture.yaw(), capture.pitch(), capture.followEntityUuid());
@@ -3185,7 +3375,9 @@ public final class RendererBotCameraSystem {
 					: Set.of(capture.feedbackPlayerId());
 			accumulateShadowDesiredState(desiredStates, botUuid, capture.renderSessionId(), target, viewDistance, hiddenEntities, false, false);
 		}
+		}
 
+		if (!videoRecordingActive) {
 		for (PendingMapTileCapture capture : activeMapTiles == null ? List.<PendingMapTileCapture>of() : activeMapTiles) {
 			if (!isPendingMapTileCapture(capture) || !botUuid.equals(capture.botUuid())) {
 				continue;
@@ -3214,6 +3406,7 @@ public final class RendererBotCameraSystem {
 					mapTileViewDistance(capture)
 			);
 		}
+		}
 
 		for (Map.Entry<UUID, PendingVideoRecording> entry : PENDING_VIDEO_RECORDINGS.entrySet()) {
 			PendingVideoRecording recording = entry.getValue();
@@ -3221,7 +3414,7 @@ public final class RendererBotCameraSystem {
 			// shadow world. The client may still be warming the camera or needs a
 			// couple of frames to make a valid short video. Keep its chunks and
 			// render session alive until it confirms the file has finished.
-			if (recording == null || !botUuid.equals(recording.botUuid()) || recording.completionFuture().isDone()) {
+			if (recording == null || recording != rendererVideo) {
 				continue;
 			}
 			ScheduledServiceTarget target = resolveServiceTarget(server, recording.dimension(), recording.x(), recording.y(), recording.z(), recording.yaw(), recording.pitch(), recording.followEntityUuid());
@@ -3234,7 +3427,7 @@ public final class RendererBotCameraSystem {
 			accumulateShadowDesiredState(desiredStates, botUuid, recording.renderSessionId(), target, viewDistance, Set.of(), true, false);
 		}
 
-		if (server.getPlayerList() != null) {
+		if (!videoRecordingActive && server.getPlayerList() != null) {
 			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 				if (player == null
 						|| !player.isAlive()
@@ -3268,6 +3461,9 @@ public final class RendererBotCameraSystem {
 
 	private static List<PendingMapTileCapture> activeMapTileShadowTargets(UUID botUuid) {
 		if (botUuid == null || PENDING_MAP_TILE_CAPTURES.isEmpty()) {
+			return List.of();
+		}
+		if (hasActiveVideoRecording(botUuid)) {
 			return List.of();
 		}
 		// A map capture whose payload has already reached the client owns its
@@ -4318,9 +4514,43 @@ public final class RendererBotCameraSystem {
 		}
 		IllegalStateException failure = new IllegalStateException(message);
 		if (PENDING_VIDEO_RECORDINGS.remove(requestId, recording)) {
+			RemoteVideoUpload upload = REMOTE_VIDEO_UPLOADS.remove(requestId);
+			if (upload != null) {
+				upload.abort();
+			}
 			recording.completionFuture().completeExceptionally(failure);
 			releaseBotCameraIfNeeded(recording.server(), recording.botUuid(), recording.resetCameraOnFinish());
 		}
+	}
+
+	private static void receiveRemoteVideoChunk(
+			ServerPlayer sender,
+			RendererBotPayloads.RendererBotVideoFileChunkC2SPayload payload
+	) {
+		if (sender == null || payload == null || payload.requestId() == null || payload.bytes() == null
+				|| payload.bytes().length == 0 || payload.bytes().length > 256 * 1024 || payload.chunkIndex() < 0) {
+			return;
+		}
+		PendingVideoRecording recording = PENDING_VIDEO_RECORDINGS.get(payload.requestId());
+		if (recording == null || !sender.getUUID().equals(recording.botUuid())) {
+			return;
+		}
+		try {
+			RemoteVideoUpload upload = REMOTE_VIDEO_UPLOADS.computeIfAbsent(payload.requestId(), ignored -> RemoteVideoUpload.create(payload.requestId(), sender.getUUID()));
+			if (!upload.accept(sender.getUUID(), payload)) {
+				failVideoRecording(payload.requestId(), recording, "Некорректная последовательность частей MP4 от renderer-клиента");
+			}
+		} catch (IOException exception) {
+			failVideoRecording(payload.requestId(), recording, "Не удалось сохранить MP4 от удалённого renderer-клиента");
+		}
+	}
+
+	private static Path consumeCompletedRemoteVideo(PendingVideoRecording recording, UUID requestId) {
+		RemoteVideoUpload upload = requestId == null ? null : REMOTE_VIDEO_UPLOADS.remove(requestId);
+		if (upload == null || recording == null || !upload.isCompleteFor(recording.botUuid())) {
+			return null;
+		}
+		return upload.completedPath();
 	}
 
 	private static boolean botHasActiveJobs(UUID botUuid) {
@@ -4353,6 +4583,11 @@ public final class RendererBotCameraSystem {
 			}
 		}
 		return false;
+	}
+
+	private static boolean hasActiveVideoRecording(UUID botUuid) {
+		PendingVideoRecording recording = selectVideoRecordingForRenderer(botUuid);
+		return recording != null && recording.clientStartSent();
 	}
 
 	private static boolean isEntityWithinAnyTrackingTarget(MinecraftServer server, UUID botUuid, Entity entity, double horizontalRangeSq) {
@@ -5020,7 +5255,74 @@ public final class RendererBotCameraSystem {
 	public record AudioCaptureFrame(short[] samples, long receivedAtNanos, long clientFrameNanos) {
 	}
 
-	private record BotHandshake(UUID playerUuid, String playerName) {
+	private record BotHandshake(UUID playerUuid, String playerName, boolean volunteerRenderer) {
+	}
+
+	private static final class RemoteVideoUpload {
+		private final UUID senderUuid;
+		private final Path temporaryPath;
+		private final Path completedPath;
+		private int nextChunkIndex;
+		private long bytesWritten;
+		private boolean complete;
+
+		private RemoteVideoUpload(UUID senderUuid, Path temporaryPath, Path completedPath) {
+			this.senderUuid = senderUuid;
+			this.temporaryPath = temporaryPath;
+			this.completedPath = completedPath;
+			this.nextChunkIndex = 0;
+			this.bytesWritten = 0L;
+			this.complete = false;
+		}
+
+		private static RemoteVideoUpload create(UUID requestId, UUID senderUuid) {
+			try {
+				CameraMediaCache.ensureVideoParent(requestId.toString());
+				Path completed = CameraMediaCache.videoSourcePath(requestId.toString());
+				Path temporary = completed.resolveSibling(completed.getFileName().toString() + ".upload");
+				Files.deleteIfExists(temporary);
+				return new RemoteVideoUpload(senderUuid, temporary, completed);
+			} catch (IOException exception) {
+				throw new IllegalStateException("Unable to create remote video upload", exception);
+			}
+		}
+
+		private synchronized boolean accept(UUID sender, RendererBotPayloads.RendererBotVideoFileChunkC2SPayload chunk) throws IOException {
+			if (this.complete || !this.senderUuid.equals(sender) || chunk.chunkIndex() != this.nextChunkIndex
+					|| this.bytesWritten + chunk.bytes().length > MAX_REMOTE_VIDEO_UPLOAD_BYTES) {
+				return false;
+			}
+			Files.write(this.temporaryPath, chunk.bytes(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+			this.bytesWritten += chunk.bytes().length;
+			this.nextChunkIndex++;
+			if (chunk.finalChunk()) {
+				try {
+					Files.move(this.temporaryPath, this.completedPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+				} catch (IOException ignored) {
+					Files.move(this.temporaryPath, this.completedPath, StandardCopyOption.REPLACE_EXISTING);
+				}
+				this.complete = true;
+			}
+			return true;
+		}
+
+		private synchronized boolean isCompleteFor(UUID sender) {
+			return this.complete && this.senderUuid.equals(sender) && this.bytesWritten > 0L && Files.isRegularFile(this.completedPath);
+		}
+
+		private Path completedPath() {
+			return this.completedPath;
+		}
+
+		private synchronized void abort() {
+			if (this.complete) {
+				return;
+			}
+			try {
+				Files.deleteIfExists(this.temporaryPath);
+			} catch (IOException ignored) {
+			}
+		}
 	}
 
 	private static final class PendingCapture {
@@ -5039,9 +5341,16 @@ public final class RendererBotCameraSystem {
 		private final UUID followEntityUuid;
 		private final UUID feedbackPlayerId;
 		private final Vec3 feedbackShutterOrigin;
+		private final int previewWidth;
+		private final int previewHeight;
+		private final int fullWidth;
+		private final int fullHeight;
 		private final CompletableFuture<byte[]> previewFuture;
 		private final CompletableFuture<byte[]> fullFuture;
+		private final long queuedAtMillis;
 		private volatile long lastDispatchAtMillis;
+		private volatile boolean clientRequestSent;
+		private volatile boolean timeoutArmed;
 
 		private PendingCapture(
 				UUID requestId,
@@ -5059,6 +5368,10 @@ public final class RendererBotCameraSystem {
 				UUID followEntityUuid,
 				UUID feedbackPlayerId,
 				Vec3 feedbackShutterOrigin,
+				int previewWidth,
+				int previewHeight,
+				int fullWidth,
+				int fullHeight,
 				CompletableFuture<byte[]> previewFuture,
 				CompletableFuture<byte[]> fullFuture
 		) {
@@ -5077,9 +5390,16 @@ public final class RendererBotCameraSystem {
 			this.followEntityUuid = followEntityUuid;
 			this.feedbackPlayerId = feedbackPlayerId;
 			this.feedbackShutterOrigin = feedbackShutterOrigin;
+			this.previewWidth = previewWidth;
+			this.previewHeight = previewHeight;
+			this.fullWidth = fullWidth;
+			this.fullHeight = fullHeight;
 			this.previewFuture = previewFuture;
 			this.fullFuture = fullFuture;
+			this.queuedAtMillis = System.currentTimeMillis();
 			this.lastDispatchAtMillis = 0L;
+			this.clientRequestSent = false;
+			this.timeoutArmed = false;
 		}
 
 		private UUID requestId() {
@@ -5140,6 +5460,42 @@ public final class RendererBotCameraSystem {
 
 		private Vec3 feedbackShutterOrigin() {
 			return this.feedbackShutterOrigin;
+		}
+
+		private int previewWidth() {
+			return this.previewWidth;
+		}
+
+		private int previewHeight() {
+			return this.previewHeight;
+		}
+
+		private int fullWidth() {
+			return this.fullWidth;
+		}
+
+		private int fullHeight() {
+			return this.fullHeight;
+		}
+
+		private long queuedAtMillis() {
+			return this.queuedAtMillis;
+		}
+
+		private boolean clientRequestSent() {
+			return this.clientRequestSent;
+		}
+
+		private void markClientRequestSent() {
+			this.clientRequestSent = true;
+		}
+
+		private synchronized boolean markTimeoutArmed() {
+			if (this.timeoutArmed) {
+				return false;
+			}
+			this.timeoutArmed = true;
+			return true;
 		}
 
 		private CompletableFuture<byte[]> previewFuture() {
@@ -5463,9 +5819,15 @@ public final class RendererBotCameraSystem {
 		private final int fovDegrees;
 		private final UUID followEntityUuid;
 		private final int targetFps;
+		private final int fullWidth;
+		private final int fullHeight;
+		private final int maxDurationSeconds;
 		private final CompletableFuture<VideoRecordingResult> completionFuture;
+		private final long queuedAtMillis;
 		private volatile long lastDispatchAtMillis;
 		private volatile boolean stopRequested;
+		private volatile boolean clientStartSent;
+		private volatile boolean timeoutArmed;
 
 		private PendingVideoRecording(
 				UUID requestId,
@@ -5482,6 +5844,9 @@ public final class RendererBotCameraSystem {
 				int fovDegrees,
 				UUID followEntityUuid,
 				int targetFps,
+				int fullWidth,
+				int fullHeight,
+				int maxDurationSeconds,
 				CompletableFuture<VideoRecordingResult> completionFuture
 		) {
 			this.requestId = requestId;
@@ -5498,9 +5863,15 @@ public final class RendererBotCameraSystem {
 			this.fovDegrees = fovDegrees;
 			this.followEntityUuid = followEntityUuid;
 			this.targetFps = targetFps;
+			this.fullWidth = fullWidth;
+			this.fullHeight = fullHeight;
+			this.maxDurationSeconds = maxDurationSeconds;
 			this.completionFuture = completionFuture;
+			this.queuedAtMillis = System.currentTimeMillis();
 			this.lastDispatchAtMillis = 0L;
 			this.stopRequested = false;
+			this.clientStartSent = false;
+			this.timeoutArmed = false;
 		}
 
 		private UUID requestId() {
@@ -5559,12 +5930,44 @@ public final class RendererBotCameraSystem {
 			return this.targetFps;
 		}
 
+		private int fullWidth() {
+			return this.fullWidth;
+		}
+
+		private int fullHeight() {
+			return this.fullHeight;
+		}
+
+		private int maxDurationSeconds() {
+			return this.maxDurationSeconds;
+		}
+
 		private CompletableFuture<VideoRecordingResult> completionFuture() {
 			return this.completionFuture;
 		}
 
 		private boolean stopRequested() {
 			return this.stopRequested;
+		}
+
+		private long queuedAtMillis() {
+			return this.queuedAtMillis;
+		}
+
+		private boolean clientStartSent() {
+			return this.clientStartSent;
+		}
+
+		private void markClientStartSent() {
+			this.clientStartSent = true;
+		}
+
+		private synchronized boolean markTimeoutArmed() {
+			if (this.timeoutArmed) {
+				return false;
+			}
+			this.timeoutArmed = true;
+			return true;
 		}
 
 		private void markStopRequested() {

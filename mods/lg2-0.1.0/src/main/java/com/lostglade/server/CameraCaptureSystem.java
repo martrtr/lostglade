@@ -128,7 +128,6 @@ public final class CameraCaptureSystem {
 			player.displayClientMessage(noActiveRendererClientMessage(player), true);
 			return false;
 		}
-
 		MapPixelProvider provider;
 		try {
 			provider = createPixelProvider(player, settings);

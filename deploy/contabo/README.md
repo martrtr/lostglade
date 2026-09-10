@@ -58,6 +58,22 @@ starts `lostglade.service`. The only public ports are TCP 25565 (Minecraft) and
 UDP 24454 (Simple Voice Chat). The renderer bot and its GL backend remain local
 to the VPS.
 
+## Player GPU renderers (optional)
+
+The VPS has no usable GPU, so a player with a strong PC can temporarily donate
+their GPU to camera work. Install the updated `lg2-client` mod from this bundle,
+join normally, and press **F8** (`Отдать GPU для рендера камер`). The opt-in is
+local, persists in that player's `config/lg2.json`, and is off by default.
+The player remains visible and playable; camera frames use an isolated shadow
+world which is restored immediately afterwards.
+
+The server prefers one opted-in player renderer, then automatically falls back
+to the permanent `RendererBot`. Keep that fallback enabled. Remote videos are
+encoded on the volunteer's computer and uploaded to the VPS as ordered,
+size-limited MP4 chunks; install `ffmpeg` on a volunteer computer that will
+record video. Set `cameraRendererAllowPlayerVolunteers: false` in the server's
+`config/lg2.json` to disable player volunteers globally.
+
 ## First start and pre-generation
 
 Wait for `systemctl status lostglade` to be healthy, then check:

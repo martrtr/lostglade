@@ -100,7 +100,7 @@ public final class RendererBotClientCapture {
 
 	public static void register() {
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-				ClientPlayNetworking.send(new RendererBotPayloads.RendererBotHelloC2SPayload(RendererBotPayloads.PROTOCOL_VERSION))
+				RendererBotVolunteerClient.sendRendererHello()
 		);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> clearAllSessions());
 		ClientTickEvents.END_CLIENT_TICK.register(RendererBotClientCapture::onClientTick);
@@ -232,8 +232,11 @@ public final class RendererBotClientCapture {
 			itemIcons = new ArrayList<>(PENDING_ITEM_ICONS.values());
 		}
 		long now = System.currentTimeMillis();
+		// A hand-held recording exclusively owns the GL scene. Keep unrelated
+		// requests queued without converting that intentional pause into a timeout.
+		boolean handVideoActive = RendererBotClientVideoRecording.hasActiveRecording();
 		for (PendingCapture capture : captures) {
-			if (capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= LOCAL_CAPTURE_TIMEOUT_MS) {
+			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= LOCAL_CAPTURE_TIMEOUT_MS) {
 				RendererBotShadowWorldManager.RenderReadiness readiness =
 						RendererBotShadowWorldManager.inspectRenderReadiness(capture.payload().renderSessionId());
 				Lg2.LOGGER.warn(
@@ -255,7 +258,7 @@ public final class RendererBotClientCapture {
 			if (liveStream == null || !liveStream.canScheduleFrame()) {
 				continue;
 			}
-			if (now - liveStream.startedAtMillis() >= LOCAL_CAPTURE_TIMEOUT_MS && liveStream.lastFrameAtNanos() == 0L) {
+			if (!handVideoActive && now - liveStream.startedAtMillis() >= LOCAL_CAPTURE_TIMEOUT_MS && liveStream.lastFrameAtNanos() == 0L) {
 				sendLiveFailure(liveStream.payload(), "Renderer bot live stream did not produce a rendered frame in time");
 				clearLiveStreamSession(liveStream.payload().streamId());
 			}
@@ -264,7 +267,7 @@ public final class RendererBotClientCapture {
 			if (mapTile == null || mapTile.rendering()) {
 				continue;
 			}
-			if (now - mapTile.requestStartedAt() >= MAP_TILE_TIMEOUT_MS) {
+			if (!handVideoActive && now - mapTile.requestStartedAt() >= MAP_TILE_TIMEOUT_MS) {
 				sendMapTileFailure(mapTile.payload(), "Renderer bot map tile did not become ready in time");
 				clearPendingMapTile(mapTile.payload().requestId());
 			}
@@ -282,7 +285,6 @@ public final class RendererBotClientCapture {
 		// Map tiles, item icons and tiny monitor streams may otherwise render into
 		// the same target later in this tick and invalidate that readback.
 		boolean cameraCapturePending = hasPendingCameraCapture();
-		boolean handVideoActive = RendererBotClientVideoRecording.hasActiveRecording();
 		if (!cameraCapturePending && !handVideoActive) {
 			dispatchReadyItemIconRender(client);
 		}
