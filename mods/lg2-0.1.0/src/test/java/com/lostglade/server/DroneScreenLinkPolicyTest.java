@@ -19,6 +19,8 @@ public final class DroneScreenLinkPolicyTest {
 		poweredLinkedScreensKeepDronesLoadedWithoutLivePreview();
 		liveCameraScreenApplyUsesAsyncPreparedPatches();
 		droneLiveStreamUsesPoseUpdatesInsteadOfShadowEntityCamera();
+		screenHeldDroneKeepsReleasedCameraPitch();
+		restartRecoveryKeepsScreenDronesBoundedAndSafe();
 		rocketCameraHandoffKeepsExistingLiveStream();
 		shadowWorldChangesUseIncrementalPackets();
 		cameraAppOffersControlButtonForFreeDrone();
@@ -161,6 +163,46 @@ public final class DroneScreenLinkPolicyTest {
 		require(
 				droneSystem.contains("public static boolean isDroneCameraAnchor(Entity entity)"),
 				"drone system must expose camera-anchor detection for renderer live stream pose updates"
+		);
+	}
+
+	private static void screenHeldDroneKeepsReleasedCameraPitch() throws Exception {
+		Path projectDir = Path.of("").toAbsolutePath();
+		String droneSystem = Files.readString(projectDir.resolve("src/main/java/com/lostglade/server/DroneSystem.java"));
+		int heldRotationStart = droneSystem.indexOf("private static void applyUncontrolledHeldFlightRotation");
+		int autoAimStart = droneSystem.indexOf("private static Vec3 resolveUncontrolledDroneAutoAimTargetPoint", heldRotationStart);
+		String heldRotation = heldRotationStart >= 0 && autoAimStart > heldRotationStart
+				? droneSystem.substring(heldRotationStart, autoAimStart)
+				: "";
+		int autoAimSync = droneSystem.indexOf("boolean autoAimAdjusted = syncUncontrolledDroneAutoAim");
+		int heldRotationApply = droneSystem.indexOf("applyUncontrolledHeldFlightRotation(root, state)", autoAimSync);
+
+		require(
+				heldRotation.contains("root.setXRot(state.pitch());")
+						&& !heldRotation.contains("state.setPitch(0.0F)"),
+				"a screen-held drone must preserve the released camera pitch instead of leveling it"
+		);
+		require(
+				autoAimSync >= 0 && heldRotationApply > autoAimSync,
+				"screen-held pose preservation must keep auto-aim's target rotation as the higher-priority update"
+		);
+	}
+
+	private static void restartRecoveryKeepsScreenDronesBoundedAndSafe() throws Exception {
+		Path projectDir = Path.of("").toAbsolutePath();
+		String droneSystem = Files.readString(projectDir.resolve("src/main/java/com/lostglade/server/DroneSystem.java"));
+
+		require(
+				droneSystem.contains("DroneRestartRecoveryState restartRecovery = readDroneRestartRecoveryState(root);")
+						&& droneSystem.contains("root.setDeltaMovement(Vec3.ZERO);")
+						&& droneSystem.contains("else if (holdWithoutGravity) {\n\t\t\t// A stream/powered screen is a hover hold"),
+				"a restarted screen-held drone must discard stale Motion and hold still when no drive state is restored"
+		);
+		require(
+				droneSystem.contains("droneRestartRecoveryVelocity(root.position(), state.restartRecoveryTarget())")
+						&& droneSystem.contains("finishDroneRestartRecovery(root, state);")
+						&& droneSystem.contains("state.isRestartLandingProtected()"),
+				"airborne drones must return only to their saved pose and be protected from restart-induced landing damage"
 		);
 	}
 

@@ -217,6 +217,9 @@ public final class DroneSystem {
 	private static final String DRONE_NIGHT_VISION_CAMERA_TAG = "lg2_drone_night_vision_camera";
 	private static final String DRONE_TURRET_TRIGGER_TAG = "lg2_drone_turret_trigger";
 	private static final String DRONE_TURRET_TRIGGER_OWNER_TAG_PREFIX = "lg2_drone_turret_trigger_owner_";
+	// Stored on the root entity so an abrupt restart can recover the last stable
+	// drone pose without trusting Minecraft's in-flight Motion value.
+	private static final String DRONE_RESTART_RECOVERY_TAG_PREFIX = "lg2_drone_restart_recovery_";
 	private static final Identifier DRONE_LOOP_SOUND_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "drone_loop");
 	private static final Identifier DRONE_KAMIKAZE_LOOP_SOUND_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "drone_kamikaze_loop");
 	private static final Identifier DRONE_BREAK_SOUND_ID = Identifier.fromNamespaceAndPath("minecraft", "entity.firework_rocket.blast");
@@ -305,6 +308,8 @@ public final class DroneSystem {
 	private static final double UNCONTROLLED_SETTLED_HORIZONTAL_SPEED_SQR = 2.5E-4D;
 	private static final double UNCONTROLLED_SETTLED_VERTICAL_SPEED = 0.05D;
 	private static final long UNCONTROLLED_DRONE_RELEASE_GLIDE_TICKS = 60L;
+	private static final double DRONE_RESTART_RECOVERY_SPEED = 0.16D;
+	private static final double DRONE_RESTART_RECOVERY_COMPLETE_DISTANCE = 0.035D;
 	private static final long CONTROLLED_DRONE_MISSING_ROOT_GRACE_TICKS = 20L * 20L;
 	private static final int DRONE_TURRET_INVENTORY_SIZE = 9;
 	private static final long DRONE_TURRET_FIRE_COOLDOWN_TICKS = 4L;
@@ -2489,6 +2494,7 @@ public final class DroneSystem {
 		session.setDisplayForwardDrive(displayForwardDrive);
 		session.setDisplayStrafeDrive(displayStrafeDrive);
 		syncDroneDisplay(root, session.proxyYaw(), session.proxyPitch(), displayForwardDrive, displayStrafeDrive, true);
+		persistDroneRestartRecoveryState(root, null);
 	}
 
 	private static boolean handleControlledServerCollision(
@@ -3202,10 +3208,21 @@ public final class DroneSystem {
 			setPersistedDroneAutoAimTarget(root, null);
 		}
 		boolean autoAimAdjusted = syncUncontrolledDroneAutoAim(root, state, autoAimTargetPoint);
-		boolean screenDrive = heldByScreenStream && state.hasDriveState();
+		boolean restoringScreenFlight = holdWithoutGravity && state.hasRestartRecoveryTarget();
+		if (restoringScreenFlight && isAtDroneRestartRecoveryTarget(root, state.restartRecoveryTarget())) {
+			finishDroneRestartRecovery(root, state);
+			restoringScreenFlight = false;
+		}
+		boolean screenDrive = !restoringScreenFlight && heldByScreenStream && state.hasDriveState();
 		Vec3 velocity;
-		if (screenDrive) {
+		if (restoringScreenFlight) {
+			velocity = droneRestartRecoveryVelocity(root.position(), state.restartRecoveryTarget());
+		} else if (screenDrive) {
 			velocity = DroneFlightPhysics.step(state.pitch(), state.yaw(), state.forwardDrive(), state.strafeDrive());
+		} else if (holdWithoutGravity) {
+			// A stream/powered screen is a hover hold, never an instruction to keep
+			// applying a stale entity Motion vector forever after a restart.
+			velocity = Vec3.ZERO;
 		} else {
 			velocity = state.velocity() == null ? Vec3.ZERO : state.velocity();
 		}
@@ -3237,7 +3254,8 @@ public final class DroneSystem {
 			);
 		}
 
-		if (!waterProtectedImpact
+		if (!state.isRestartLandingProtected()
+				&& !waterProtectedImpact
 				&& !slimeBounce
 				&& shouldDestroyDroneFromCollision(velocity, actualMovement, root.horizontalCollision, root.verticalCollision)) {
 			igniteDroneCrashSite(root, velocity);
@@ -3245,7 +3263,8 @@ public final class DroneSystem {
 			UNCONTROLLED_DRONES.remove(root.getUUID());
 			return;
 		}
-		if (!screenDrive
+		if (!state.isRestartLandingProtected()
+				&& !screenDrive
 				&& !waterProtectedImpact
 				&& !slimeBounce
 				&& updateUncontrolledDroneSurfaceWear(state, root, velocity, actualMovement, gameTime)) {
@@ -3256,7 +3275,12 @@ public final class DroneSystem {
 		}
 		decayUncontrolledDroneSurfaceWear(state, gameTime);
 
-		Vec3 nextVelocity = actualMovement;
+		if (restoringScreenFlight && isAtDroneRestartRecoveryTarget(root, state.restartRecoveryTarget())) {
+			finishDroneRestartRecovery(root, state);
+			restoringScreenFlight = false;
+			actualMovement = Vec3.ZERO;
+		}
+		Vec3 nextVelocity = (holdWithoutGravity && (!screenDrive || restoringScreenFlight)) ? Vec3.ZERO : actualMovement;
 		if (!screenDrive && !holdWithoutGravity && shouldApplyUncontrolledGroundBraking(root)) {
 			nextVelocity = applyUncontrolledGroundBraking(actualMovement);
 		}
@@ -3303,6 +3327,7 @@ public final class DroneSystem {
 		syncDroneCameraAnchor(root, actualMovement);
 		syncPersistentDroneLocation(root, state.lastPosition());
 		state.setLastPosition(root.position());
+		persistDroneRestartRecoveryState(root, state);
 		NEXT_DRONE_SOUND_TICK.remove(root.getUUID());
 	}
 
@@ -3468,9 +3493,13 @@ public final class DroneSystem {
 		if (root == null || state == null) {
 			return;
 		}
-		state.setPitch(0.0F);
+		// A linked screen holds an unattended drone in place, but it must not
+		// level its camera as soon as its operator disconnects.  In particular,
+		// the released control session has already persisted the latest look
+		// pitch into this state.  Keep that pose for the screen stream; an active
+		// auto-aim target is still applied earlier in tickUncontrolledDrone.
 		root.setYRot(state.yaw());
-		root.setXRot(0.0F);
+		root.setXRot(state.pitch());
 	}
 
 	private static Vec3 resolveUncontrolledDroneAutoAimTargetPoint(Entity root, UncontrolledDroneState state) {
@@ -3903,6 +3932,7 @@ public final class DroneSystem {
 			return;
 		}
 		state.setVelocity(Vec3.ZERO);
+		state.clearRestartRecovery();
 		state.setPitch(0.0F);
 		root.setXRot(0.0F);
 		root.setDeltaMovement(Vec3.ZERO);
@@ -3911,6 +3941,7 @@ public final class DroneSystem {
 		syncDroneCameraAnchor(root, Vec3.ZERO);
 		syncPersistentDroneLocation(root, state.lastPosition());
 		state.setLastPosition(root.position());
+		persistDroneRestartRecoveryState(root, state);
 		NEXT_DRONE_SOUND_TICK.remove(root.getUUID());
 	}
 
@@ -4090,17 +4121,28 @@ public final class DroneSystem {
 		if (!(entity instanceof Interaction root) || level == null || !root.getTags().contains(DRONE_ROOT_TAG)) {
 			return;
 		}
-		// After a restart we want drones to keep falling without a controller; seed the physics state from entity motion.
+		// Do not reuse the entity Motion value here. A controlled/hovering drone
+		// can have a positive Motion value saved by vanilla; once a screen holds it
+		// without gravity that value would otherwise propel it upward forever.
 		if (isDroneActivelyControlled(root)) {
 			return;
 		}
+		DroneRestartRecoveryState restartRecovery = readDroneRestartRecoveryState(root);
 		UncontrolledDroneState uncontrolledState = new UncontrolledDroneState(
 				root.getUUID(),
 				level.dimension(),
-				root.getDeltaMovement(),
+				Vec3.ZERO,
 				root.getYRot(),
 				root.getXRot()
 		);
+		root.setDeltaMovement(Vec3.ZERO);
+		if (restartRecovery != null && restartRecovery.airborne()) {
+			uncontrolledState.beginRestartRecovery(restartRecovery.target());
+		} else if (!isDroneSafelyParked(root, uncontrolledState)) {
+			// Older entities have no recovery tag yet. They still get one safe
+			// post-restart landing instead of breaking on the first ground impact.
+			uncontrolledState.beginRestartLandingProtection();
+		}
 		uncontrolledState.setAutoAimTarget(resolvePersistedDroneAutoAimTarget(root));
 		uncontrolledState.setLastPosition(root.position());
 		UNCONTROLLED_DRONES.putIfAbsent(root.getUUID(), uncontrolledState);
@@ -6365,6 +6407,7 @@ public final class DroneSystem {
 			uncontrolledState.setSurfaceWear(session.surfaceWear());
 			uncontrolledState.setLastSurfaceWearContactTick(session.lastSurfaceWearContactTick());
 			UNCONTROLLED_DRONES.put(root.getUUID(), uncontrolledState);
+			persistDroneRestartRecoveryState(root, uncontrolledState);
 			syncDroneDisplayLayers(root);
 			syncDroneDisplay(root, root.getYRot(), root.getXRot(), 0.0D, 0.0D, true);
 			syncDroneCameraAnchor(root, releasedVelocity);
@@ -8458,6 +8501,94 @@ public final class DroneSystem {
 		BluetoothLinkSystem.refreshDroneEndpoint(level.getServer(), level.dimension(), currentBlockPos, root.getUUID());
 	}
 
+	private static void persistDroneRestartRecoveryState(Entity root, UncontrolledDroneState state) {
+		if (root == null || !root.isAlive()) {
+			return;
+		}
+		Vec3 target = state != null && state.restartRecoveryTarget() != null
+				? state.restartRecoveryTarget()
+				: root.position();
+		boolean airborne = !isDroneSafelyParked(root, state) || (state != null && state.hasRestartRecoveryTarget());
+		String replacement = DRONE_RESTART_RECOVERY_TAG_PREFIX
+				+ (airborne ? "air:" : "ground:")
+				+ Double.toString(target.x) + ":" + Double.toString(target.y) + ":" + Double.toString(target.z);
+		for (String tag : new ArrayList<>(root.getTags())) {
+			if (tag == null || !tag.startsWith(DRONE_RESTART_RECOVERY_TAG_PREFIX)) {
+				continue;
+			}
+			if (tag.equals(replacement)) {
+				return;
+			}
+			root.removeTag(tag);
+		}
+		root.addTag(replacement);
+	}
+
+	private static DroneRestartRecoveryState readDroneRestartRecoveryState(Entity root) {
+		if (root == null) {
+			return null;
+		}
+		for (String tag : root.getTags()) {
+			if (tag == null || !tag.startsWith(DRONE_RESTART_RECOVERY_TAG_PREFIX)) {
+				continue;
+			}
+			String[] parts = tag.substring(DRONE_RESTART_RECOVERY_TAG_PREFIX.length()).split(":", -1);
+			if (parts.length != 4 || (!"air".equals(parts[0]) && !"ground".equals(parts[0]))) {
+				continue;
+			}
+			try {
+				Vec3 target = new Vec3(
+						Double.parseDouble(parts[1]),
+						Double.parseDouble(parts[2]),
+						Double.parseDouble(parts[3])
+				);
+				if (Double.isFinite(target.x) && Double.isFinite(target.y) && Double.isFinite(target.z)) {
+					return new DroneRestartRecoveryState("air".equals(parts[0]), target);
+				}
+			} catch (NumberFormatException ignored) {
+			}
+		}
+		return null;
+	}
+
+	private static boolean isDroneSafelyParked(Entity root, UncontrolledDroneState state) {
+		if (root == null || !root.onGround() || !hasSupportingBlockBelow(root)) {
+			return false;
+		}
+		Vec3 velocity = state == null ? root.getDeltaMovement() : state.velocity();
+		return velocity == null || velocity.lengthSqr() <= UNCONTROLLED_SETTLED_HORIZONTAL_SPEED_SQR;
+	}
+
+	private static boolean isAtDroneRestartRecoveryTarget(Entity root, Vec3 target) {
+		return root != null && target != null
+				&& root.position().distanceToSqr(target) <= DRONE_RESTART_RECOVERY_COMPLETE_DISTANCE * DRONE_RESTART_RECOVERY_COMPLETE_DISTANCE;
+	}
+
+	private static Vec3 droneRestartRecoveryVelocity(Vec3 current, Vec3 target) {
+		if (current == null || target == null) {
+			return Vec3.ZERO;
+		}
+		Vec3 delta = target.subtract(current);
+		double distance = delta.length();
+		if (distance <= DRONE_RESTART_RECOVERY_COMPLETE_DISTANCE) {
+			return delta;
+		}
+		return delta.scale(Math.min(DRONE_RESTART_RECOVERY_SPEED, distance) / distance);
+	}
+
+	private static void finishDroneRestartRecovery(Entity root, UncontrolledDroneState state) {
+		if (root == null || state == null || state.restartRecoveryTarget() == null) {
+			return;
+		}
+		Vec3 target = state.restartRecoveryTarget();
+		root.setPos(target.x, target.y, target.z);
+		root.setBoundingBox(droneBoxAt(target));
+		root.setDeltaMovement(Vec3.ZERO);
+		state.setVelocity(Vec3.ZERO);
+		state.clearRestartRecovery();
+		root.hurtMarked = true;
+	}
+
 	private static Entity findDroneRoot(MinecraftServer server, net.minecraft.resources.ResourceKey<Level> dimension, UUID droneUuid) {
 		Entity entity = findEntity(server, dimension, droneUuid);
 		return entity != null && entity.getTags().contains(DRONE_ROOT_TAG) ? entity : null;
@@ -8524,6 +8655,8 @@ public final class DroneSystem {
 		private Vec3 lastPosition;
 		private double surfaceWear;
 		private long lastSurfaceWearContactTick = Long.MIN_VALUE;
+		private Vec3 restartRecoveryTarget;
+		private boolean restartLandingProtected;
 
 		private UncontrolledDroneState(UUID droneUuid, net.minecraft.resources.ResourceKey<Level> dimension, Vec3 velocity, float yaw, float pitch) {
 			this(droneUuid, dimension, velocity, yaw, pitch, null, Long.MIN_VALUE);
@@ -8664,6 +8797,32 @@ public final class DroneSystem {
 		private void setLastSurfaceWearContactTick(long lastSurfaceWearContactTick) {
 			this.lastSurfaceWearContactTick = lastSurfaceWearContactTick;
 		}
+
+		private void beginRestartRecovery(Vec3 target) {
+			this.restartRecoveryTarget = target;
+			this.restartLandingProtected = true;
+		}
+
+		private void beginRestartLandingProtection() {
+			this.restartLandingProtected = true;
+		}
+
+		private Vec3 restartRecoveryTarget() {
+			return this.restartRecoveryTarget;
+		}
+
+		private boolean hasRestartRecoveryTarget() {
+			return this.restartRecoveryTarget != null;
+		}
+
+		private boolean isRestartLandingProtected() {
+			return this.restartLandingProtected;
+		}
+
+		private void clearRestartRecovery() {
+			this.restartRecoveryTarget = null;
+			this.restartLandingProtected = false;
+		}
 	}
 
 	private record DroneChunkTicketKey(net.minecraft.resources.ResourceKey<Level> dimension, long chunkLong, int radius, boolean simulation) {
@@ -8675,6 +8834,9 @@ public final class DroneSystem {
 			BlockPos fallbackPos,
 			long startedAtTick
 	) {
+	}
+
+	private record DroneRestartRecoveryState(boolean airborne, Vec3 target) {
 	}
 
 	private record DroneScreenStreamLoadState(
