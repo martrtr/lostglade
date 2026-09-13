@@ -194,6 +194,7 @@ public final class RendererBotCameraSystem {
 			UUID botUuid = handler.player.getUUID();
 			clearShadowSyncState(server, botUuid, false);
 			READY_BOTS.remove(botUuid);
+			handoffLiveStreamsFromUnavailableRenderer(server, botUuid, "Renderer bot disconnected during live stream");
 			failCapturesForBot(botUuid, "Renderer bot disconnected during capture");
 			failMapTileCapturesForBot(botUuid, "Renderer bot disconnected during map tile render");
 			failItemIconCapturesForBot(botUuid, "Renderer bot disconnected during item icon render");
@@ -214,6 +215,16 @@ public final class RendererBotCameraSystem {
 					READY_BOTS.put(context.player().getUUID(), new BotHandshake(
 							context.player().getUUID(), context.player().getScoreboardName(), volunteer
 					));
+					// A zero GPU budget is an explicit opt-out. Move active screen feeds
+					// immediately instead of waiting for their stale-frame timeout.
+					if (!volunteer && !dedicatedBot) {
+						MinecraftServer server = context.player().level().getServer();
+						if (server != null) {
+							server.execute(() -> handoffLiveStreamsFromUnavailableRenderer(
+									server, context.player().getUUID(), "Renderer client disabled camera GPU rendering"
+							));
+						}
+					}
 				}
 		);
 		ServerPlayNetworking.registerGlobalReceiver(
@@ -1201,10 +1212,23 @@ public final class RendererBotCameraSystem {
 		ActiveLiveStream stream = new ActiveLiveStream(server, streamId, ownerKey, bot.getUUID(), desiredSpec, onFrame, onFailure);
 		ACTIVE_LIVE_STREAMS.put(streamId, stream);
 		LIVE_STREAMS_BY_OWNER.put(ownerKey, streamId);
+		startLiveStreamOnRenderer(bot, stream);
+		return true;
+	}
+
+	/** Starts or resumes a stream on a renderer without changing its screen owner. */
+	private static void startLiveStreamOnRenderer(ServerPlayer bot, ActiveLiveStream stream) {
+		if (bot == null || stream == null || !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotLiveStreamStartS2CPayload.TYPE)) {
+			return;
+		}
+		LiveStreamSpec desiredSpec = stream.spec();
+		if (desiredSpec == null) {
+			return;
+		}
 		ServerPlayNetworking.send(
 				bot,
 				new RendererBotPayloads.RendererBotLiveStreamStartS2CPayload(
-						streamId,
+						stream.streamId(),
 						desiredSpec.renderSessionId(),
 						desiredSpec.dimension().identifier().toString(),
 						desiredSpec.expectedX(),
@@ -1232,7 +1256,7 @@ public final class RendererBotCameraSystem {
 		if (desiredSpec.followEntityUuid() != null
 				&& ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotLiveStreamPoseS2CPayload.TYPE)) {
 			ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotLiveStreamPoseS2CPayload(
-					streamId,
+					stream.streamId(),
 					desiredSpec.expectedX(),
 					desiredSpec.expectedY(),
 					desiredSpec.expectedZ(),
@@ -1241,7 +1265,6 @@ public final class RendererBotCameraSystem {
 					0.0F
 			));
 		}
-		return true;
 	}
 
 	private static Set<UUID> resolveLiveStreamHiddenEntityUuids(
@@ -1943,6 +1966,38 @@ public final class RendererBotCameraSystem {
 		}
 	}
 
+	/**
+	 * Keeps a screen feed alive when the contributing client leaves or explicitly
+	 * gives its GPU budget back. The stream and owner key stay unchanged, so the
+	 * display continues consuming frames as soon as the replacement warms up.
+	 */
+	private static void handoffLiveStreamsFromUnavailableRenderer(
+			MinecraftServer server,
+			UUID unavailableBotUuid,
+			String unavailableMessage
+	) {
+		if (server == null || unavailableBotUuid == null) {
+			return;
+		}
+		ServerPlayer replacement = selectBot(server);
+		for (ActiveLiveStream stream : new ArrayList<>(ACTIVE_LIVE_STREAMS.values())) {
+			if (stream == null || !unavailableBotUuid.equals(stream.botUuid())) {
+				continue;
+			}
+			LiveStreamSpec spec = stream.spec();
+			ServerLevel level = spec == null ? null : server.getLevel(spec.dimension());
+			if (replacement == null || level == null || !canBotRenderLevel(replacement, level)) {
+				stopLiveStreamInternal(stream, unavailableMessage, true);
+				continue;
+			}
+			UUID previousBotUuid = stream.botUuid();
+			stream.transferRenderer(replacement.getUUID());
+			startLiveStreamOnRenderer(replacement, stream);
+			releaseBotCameraIfNeeded(server, previousBotUuid, true);
+			Lg2.LOGGER.info("Moved Lostglade camera stream {} from {} to {}", stream.streamId(), previousBotUuid, replacement.getUUID());
+		}
+	}
+
 	private static void failLiveStreamsForBot(UUID botUuid, String message) {
 		if (botUuid == null) {
 			return;
@@ -2420,7 +2475,7 @@ public final class RendererBotCameraSystem {
 					|| server.getPlayerList() == null
 					|| server.getPlayerList().getPlayer(stream.botUuid()) == null;
 			if (botUnavailable) {
-				stopLiveStreamInternal(stream, "Renderer bot live stream target is unavailable", true);
+				handoffLiveStreamsFromUnavailableRenderer(server, stream.botUuid(), "Renderer bot live stream target is unavailable");
 				continue;
 			}
 			if (!hasActiveVideoRecording(stream.botUuid())
@@ -5987,7 +6042,7 @@ public final class RendererBotCameraSystem {
 		private final MinecraftServer server;
 		private final UUID streamId;
 		private final String ownerKey;
-		private final UUID botUuid;
+		private volatile UUID botUuid;
 		private volatile LiveStreamSpec spec;
 		private final Consumer<LiveStreamFrame> onFrame;
 		private final Consumer<String> onFailure;
@@ -6037,6 +6092,19 @@ public final class RendererBotCameraSystem {
 
 		private UUID botUuid() {
 			return this.botUuid;
+		}
+
+		private void transferRenderer(UUID botUuid) {
+			if (botUuid == null) {
+				return;
+			}
+			this.botUuid = botUuid;
+			this.lastFrameAtMillis = System.currentTimeMillis();
+			this.lastDispatchAtMillis = 0L;
+			synchronized (this.frameDeliveryLock) {
+				this.pendingFrame = null;
+				this.newestAcceptedClientFrameNanos = 0L;
+			}
 		}
 
 		private LiveStreamSpec spec() {

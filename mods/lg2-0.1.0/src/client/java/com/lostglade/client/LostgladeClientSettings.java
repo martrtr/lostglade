@@ -19,7 +19,7 @@ import java.nio.file.Path;
 
 /** Local-only preferences for a player who contributes GPU time to cameras. */
 public final class LostgladeClientSettings {
-	private static final int MIN_PARALLEL_CAPTURES = 1;
+	private static final int MIN_PARALLEL_CAPTURES = 0;
 	private static final int MAX_PARALLEL_CAPTURES = 4;
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("lostglade-client.json");
@@ -48,15 +48,11 @@ public final class LostgladeClientSettings {
 	}
 
 	public static boolean isCameraRendererEnabled() {
-		return settings.cameraRendererEnabled;
+		return settings.maxParallelCaptures > 0;
 	}
 
 	public static synchronized void setCameraRendererEnabled(boolean enabled) {
-		if (settings.cameraRendererEnabled == enabled) {
-			return;
-		}
-		settings.cameraRendererEnabled = enabled;
-		write();
+		setMaxParallelCaptures(enabled ? Math.max(1, settings.maxParallelCaptures) : 0);
 	}
 
 	public static int maxParallelCaptures() {
@@ -69,6 +65,7 @@ public final class LostgladeClientSettings {
 			return;
 		}
 		settings.maxParallelCaptures = clamped;
+		settings.cameraRendererEnabled = clamped > 0;
 		write();
 	}
 
@@ -85,6 +82,12 @@ public final class LostgladeClientSettings {
 	}
 
 	private static boolean sanitize(Settings value) {
+		// Keep old configs with the former on/off switch disabled disabled after
+		// migrating to the single 0..N resource limit.
+		if (!value.cameraRendererEnabled && value.maxParallelCaptures > 0) {
+			value.maxParallelCaptures = 0;
+			return true;
+		}
 		int clamped = Math.clamp(value.maxParallelCaptures, MIN_PARALLEL_CAPTURES, MAX_PARALLEL_CAPTURES);
 		if (clamped == value.maxParallelCaptures) {
 			return false;
@@ -106,7 +109,7 @@ public final class LostgladeClientSettings {
 
 	private static final class Settings {
 		private boolean cameraRendererEnabled = true;
-		private int maxParallelCaptures = MIN_PARALLEL_CAPTURES;
+		private int maxParallelCaptures = 1;
 
 		private static Settings defaults() {
 			return new Settings();
