@@ -15,10 +15,9 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class RendererBotPayloads {
-	// RendererBotLiveStreamStartS2CPayload gained a field. Keep an old renderer
-	// bot from accepting the handshake and decoding the following varints from a
-	// shifted byte offset.
-	public static final int PROTOCOL_VERSION = 25;
+	// Scene isolation now allows a private copy of the contributing player and
+	// adds block-entity/effect packets. Older clients must not accept this stream.
+	public static final int PROTOCOL_VERSION = 26;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
 	private static final int MAX_HIDDEN_CAMERA_ENTITIES = 32;

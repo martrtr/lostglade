@@ -1,6 +1,5 @@
 package com.lostglade.client;
 
-import com.lostglade.config.Lg2Config;
 import com.lostglade.network.RendererBotPayloads;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -37,7 +36,7 @@ public final class RendererBotVolunteerClient {
 	public static boolean isVolunteerRenderer() {
 		// The dedicated hidden renderer always remains available as the fallback,
 		// regardless of the opt-in preference in its local config file.
-		return RendererBotClientMode.isEnabled() || Lg2Config.get().cameraRendererVolunteerEnabled;
+		return RendererBotClientMode.isEnabled() || LostgladeClientSettings.isCameraRendererEnabled();
 	}
 
 	public static void sendRendererHello() {
@@ -54,8 +53,8 @@ public final class RendererBotVolunteerClient {
 			if (RendererBotClientMode.isEnabled()) {
 				return;
 			}
-			boolean enabled = !Lg2Config.get().cameraRendererVolunteerEnabled;
-			Lg2Config.setCameraRendererVolunteerEnabled(enabled);
+			boolean enabled = !LostgladeClientSettings.isCameraRendererEnabled();
+			LostgladeClientSettings.setCameraRendererEnabled(enabled);
 			sendRendererHello();
 			if (client != null && client.player != null) {
 				client.player.displayClientMessage(Component.translatable(

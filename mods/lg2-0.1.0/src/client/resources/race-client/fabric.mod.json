@@ -3,14 +3,15 @@
   "id": "lg2-client",
   "version": "${version}",
   "name": "Lostglade Client",
-  "description": "Client features for Lostglade: race abilities and drone camera tilt.",
+  "description": "Lostglade client: race abilities, drone camera tilt, and GPU camera rendering.",
   "environment": "client",
   "entrypoints": {
-    "client": ["com.lostglade.raceclient.Lg2RaceClient"]
+    "client": ["com.lostglade.Lg2Client"]
   },
   "mixins": [
-    "lg2-race-client.mixins.json",
-    "lg2-camera-tilt.mixins.json"
+    "lg2.client.mixins.json",
+    "lg2.absolute_invisibility.client.mixins.json",
+    "lg2-race-client.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.18.4",

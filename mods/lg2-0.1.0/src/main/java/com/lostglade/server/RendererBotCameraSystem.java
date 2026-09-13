@@ -29,6 +29,7 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelEventPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityLinkPacket;
@@ -3036,6 +3037,10 @@ public final class RendererBotCameraSystem {
 			return;
 		}
 		mirrorTransientLevelPacket(level, pos, new ClientboundBlockUpdatePacket(level, pos));
+		var blockEntity = level.getBlockEntity(pos);
+		if (blockEntity != null && blockEntity.getUpdatePacket() != null) {
+			mirrorTransientLevelPacket(level, pos, blockEntity.getUpdatePacket());
+		}
 	}
 
 	/**
@@ -3902,6 +3907,8 @@ public final class RendererBotCameraSystem {
 
 		PacketContext.runWithContext(bot.connection, () -> {
 			for (Entity entity : level.getEntities((Entity) null, searchBox, entity -> true)) {
+				// A volunteer must be visible too. The client creates a RemotePlayer
+				// in its private scene, never reuses the live LocalPlayer object.
 				if (!shouldShadowTrackEntity(entity, desiredState)) {
 					continue;
 				}
@@ -3910,12 +3917,24 @@ public final class RendererBotCameraSystem {
 				if (trackedEntity == null || trackedEntity.entity() != entity) {
 					trackedEntity = createShadowTrackedEntity(level, entity, bot);
 					trackedEntities.put(entity.getId(), trackedEntity);
+					// RemotePlayer creation requires PlayerInfo to arrive first. The
+					// volunteer's ordinary world may never have tracked a player visible
+					// only to this shadow camera, so send that prerequisite explicitly.
+					// ADD_PLAYER alone populates the client's profile lookup without
+					// changing its tab-list, latency, game mode, or any other state of
+					// the volunteer's real session.
+					if (entity instanceof ServerPlayer trackedPlayer) {
+						packets.add(new ClientboundPlayerInfoUpdatePacket(
+								EnumSet.of(ClientboundPlayerInfoUpdatePacket.Action.ADD_PLAYER),
+								List.of(trackedPlayer)
+						));
+					}
 					trackedEntity.serverEntity().sendPairingData(bot, packets::add);
 				}
 				trackedEntity.collector().clear();
-				List<SynchedEntityData.DataValue<?>> preservedDirtyData = preserveDirtyTrackedData(entity);
-				trackedEntity.serverEntity().sendChanges();
-				restoreDirtyTrackedData(entity, preservedDirtyData);
+				try (var ignored = new ShadowEntityTrackingScope(entity)) {
+					trackedEntity.serverEntity().sendChanges();
+				}
 				packets.addAll(trackedEntity.collector().drain());
 			}
 		});
@@ -4138,6 +4157,8 @@ public final class RendererBotCameraSystem {
 
 	private static boolean isShadowTransientEntityPacket(Packet<?> packet) {
 		return packet instanceof ClientboundAnimatePacket
+				|| packet instanceof net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket
+				|| packet instanceof net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket
 				|| packet instanceof ClientboundEntityEventPacket
 				|| packet instanceof ClientboundHurtAnimationPacket
 				|| packet instanceof ClientboundDamageEventPacket
@@ -4196,48 +4217,6 @@ public final class RendererBotCameraSystem {
 		);
 	}
 
-	private static List<SynchedEntityData.DataValue<?>> preserveDirtyTrackedData(Entity entity) {
-		if (entity == null) {
-			return List.of();
-		}
-		List<SynchedEntityData.DataValue<?>> dirtyData = entity.getEntityData().packDirty();
-		restoreDirtyTrackedData(entity, dirtyData);
-		return dirtyData == null ? List.of() : dirtyData;
-	}
-
-	private static void restoreDirtyTrackedData(Entity entity, List<SynchedEntityData.DataValue<?>> dirtyData) {
-		if (entity == null || dirtyData == null || dirtyData.isEmpty()) {
-			return;
-		}
-		SynchedEntityData entityData = entity.getEntityData();
-		SynchedEntityData.DataItem<?>[] itemsById = ((SynchedEntityDataAccessor) (Object) entityData).lg2$getItemsById();
-		if (itemsById == null || itemsById.length == 0) {
-			return;
-		}
-		for (SynchedEntityData.DataValue<?> value : dirtyData) {
-			if (value == null || value.id() < 0 || value.id() >= itemsById.length) {
-				continue;
-			}
-			SynchedEntityData.DataItem<?> item = itemsById[value.id()];
-			if (item == null) {
-				continue;
-			}
-			restoreDirtyTrackedDataItem(entityData, item);
-		}
-	}
-
-	@SuppressWarnings("unchecked")
-	private static <T> void restoreDirtyTrackedDataItem(SynchedEntityData entityData, SynchedEntityData.DataItem<?> item) {
-		if (entityData == null || item == null) {
-			return;
-		}
-		SynchedEntityData.DataItem<T> typedItem = (SynchedEntityData.DataItem<T>) item;
-		EntityDataAccessor<T> accessor = typedItem.getAccessor();
-		if (accessor == null) {
-			return;
-		}
-		entityData.set(accessor, typedItem.getValue(), true);
-	}
 
 	private static void clearAllShadowSyncStates(MinecraftServer server, boolean notifyClient) {
 		for (ShadowSyncKey key : new ArrayList<>(ACTIVE_SHADOW_SYNC_STATES.keySet())) {

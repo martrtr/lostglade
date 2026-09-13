@@ -13,6 +13,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererOffscreenProjectionMixin {
+	@Inject(method = "getMainCamera", at = @At("HEAD"), cancellable = true)
+	private void lg2$sceneCamera(CallbackInfoReturnable<net.minecraft.client.Camera> cir) {
+		var camera = RendererBotOffscreenWorldRenderer.activeCamera();
+		if (camera == null && com.lostglade.client.RendererBotSceneContext.level() != null) {
+			camera = com.lostglade.client.RendererBotSceneContext.level().camera();
+		}
+		if (camera != null) cir.setReturnValue(camera);
+	}
+
+	@Inject(method = "lightTexture", at = @At("HEAD"), cancellable = true)
+	private void lg2$sceneLight(CallbackInfoReturnable<net.minecraft.client.renderer.LightTexture> cir) {
+		var light = RendererBotOffscreenWorldRenderer.activeLightTexture();
+		if (light != null) cir.setReturnValue(light);
+	}
 	@Shadow
 	@Final
 	private Minecraft minecraft;

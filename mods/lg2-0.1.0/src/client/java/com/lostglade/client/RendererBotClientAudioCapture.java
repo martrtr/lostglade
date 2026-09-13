@@ -64,7 +64,8 @@ public final class RendererBotClientAudioCapture {
 			return;
 		}
 		Minecraft client = Minecraft.getInstance();
-		if (client == null || !(client.level instanceof ClientLevel level)) {
+		ClientLevel level = RendererBotSceneContext.level();
+		if (client == null || level == null) {
 			return;
 		}
 		UUID renderSessionId = RendererBotShadowWorldManager.sessionIdForLevel(level);

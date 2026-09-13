@@ -8,4 +8,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface SynchedEntityDataAccessor {
 	@Accessor("itemsById")
 	SynchedEntityData.DataItem<?>[] lg2$getItemsById();
+
+	@Accessor("isDirty")
+	void lg2$setDirty(boolean dirty);
 }

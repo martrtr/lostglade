@@ -5,6 +5,11 @@
 	"compatibilityLevel": "JAVA_21",
 	"client": [
 		"ClientLevelMapDataAccessor",
+		"ClientLevelCameraSceneMixin",
+		"ClientPacketListenerCameraSceneMixin",
+		"LevelRendererCameraSceneMixin",
+		"BlockEntityCameraStateAccessor",
+		"LightTextureCameraSceneMixin",
 		"ClientInputAccessor",
 		"CameraDroneTiltMixin",
 		"CameraPositionInvoker",
@@ -17,13 +22,13 @@
 		"MinecraftOffscreenWorldAccessor",
 		"MinecraftMainRenderTargetAccessor",
 		"SpriteContentsImageAccessor",
-		"TextureAtlasMapAnimationFreezeMixin",
 		"RendererBotMinecraftAuthMixin",
 		"RendererBotGlfwMixin",
 		"RendererBotSkinManagerMixin",
 		"WebcamRenderLayerOffscreenMixin",
 		"RendererBotWindowMixin",
 		"SoundEngineBufferAccessor",
+		"SoundManagerCameraSceneMixin",
 		"SoundEngineRendererBotAudioMixin"
 	],
 	"injectors": {

@@ -5,6 +5,7 @@ import com.lostglade.network.Lg2Payloads;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.resources.Identifier;
@@ -21,6 +22,10 @@ public final class MilkPocketVoidFadeClient {
 	}
 
 	public static void register() {
+		PayloadTypeRegistry.playS2C().register(
+				Lg2Payloads.MilkPocketVoidFadeS2CPayload.TYPE,
+				Lg2Payloads.MilkPocketVoidFadeS2CPayload.STREAM_CODEC
+		);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			currentAlpha = 0.0F;
 			targetAlpha = 0.0F;

@@ -1,12 +1,10 @@
 package com.lostglade.client;
 
 import com.lostglade.Lg2;
-import com.lostglade.block.CameraBlock;
 import com.lostglade.mixin.client.ClientLevelMapDataAccessor;
 import com.lostglade.mixin.client.ClientPacketListenerShadowAccessor;
 import com.lostglade.mixin.client.MinecraftOffscreenWorldAccessor;
 import com.lostglade.mixin.client.CloudRendererReloadInvoker;
-import com.lostglade.mixin.client.GameRendererRenderLevelInvoker;
 import com.lostglade.network.RendererBotPayloads;
 import com.lostglade.network.RendererBotShadowPacketCodec;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -30,11 +28,18 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket;
 import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
 import net.minecraft.network.protocol.game.ClientboundSetChunkCacheRadiusPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityLinkPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
+import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -261,11 +266,11 @@ public final class RendererBotShadowWorldManager {
 			return;
 		}
 		BlockState state = session.level().getBlockState(position);
-		// Depending on whether Polymer transformed the packet before it reached
-		// this shadow world, the same collision placeholder is either the
-		// PLAYER_HEAD fallback or the real CameraBlock state.  Both represent the
-		// camera's own body here; do not touch any unrelated player head.
-		if (!state.is(Blocks.PLAYER_HEAD) && !(state.getBlock() instanceof CameraBlock)) {
+		// A client companion intentionally has no Polymer dependency. The server
+		// sends this block as its vanilla PLAYER_HEAD fallback, so checking the
+		// fallback is both sufficient and keeps server-only CameraBlock classes
+		// out of the client class-loading path.
+		if (!state.is(Blocks.PLAYER_HEAD)) {
 			return;
 		}
 		session.level().setBlock(position, Blocks.AIR.defaultBlockState(), 3);
@@ -287,6 +292,7 @@ public final class RendererBotShadowWorldManager {
 				return;
 			}
 			session.setLastCamera(camera);
+			((RendererBotShadowLevel) session.level()).setCamera(camera);
 			LAST_RENDER_ACTIVITY_AT.put(sessionId, System.currentTimeMillis());
 		}
 	}
@@ -384,11 +390,12 @@ public final class RendererBotShadowWorldManager {
 		for (UUID sessionId : expiredSessionIds) {
 			RendererBotOffscreenWorldRenderer.releaseSession(sessionId);
 		}
+		long now = System.currentTimeMillis();
 		for (ShadowLevelSession session : sessions) {
 			if (session == null || session.level() == null) {
 				continue;
 			}
-			if (!shouldTickSession(session.sessionId())) {
+			if (!shouldTickSession(session, now)) {
 				continue;
 			}
 			tickShadowSession(client, session);
@@ -401,13 +408,12 @@ public final class RendererBotShadowWorldManager {
 		}
 		runWithShadowSession(client.getConnection(), session, () -> {
 			Camera camera = session.lastCamera();
-			if (camera != null) {
-				camera.tick();
-			}
 			session.level().tickEntities();
 			session.level().tickBlockEntities();
 			session.level().tick(() -> true);
 			if (camera != null) {
+				camera.tick();
+				session.levelRenderer().tick(camera);
 				BlockPos blockPos = camera.blockPosition();
 				session.level().animateTick(blockPos.getX(), blockPos.getY(), blockPos.getZ());
 			} else if (session.audioBlockPos() != null) {
@@ -415,6 +421,7 @@ public final class RendererBotShadowWorldManager {
 				session.level().animateTick(blockPos.getX(), blockPos.getY(), blockPos.getZ());
 			}
 			session.particleEngine().tick();
+			RendererBotOffscreenWorldRenderer.tickSessionResources(session.sessionId());
 		});
 	}
 
@@ -590,12 +597,24 @@ public final class RendererBotShadowWorldManager {
 		runWithShadowSession(client.getConnection(), session, () -> {
 			for (RendererBotPayloads.ShadowPacketData packetData : payload.packets()) {
 				Packet<ClientGamePacketListener> packet = RendererBotShadowPacketCodec.decodePacket(client.getConnection().registryAccess(), packetData);
-				if (packet != null) {
+				RendererBotShadowLevel scene = (RendererBotShadowLevel) session.level();
+				if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket info) {
+					for (var entry : info.entries()) {
+						if (entry.profile() != null) {
+							scene.playerProfiles().put(entry.profileId(), new net.minecraft.client.multiplayer.PlayerInfo(entry.profile(), false));
+						}
+					}
+				} else if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket info) {
+					info.profileIds().forEach(scene.playerProfiles()::remove);
+				} else if (packet instanceof ClientboundAddEntityPacket add && add.getType() == net.minecraft.world.entity.EntityType.PLAYER) {
+					scene.addPlayer(add);
+				} else if (packet != null) {
 					packet.handle(client.getConnection());
 				}
 			}
 		});
 	}
+
 
 	private static void destroyShadowSession(UUID sessionId) {
 		if (sessionId == null) {
@@ -641,7 +660,8 @@ public final class RendererBotShadowWorldManager {
 				payload.hardcore(),
 				payload.flat()
 		);
-		RenderBuffers renderBuffers = new RenderBuffers(Math.max(1, Runtime.getRuntime().availableProcessors()));
+		// A background scene must not allocate another full CPU-sized mesh pool.
+		RenderBuffers renderBuffers = new RenderBuffers(1);
 		FeatureRenderDispatcher featureRenderDispatcher = new FeatureRenderDispatcher(
 				new SubmitNodeStorage(),
 				client.getBlockRenderer(),
@@ -661,7 +681,7 @@ public final class RendererBotShadowWorldManager {
 		);
 		levelRenderer.onResourceManagerReload(client.getResourceManager());
 		initializeShadowCloudRenderer(levelRenderer, client.getResourceManager());
-		ClientLevel level = new ClientLevel(
+		ClientLevel level = new RendererBotShadowLevel(
 				connection,
 				levelData,
 				dimensionKey,
@@ -677,6 +697,7 @@ public final class RendererBotShadowWorldManager {
 		levelRenderer.resize(Math.max(1, client.getWindow().getWidth()), Math.max(1, client.getWindow().getHeight()));
 		level.setServerSimulationDistance(Math.max(2, payload.simulationDistance()));
 		ParticleEngine particleEngine = new ParticleEngine(level, ((MinecraftOffscreenWorldAccessor) client).lg2$getParticleResources());
+		((RendererBotShadowLevel) level).setSceneParticles(particleEngine);
 		copyKnownMapData(client.level, level);
 		return new ShadowLevelSession(
 				payload.sessionId(),
@@ -734,46 +755,30 @@ public final class RendererBotShadowWorldManager {
 		}
 	}
 
+	public static void runForLevel(RendererBotShadowLevel level, Runnable action) {
+		ShadowLevelSession session = findSession(level);
+		if (session != null) runWithShadowSession(Minecraft.getInstance().getConnection(), session, action);
+	}
+
 	private static void runWithShadowSession(ClientPacketListener connection, ShadowLevelSession session, Runnable action) {
 		if (connection == null || session == null || session.level() == null || action == null) {
 			return;
 		}
-		Minecraft client = Minecraft.getInstance();
 		ClientLevel shadowLevel = session.level();
 		ClientPacketListenerShadowAccessor accessor = (ClientPacketListenerShadowAccessor) connection;
 		ClientLevel previousLevel = accessor.lg2$getLevel();
 		ClientLevel.ClientLevelData previousLevelData = accessor.lg2$getLevelData();
-		MinecraftOffscreenWorldAccessor worldAccessor = client == null ? null : (MinecraftOffscreenWorldAccessor) client;
-		ClientLevel previousClientLevel = worldAccessor == null ? null : worldAccessor.lg2$getLevel();
-		LevelRenderer previousLevelRenderer = worldAccessor == null ? null : worldAccessor.lg2$getLevelRenderer();
-		ParticleEngine previousParticleEngine = worldAccessor == null ? null : worldAccessor.lg2$getParticleEngine();
-		net.minecraft.world.entity.Entity previousCameraEntity = client == null ? null : client.getCameraEntity();
-		Camera previousMainCamera = client == null || client.gameRenderer == null ? null : client.gameRenderer.getMainCamera();
-		try {
+		try (var ignored = RendererBotSceneContext.enter((RendererBotShadowLevel) shadowLevel)) {
+			// Vanilla packet handlers use the connection's level reference. Keep that
+			// reference local to the handler, but never replace Minecraft.level,
+			// Minecraft.levelRenderer or the main camera: those fields drive the
+			// player's visible world and caused frame flicker/view-distance rebuilds.
 			accessor.lg2$setLevel(shadowLevel);
 			accessor.lg2$setLevelData(shadowLevel.getLevelData());
-			if (worldAccessor != null) {
-				worldAccessor.lg2$setLevel(shadowLevel);
-				worldAccessor.lg2$setLevelRenderer(session.levelRenderer());
-				worldAccessor.lg2$setParticleEngine(session.particleEngine());
-			}
-			if (client != null && client.gameRenderer != null && session.lastCamera() != null) {
-				client.setCameraEntity(session.lastCamera().entity());
-				((GameRendererRenderLevelInvoker) client.gameRenderer).lg2$setMainCamera(session.lastCamera());
-			}
 			action.run();
 		} finally {
 			accessor.lg2$setLevel(previousLevel);
 			accessor.lg2$setLevelData(previousLevelData);
-			if (worldAccessor != null) {
-				worldAccessor.lg2$setLevel(previousClientLevel);
-				worldAccessor.lg2$setLevelRenderer(previousLevelRenderer);
-				worldAccessor.lg2$setParticleEngine(previousParticleEngine);
-			}
-			if (client != null && client.gameRenderer != null) {
-				client.setCameraEntity(previousCameraEntity);
-				((GameRendererRenderLevelInvoker) client.gameRenderer).lg2$setMainCamera(previousMainCamera);
-			}
 		}
 	}
 
@@ -792,11 +797,14 @@ public final class RendererBotShadowWorldManager {
 			// already received shadow chunk on every centre update and re-rendering the
 			// whole view. A normal client changes only its centre while travelling.
 			if (session.appliedViewDistance() != clampedViewDistance) {
-				connection.handleSetChunkCacheRadius(new ClientboundSetChunkCacheRadiusPacket(clampedViewDistance));
+				// The vanilla packet handler also changes the OWNER'S Options and
+				// invalidates their terrain. Only touch this scene's chunk storage.
+				level.getChunkSource().updateViewRadius(clampedViewDistance);
+				((RendererBotShadowLevel) level).setSceneViewDistance(clampedViewDistance);
 				session.setAppliedViewDistance(clampedViewDistance);
 			}
 			if (session.appliedCenterChunkX() != centerChunkX || session.appliedCenterChunkZ() != centerChunkZ) {
-				connection.handleSetChunkCacheCenter(new ClientboundSetChunkCacheCenterPacket(centerChunkX, centerChunkZ));
+				level.getChunkSource().updateViewCenter(centerChunkX, centerChunkZ);
 				session.setAppliedCenter(centerChunkX, centerChunkZ);
 			}
 		});
@@ -832,15 +840,16 @@ public final class RendererBotShadowWorldManager {
 		level.getLevelData().setRaining(raining);
 		level.setRainLevel(rainLevel);
 		level.setThunderLevel(thunderLevel);
+		level.environmentAttributes().invalidateTickCache();
 	}
 
-	private static boolean shouldTickSession(UUID sessionId) {
-		if (sessionId == null) {
+	private static boolean shouldTickSession(ShadowLevelSession session, long now) {
+		if (session == null || session.sessionId() == null) {
 			return false;
 		}
-		long now = System.currentTimeMillis();
 		synchronized (LOCK) {
-			Long lastActivity = LAST_RENDER_ACTIVITY_AT.get(sessionId);
+			Long lastActivity = LAST_RENDER_ACTIVITY_AT.get(session.sessionId());
+			// Already called once per simulation tick, not once per rendered frame.
 			return lastActivity != null && now - lastActivity <= ACTIVE_SESSION_TICK_WINDOW_MS;
 		}
 	}

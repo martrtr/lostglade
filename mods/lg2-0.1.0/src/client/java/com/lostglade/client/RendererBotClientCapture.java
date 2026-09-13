@@ -285,14 +285,19 @@ public final class RendererBotClientCapture {
 		// Map tiles, item icons and tiny monitor streams may otherwise render into
 		// the same target later in this tick and invalidate that readback.
 		boolean cameraCapturePending = hasPendingCameraCapture();
-		if (!cameraCapturePending && !handVideoActive) {
+		// A live stream owns the same GPU budget as a still camera. In-flight
+		// readbacks used to make dispatchReadyRenders return false for a few
+		// ticks, which accidentally let map tiles start their own world renders
+		// between live frames and tank the volunteer's FPS.
+		boolean cameraWorkActive = cameraCapturePending || hasActiveLiveStream();
+		if (!cameraWorkActive && !handVideoActive) {
 			dispatchReadyItemIconRender(client);
 		}
 		// A hand-held video has priority over a newly requested photo. Both need
 		// the same render target, so postponing the photo for these few recording
 		// ticks is safer than allowing two sequential renders to race its readback.
 		boolean renderedCameraFrame = !handVideoActive && dispatchReadyRenders(client, System.nanoTime());
-		if (!cameraCapturePending && !handVideoActive && !renderedCameraFrame) {
+		if (!cameraWorkActive && !handVideoActive && !renderedCameraFrame) {
 			dispatchReadyMapTileRender(client);
 		}
 	}
@@ -300,6 +305,12 @@ public final class RendererBotClientCapture {
 	private static boolean hasPendingCameraCapture() {
 		synchronized (LOCK) {
 			return !PENDING_CAPTURES.isEmpty();
+		}
+	}
+
+	private static boolean hasActiveLiveStream() {
+		synchronized (LOCK) {
+			return !LIVE_STREAM_SESSIONS.isEmpty();
 		}
 	}
 
@@ -536,6 +547,15 @@ public final class RendererBotClientCapture {
 		PendingCapture captureToRender = null;
 		LiveStreamSession liveStreamToRender = null;
 		synchronized (LOCK) {
+			int activeCaptures = 0;
+			for (PendingCapture capture : PENDING_CAPTURES.values()) {
+				if (capture != null && capture.screenshotRequested()) {
+					activeCaptures++;
+				}
+			}
+			if (activeCaptures >= LostgladeClientSettings.maxParallelCaptures()) {
+				return false;
+			}
 			for (PendingCapture capture : PENDING_CAPTURES.values()) {
 				if (capture == null || capture.screenshotRequested()) {
 					continue;
@@ -1764,7 +1784,11 @@ public final class RendererBotClientCapture {
 		}
 
 		private boolean canScheduleFrame() {
-			return this.framesInFlight < MAX_LIVE_STREAM_FRAMES_IN_FLIGHT;
+			// The Lostglade resource setting applies to live GPU readbacks too.
+			// Previously its default of one limited still photos only, while a
+			// stream could queue three full GPU frames and stall the owner's game.
+			int allowedFrames = Math.min(MAX_LIVE_STREAM_FRAMES_IN_FLIGHT, LostgladeClientSettings.maxParallelCaptures());
+			return this.framesInFlight < allowedFrames;
 		}
 
 		private LiveStreamPose pose() {

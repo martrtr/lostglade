@@ -1986,7 +1986,7 @@ public final class DroneSystem {
 				stopControlling(player, true);
 				continue;
 			}
-			tickControlledOperatorBodyPhysics(player);
+			tickControlledOperatorBodyPhysics(player, session);
 			updateControlledDrives(player, session, input);
 			tickControlledDrone(player, root, session);
 			handleControlledTurretJumpInput(player, root, session, input);
@@ -2210,18 +2210,30 @@ public final class DroneSystem {
 		return UUID.nameUUIDFromBytes(("lg2:drone_microphone:" + resolvedSenderUuid).getBytes(StandardCharsets.UTF_8));
 	}
 
-	private static void tickControlledOperatorBodyPhysics(ServerPlayer player) {
+	private static void tickControlledOperatorBodyPhysics(ServerPlayer player, DroneControlSession session) {
 		if (player == null
+				|| session == null
 				|| !player.isAlive()
 				|| player.isSpectator()
 				|| !(player.level() instanceof ServerLevel level)) {
 			return;
 		}
-		level.getChunkAt(player.blockPosition());
-		Vec3 before = player.position();
-		Vec3 beforeVelocity = player.getDeltaMovement();
-		player.travel(Vec3.ZERO);
-		if (!before.equals(player.position()) || !beforeVelocity.equals(player.getDeltaMovement())) {
+		Vec3 anchor = session.operatorBodyAnchor();
+		if (anchor == null) {
+			anchor = player.position();
+			session.setOperatorBodyAnchor(anchor);
+		}
+		level.getChunkAt(BlockPos.containing(anchor));
+		boolean displaced = player.position().distanceToSqr(anchor) > 1.0E-8D;
+		boolean moving = player.getDeltaMovement().lengthSqr() > 1.0E-10D;
+		if (displaced) {
+			player.setPos(anchor.x, anchor.y, anchor.z);
+		}
+		if (moving) {
+			player.setDeltaMovement(Vec3.ZERO);
+		}
+		player.fallDistance = 0.0F;
+		if (displaced || moving) {
 			player.hurtMarked = true;
 		}
 	}
@@ -6280,6 +6292,7 @@ public final class DroneSystem {
 				root.getUUID(),
 				droneLevel.dimension()
 		);
+		session.setOperatorBodyAnchor(player.position());
 		session.setProxyPos(dronePos);
 		session.setControlYaw(droneYaw);
 		session.setControlPitch(dronePitch);
@@ -8942,6 +8955,7 @@ public final class DroneSystem {
 		private Vec3 velocity = Vec3.ZERO;
 		private Vec3 intendedVelocity = Vec3.ZERO;
 		private Vec3 proxyPos = Vec3.ZERO;
+		private Vec3 operatorBodyAnchor;
 		private Vec3 lastKnownDronePos = Vec3.ZERO;
 		private DroneCameraChunkTarget lastKnownCameraTarget = new DroneCameraChunkTarget(0.0D, 0.0D, 0.0F);
 		private float controlYaw;
@@ -9004,6 +9018,14 @@ public final class DroneSystem {
 
 		private void setProxyPos(Vec3 proxyPos) {
 			this.proxyPos = proxyPos == null ? Vec3.ZERO : proxyPos;
+		}
+
+		private Vec3 operatorBodyAnchor() {
+			return this.operatorBodyAnchor;
+		}
+
+		private void setOperatorBodyAnchor(Vec3 operatorBodyAnchor) {
+			this.operatorBodyAnchor = operatorBodyAnchor;
 		}
 
 		private Vec3 lastKnownDronePos() {

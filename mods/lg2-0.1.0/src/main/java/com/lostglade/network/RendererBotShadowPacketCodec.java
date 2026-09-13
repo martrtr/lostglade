@@ -47,51 +47,55 @@ import net.minecraft.network.protocol.game.GamePacketTypes;
 import net.minecraft.server.network.ServerCommonPacketListenerImpl;
 import xyz.nucleoid.packettweaker.PacketContext;
 
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public final class RendererBotShadowPacketCodec {
-	private static final Map<Class<?>, StreamCodec<RegistryFriendlyByteBuf, ? extends Packet<?>>> CLASS_TO_CODEC = new HashMap<>();
-	private static final Map<String, StreamCodec<RegistryFriendlyByteBuf, ? extends Packet<?>>> TYPE_ID_TO_CODEC = new HashMap<>();
+	// Some vanilla packets use FriendlyByteBuf codecs while others need the
+	// registry-aware subtype. Both safely accept a RegistryFriendlyByteBuf.
+	private static final Map<Class<?>, StreamCodec<? super RegistryFriendlyByteBuf, ? extends Packet<?>>> CLASS_TO_CODEC = new HashMap<>();
+	private static final Map<String, StreamCodec<? super RegistryFriendlyByteBuf, ? extends Packet<?>>> TYPE_ID_TO_CODEC = new HashMap<>();
 
 	static {
-		register(GamePacketTypes.CLIENTBOUND_ADD_ENTITY, ClientboundAddEntityPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_ANIMATE, ClientboundAnimatePacket.class);
-		register(GamePacketTypes.CLIENTBOUND_BLOCK_UPDATE, ClientboundBlockUpdatePacket.class);
-		register(GamePacketTypes.CLIENTBOUND_BLOCK_DESTRUCTION, ClientboundBlockDestructionPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_BLOCK_EVENT, ClientboundBlockEventPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_DAMAGE_EVENT, ClientboundDamageEventPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SET_ENTITY_DATA, ClientboundSetEntityDataPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_UPDATE_ATTRIBUTES, ClientboundUpdateAttributesPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SET_EQUIPMENT, ClientboundSetEquipmentPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SET_PASSENGERS, ClientboundSetPassengersPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SET_ENTITY_LINK, ClientboundSetEntityLinkPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_ROTATE_HEAD, ClientboundRotateHeadPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SET_ENTITY_MOTION, ClientboundSetEntityMotionPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_ENTITY_POSITION_SYNC, ClientboundEntityPositionSyncPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_TELEPORT_ENTITY, ClientboundTeleportEntityPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_HURT_ANIMATION, ClientboundHurtAnimationPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_LEVEL_EVENT, ClientboundLevelEventPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_LEVEL_PARTICLES, ClientboundLevelParticlesPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_LIGHT_UPDATE, ClientboundLightUpdatePacket.class);
-		register(GamePacketTypes.CLIENTBOUND_MOVE_ENTITY_POS, ClientboundMoveEntityPacket.Pos.class);
-		register(GamePacketTypes.CLIENTBOUND_MOVE_ENTITY_POS_ROT, ClientboundMoveEntityPacket.PosRot.class);
-		register(GamePacketTypes.CLIENTBOUND_MOVE_ENTITY_ROT, ClientboundMoveEntityPacket.Rot.class);
-		register(GamePacketTypes.CLIENTBOUND_REMOVE_ENTITIES, ClientboundRemoveEntitiesPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_ENTITY_EVENT, ClientboundEntityEventPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_PROJECTILE_POWER, ClientboundProjectilePowerPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_MOVE_MINECART_ALONG_TRACK, ClientboundMoveMinecartPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SET_PLAYER_TEAM, ClientboundSetPlayerTeamPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_PLAYER_INFO_UPDATE, ClientboundPlayerInfoUpdatePacket.class);
-		register(GamePacketTypes.CLIENTBOUND_PLAYER_INFO_REMOVE, ClientboundPlayerInfoRemovePacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SOUND, ClientboundSoundPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_SOUND_ENTITY, ClientboundSoundEntityPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_STOP_SOUND, ClientboundStopSoundPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_LEVEL_CHUNK_WITH_LIGHT, ClientboundLevelChunkWithLightPacket.class);
-		register(GamePacketTypes.CLIENTBOUND_FORGET_LEVEL_CHUNK, ClientboundForgetLevelChunkPacket.class);
+		register(GamePacketTypes.CLIENTBOUND_BLOCK_ENTITY_DATA, net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket.class, net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_UPDATE_MOB_EFFECT, net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket.class, net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_REMOVE_MOB_EFFECT, net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket.class, net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_ADD_ENTITY, ClientboundAddEntityPacket.class, ClientboundAddEntityPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_ANIMATE, ClientboundAnimatePacket.class, ClientboundAnimatePacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_BLOCK_UPDATE, ClientboundBlockUpdatePacket.class, ClientboundBlockUpdatePacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_BLOCK_DESTRUCTION, ClientboundBlockDestructionPacket.class, ClientboundBlockDestructionPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_BLOCK_EVENT, ClientboundBlockEventPacket.class, ClientboundBlockEventPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_DAMAGE_EVENT, ClientboundDamageEventPacket.class, ClientboundDamageEventPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SET_ENTITY_DATA, ClientboundSetEntityDataPacket.class, ClientboundSetEntityDataPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_UPDATE_ATTRIBUTES, ClientboundUpdateAttributesPacket.class, ClientboundUpdateAttributesPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SET_EQUIPMENT, ClientboundSetEquipmentPacket.class, ClientboundSetEquipmentPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SET_PASSENGERS, ClientboundSetPassengersPacket.class, ClientboundSetPassengersPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SET_ENTITY_LINK, ClientboundSetEntityLinkPacket.class, ClientboundSetEntityLinkPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_ROTATE_HEAD, ClientboundRotateHeadPacket.class, ClientboundRotateHeadPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SET_ENTITY_MOTION, ClientboundSetEntityMotionPacket.class, ClientboundSetEntityMotionPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_ENTITY_POSITION_SYNC, ClientboundEntityPositionSyncPacket.class, ClientboundEntityPositionSyncPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_TELEPORT_ENTITY, ClientboundTeleportEntityPacket.class, ClientboundTeleportEntityPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_HURT_ANIMATION, ClientboundHurtAnimationPacket.class, ClientboundHurtAnimationPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_LEVEL_EVENT, ClientboundLevelEventPacket.class, ClientboundLevelEventPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_LEVEL_PARTICLES, ClientboundLevelParticlesPacket.class, ClientboundLevelParticlesPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_LIGHT_UPDATE, ClientboundLightUpdatePacket.class, ClientboundLightUpdatePacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_MOVE_ENTITY_POS, ClientboundMoveEntityPacket.Pos.class, ClientboundMoveEntityPacket.Pos.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_MOVE_ENTITY_POS_ROT, ClientboundMoveEntityPacket.PosRot.class, ClientboundMoveEntityPacket.PosRot.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_MOVE_ENTITY_ROT, ClientboundMoveEntityPacket.Rot.class, ClientboundMoveEntityPacket.Rot.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_REMOVE_ENTITIES, ClientboundRemoveEntitiesPacket.class, ClientboundRemoveEntitiesPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_ENTITY_EVENT, ClientboundEntityEventPacket.class, ClientboundEntityEventPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_PROJECTILE_POWER, ClientboundProjectilePowerPacket.class, ClientboundProjectilePowerPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_MOVE_MINECART_ALONG_TRACK, ClientboundMoveMinecartPacket.class, ClientboundMoveMinecartPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SET_PLAYER_TEAM, ClientboundSetPlayerTeamPacket.class, ClientboundSetPlayerTeamPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_PLAYER_INFO_UPDATE, ClientboundPlayerInfoUpdatePacket.class, ClientboundPlayerInfoUpdatePacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_PLAYER_INFO_REMOVE, ClientboundPlayerInfoRemovePacket.class, ClientboundPlayerInfoRemovePacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SOUND, ClientboundSoundPacket.class, ClientboundSoundPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_SOUND_ENTITY, ClientboundSoundEntityPacket.class, ClientboundSoundEntityPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_STOP_SOUND, ClientboundStopSoundPacket.class, ClientboundStopSoundPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_LEVEL_CHUNK_WITH_LIGHT, ClientboundLevelChunkWithLightPacket.class, ClientboundLevelChunkWithLightPacket.STREAM_CODEC);
+		register(GamePacketTypes.CLIENTBOUND_FORGET_LEVEL_CHUNK, ClientboundForgetLevelChunkPacket.class, ClientboundForgetLevelChunkPacket.STREAM_CODEC);
 	}
 
 	private RendererBotShadowPacketCodec() {
@@ -134,7 +138,7 @@ public final class RendererBotShadowPacketCodec {
 		if (packetData == null) {
 			return null;
 		}
-		StreamCodec<RegistryFriendlyByteBuf, Packet<ClientGamePacketListener>> codec = codecForType(packetData.packetTypeId());
+		StreamCodec<? super RegistryFriendlyByteBuf, Packet<ClientGamePacketListener>> codec = codecForType(packetData.packetTypeId());
 		RegistryFriendlyByteBuf buffer = new RegistryFriendlyByteBuf(Unpooled.wrappedBuffer(packetData.packetBytes()), registryAccess);
 		try {
 			return codec.decode(buffer);
@@ -165,21 +169,21 @@ public final class RendererBotShadowPacketCodec {
 	}
 
 	@SuppressWarnings("unchecked")
-	private static StreamCodec<RegistryFriendlyByteBuf, Packet<? extends ClientGamePacketListener>> codecForPacket(Packet<? extends ClientGamePacketListener> packet) {
-		StreamCodec<RegistryFriendlyByteBuf, ? extends Packet<?>> codec = CLASS_TO_CODEC.get(packet.getClass());
+	private static StreamCodec<? super RegistryFriendlyByteBuf, Packet<? extends ClientGamePacketListener>> codecForPacket(Packet<? extends ClientGamePacketListener> packet) {
+		StreamCodec<? super RegistryFriendlyByteBuf, ? extends Packet<?>> codec = CLASS_TO_CODEC.get(packet.getClass());
 		if (codec == null) {
 			throw new IllegalArgumentException("Unsupported renderer bot shadow packet class: " + packet.getClass().getName());
 		}
-		return (StreamCodec<RegistryFriendlyByteBuf, Packet<? extends ClientGamePacketListener>>) codec;
+		return (StreamCodec<? super RegistryFriendlyByteBuf, Packet<? extends ClientGamePacketListener>>) codec;
 	}
 
 	@SuppressWarnings("unchecked")
-	private static StreamCodec<RegistryFriendlyByteBuf, Packet<ClientGamePacketListener>> codecForType(String packetTypeId) {
-		StreamCodec<RegistryFriendlyByteBuf, ? extends Packet<?>> codec = TYPE_ID_TO_CODEC.get(packetTypeId);
+	private static StreamCodec<? super RegistryFriendlyByteBuf, Packet<ClientGamePacketListener>> codecForType(String packetTypeId) {
+		StreamCodec<? super RegistryFriendlyByteBuf, ? extends Packet<?>> codec = TYPE_ID_TO_CODEC.get(packetTypeId);
 		if (codec == null) {
 			throw new IllegalArgumentException("Unsupported renderer bot shadow packet type: " + packetTypeId);
 		}
-		return (StreamCodec<RegistryFriendlyByteBuf, Packet<ClientGamePacketListener>>) codec;
+		return (StreamCodec<? super RegistryFriendlyByteBuf, Packet<ClientGamePacketListener>>) codec;
 	}
 
 	private static void flattenAndEncode(
@@ -215,7 +219,7 @@ public final class RendererBotShadowPacketCodec {
 			Packet<? extends ClientGamePacketListener> packet
 	) {
 		return PacketContext.supplyWithContext(packetListener, packet, () -> {
-			StreamCodec<RegistryFriendlyByteBuf, Packet<? extends ClientGamePacketListener>> codec;
+				StreamCodec<? super RegistryFriendlyByteBuf, Packet<? extends ClientGamePacketListener>> codec;
 			try {
 				codec = codecForPacket(packet);
 			} catch (IllegalArgumentException illegalArgumentException) {
@@ -241,6 +245,18 @@ public final class RendererBotShadowPacketCodec {
 		if (packet == null) {
 			return null;
 		}
+		// PlayerInfo is a prerequisite for a vanilla RemotePlayer spawn.  It is
+		// intentionally generated only for a private shadow level and must retain
+		// the real player's profile.  Passing it through Polymer/visibility packet
+		// filters can remove it because that player is not normally visible to the
+		// renderer account; the following AddEntity then gets rejected client-side.
+		// Entity/chunk packets still go through the regular patcher below.
+		if (packet instanceof ClientboundPlayerInfoUpdatePacket
+				|| packet instanceof ClientboundPlayerInfoRemovePacket
+				|| packet instanceof ClientboundAddEntityPacket addEntityPacket
+				&& addEntityPacket.getType() == net.minecraft.world.entity.EntityType.PLAYER) {
+			return packet;
+		}
 		if (packetListener == null) {
 			return packet;
 		}
@@ -255,18 +271,12 @@ public final class RendererBotShadowPacketCodec {
 		});
 	}
 
-	@SuppressWarnings("unchecked")
-	private static void register(PacketType<?> packetType, Class<? extends Packet<?>> packetClass) {
-		try {
-			Field streamCodecField = packetClass.getDeclaredField("STREAM_CODEC");
-			streamCodecField.setAccessible(true);
-			StreamCodec<?, ?> streamCodec = (StreamCodec<?, ?>) streamCodecField.get(null);
-			StreamCodec<RegistryFriendlyByteBuf, ? extends Packet<?>> typedCodec =
-					(StreamCodec<RegistryFriendlyByteBuf, ? extends Packet<?>>) streamCodec;
-			CLASS_TO_CODEC.put(packetClass, typedCodec);
-			TYPE_ID_TO_CODEC.put(packetType.id().toString(), typedCodec);
-		} catch (ReflectiveOperationException reflectiveOperationException) {
-			throw new ExceptionInInitializerError(reflectiveOperationException);
-		}
+	private static void register(
+			PacketType<?> packetType,
+			Class<? extends Packet<?>> packetClass,
+			StreamCodec<? super RegistryFriendlyByteBuf, ? extends Packet<?>> streamCodec
+	) {
+		CLASS_TO_CODEC.put(packetClass, streamCodec);
+		TYPE_ID_TO_CODEC.put(packetType.id().toString(), streamCodec);
 	}
 }

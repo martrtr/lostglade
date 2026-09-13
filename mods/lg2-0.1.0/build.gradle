@@ -274,21 +274,26 @@ jar {
 	)
 }
 
-// Normal players receive only the client UI and drone camera tilt.  The regular lg2 jar stays server-only.
+// Normal players receive one self-contained client companion: race UI, drone
+// tilt, and the GPU camera renderer. The regular lg2 jar stays server-only.
 def gameplayClientDevJar = tasks.register("gameplayClientDevJar", Jar) {
 	group = "build"
-	description = "Assembles the lightweight Lostglade client jar before remapping."
-	dependsOn(tasks.named("compileClientJava"))
+	description = "Assembles the complete Lostglade client jar before remapping."
+	dependsOn(tasks.named("classes"))
 	archiveBaseName.set("lg2-client")
 	archiveVersion.set(project.version.toString())
 	archiveClassifier.set("dev")
 	destinationDirectory.set(layout.buildDirectory.dir("devlibs"))
-	from(sourceSets.client.output) {
-		include("com/lostglade/raceclient/**")
-		include("com/lostglade/client/DroneCameraTilt*.class")
-		include("com/lostglade/mixin/client/CameraDroneTiltMixin.class")
-		include("com/lostglade/mixin/client/CameraPositionInvoker.class")
+	// The GPU capture implementation shares protocol, cache and palette classes
+	// with the server module. Include the compiled project output, but expose it
+	// through a client-only fabric.mod.json below, so it never becomes a server
+	// entrypoint when installed in Prism.
+	from(sourceSets.main.output) {
+		// Server datapacks reference blocks/features that a client companion never
+		// registers. Shipping them makes unrelated singleplayer worlds fail to load.
+		exclude("fabric.mod.json", "data/**")
 	}
+	from(sourceSets.client.output)
 	from("src/client/resources/race-client") {
 		exclude("fabric.mod.json")
 	}
