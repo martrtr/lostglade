@@ -627,7 +627,14 @@ final class MonitorYandexMapsBlueMapRenderer {
 				if (u < 0.0D || u > 1.0D || v < 0.0D || v > 1.0D) {
 					continue;
 				}
-				int foreground = sampleDisplayModel(overlay, u, v);
+				int foreground = sampleDisplayModelCoverage(
+						overlay,
+						localX,
+						localZ,
+						tileBlocksPerPixel,
+						cos,
+						sin
+				);
 				if (((foreground >>> 24) & 0xFF) <= 8) {
 					continue;
 				}
@@ -670,6 +677,50 @@ final class MonitorYandexMapsBlueMapRenderer {
 			return 0;
 		}
 		return shadeByFace(result.argb(), result.face(), result.shade());
+	}
+
+	private static int sampleDisplayModelCoverage(
+			DisplayOverlay overlay,
+			double localX,
+			double localZ,
+			double blocksPerPixel,
+			double cos,
+			double sin
+	) {
+		long alpha = 0L;
+		long red = 0L;
+		long green = 0L;
+		long blue = 0L;
+		int samples = 0;
+		for (int sampleZ = -1; sampleZ <= 1; sampleZ++) {
+			for (int sampleX = -1; sampleX <= 1; sampleX++) {
+				double worldOffsetX = sampleX * blocksPerPixel * 0.5D;
+				double worldOffsetZ = sampleZ * blocksPerPixel * 0.5D;
+				double sampleLocalX = localX + worldOffsetX * cos - worldOffsetZ * sin;
+				double sampleLocalZ = localZ + worldOffsetX * sin + worldOffsetZ * cos;
+				double u = sampleLocalX / overlay.widthBlocks() + 0.5D;
+				double v = sampleLocalZ / overlay.depthBlocks() + 0.5D;
+				if (u < 0.0D || u > 1.0D || v < 0.0D || v > 1.0D) {
+					samples++;
+					continue;
+				}
+				int color = sampleDisplayModel(overlay, u, v);
+				int sampleAlpha = (color >>> 24) & 0xFF;
+				alpha += sampleAlpha;
+				red += (long) ((color >>> 16) & 0xFF) * sampleAlpha;
+				green += (long) ((color >>> 8) & 0xFF) * sampleAlpha;
+				blue += (long) (color & 0xFF) * sampleAlpha;
+				samples++;
+			}
+		}
+		if (alpha == 0L || samples == 0) {
+			return 0;
+		}
+		int coverageAlpha = (int) (alpha / samples);
+		return coverageAlpha << 24
+				| (int) (red / alpha) << 16
+				| (int) (green / alpha) << 8
+				| (int) (blue / alpha);
 	}
 
 	private static int colorForLayers(List<SurfaceLayer> layers, int blockX, int blockZ, double fracX, double fracZ, double blocksPerPixel) {

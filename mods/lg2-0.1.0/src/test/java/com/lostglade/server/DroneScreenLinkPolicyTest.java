@@ -190,7 +190,8 @@ public final class DroneScreenLinkPolicyTest {
 
 	private static void restartRecoveryKeepsScreenDronesBoundedAndSafe() throws Exception {
 		Path projectDir = Path.of("").toAbsolutePath();
-		String droneSystem = Files.readString(projectDir.resolve("src/main/java/com/lostglade/server/DroneSystem.java"));
+		String droneSystem = Files.readString(projectDir.resolve("src/main/java/com/lostglade/server/DroneSystem.java"))
+				.replace("\r\n", "\n");
 
 		require(
 				droneSystem.contains("DroneRestartRecoveryState restartRecovery = readDroneRestartRecoveryState(root);")

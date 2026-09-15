@@ -22,7 +22,7 @@ import java.util.zip.ZipFile;
 import java.util.stream.Stream;
 
 public final class TextureAssetManager {
-	private static final Path PROJECT_ROOT = Path.of("/home/mart/Desktop/lostglade");
+	private static final Path PROJECT_ROOT = findProjectRoot();
 	private static final Path RESOURCES_ASSETS = PROJECT_ROOT.resolve("mods/lg2-0.1.0/src/main/resources/assets");
 	private static final Path POLYMER_SOURCE_ASSETS = PROJECT_ROOT.resolve("polymer/source_assets/assets");
 	private static final TextureAssetManager INSTANCE = new TextureAssetManager();
@@ -148,6 +148,18 @@ public final class TextureAssetManager {
 
 	private static Path resolvePolymerAsset(String assetPath) {
 		return POLYMER_SOURCE_ASSETS.resolve(assetPath.substring("assets/".length()));
+	}
+
+	private static Path findProjectRoot() {
+		Path current = Path.of("").toAbsolutePath().normalize();
+		while (current != null) {
+			if (Files.isDirectory(current.resolve("mods/lg2-0.1.0/src/main/resources/assets"))
+					&& Files.isDirectory(current.resolve("polymer/source_assets/assets"))) {
+				return current;
+			}
+			current = current.getParent();
+		}
+		return Path.of("/home/mart/Desktop/lostglade");
 	}
 
 	private static String readText(Path path) {
