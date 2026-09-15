@@ -1,7 +1,6 @@
 package com.lostglade.mixin;
 
 import com.lostglade.server.CopperManGogglesSystem;
-import com.lostglade.server.ServerRaceSystem;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -25,10 +24,6 @@ public abstract class AbstractContainerMenuCopperGogglesMixin {
 			return;
 		}
 		AbstractContainerMenu menu = (AbstractContainerMenu) (Object) this;
-		if (ServerRaceSystem.isLockedAncientUkrGasMaskSlot(serverPlayer, menu, slotIndex)) {
-			ci.cancel();
-			return;
-		}
 		if (CopperManGogglesSystem.handleInventoryModeClick(
 				serverPlayer,
 				menu,

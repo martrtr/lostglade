@@ -2,7 +2,6 @@ package com.lostglade.server;
 
 import com.lostglade.Lg2;
 import com.lostglade.util.ItemDisplayHitboxHelper;
-import com.mojang.math.Transformation;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -44,8 +43,6 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Quaternionf;
-import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -58,13 +55,9 @@ import java.util.UUID;
 
 public final class OrthodoxAttackSystem {
 	private static final double EYE_HEIGHT_OFFSET_BLOCKS = 140.0D;
-	private static final float EYE_WIDTH_BLOCKS = 24.0F;
-	private static final float EYE_DEPTH_BLOCKS = 12.0F;
-	private static final float DISTANCE_FADE_BLOCKS = 5.0F;
-	private static final float VIEW_SCALE_STEP = 0.10F;
 	private static final float OPEN_STEP = 0.05F;
+	private static final int CLOSE_HOLD_TICKS = 2;
 	private static final long ACTIVATION_OVERLAY_TICKS = 20L;
-	private static final Identifier EYE_MODEL_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "orthodox_divine_eye");
 	private static final Identifier EYE_OPEN_SOUND_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "orthodox_eye_open");
 	private static final Identifier EYE_CLOSE_SOUND_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "orthodox_eye_close");
 	private static final Holder<SoundEvent> EYE_OPEN_SOUND = Holder.direct(SoundEvent.createVariableRangeEvent(EYE_OPEN_SOUND_ID));
@@ -220,7 +213,8 @@ public final class OrthodoxAttackSystem {
 			session.openProgress = approach(session.openProgress, desiredOpen, OPEN_STEP);
 			updateViews(server, session, activeWorld ? target : null);
 
-			if (session.terminating && session.openProgress <= 0.001F) {
+			if (session.terminating && session.openProgress <= 0.001F) session.closedTicks++;
+			if (session.closedTicks > CLOSE_HOLD_TICKS) {
 				clearViews(session);
 				iterator.remove();
 			}
@@ -235,8 +229,8 @@ public final class OrthodoxAttackSystem {
 				double dz = viewer.getZ() - target.getZ();
 				double distance = Math.sqrt(dx * dx + dz * dz);
 				if (distance <= session.visibilityRadius || session.views.containsKey(viewer.getUUID())) {
-					EyeView view = session.views.computeIfAbsent(viewer.getUUID(), id -> spawnView(viewer, target, session.lastEyeY));
-					if (view != null) updateView(viewer, view, session, target.position(), proximityScale(distance, session.visibilityRadius));
+					EyeView view = session.views.computeIfAbsent(viewer.getUUID(), id -> spawnView(viewer, target, session));
+					if (view != null) updateView(viewer, view, session, target.position(), distance <= session.visibilityRadius);
 				}
 			}
 		}
@@ -253,19 +247,34 @@ public final class OrthodoxAttackSystem {
 				continue;
 			}
 			if (target == null || viewer.level() != target.level()) {
-				updateView(viewer, view, session, session.lastTargetPosition, 0.0F);
+				updateView(viewer, view, session, session.lastTargetPosition, false);
 			}
-			if (view.currentScale <= 0.001F && (target == null || horizontalDistance(viewer, target) > session.visibilityRadius)) {
+			if (view.closedTicks > CLOSE_HOLD_TICKS && (target == null || viewer.level() != target.level()
+					|| horizontalDistance(viewer, target) > session.visibilityRadius)) {
 				removeView(viewer, view);
 				views.remove();
 			}
 		}
 	}
 
-	private static EyeView spawnView(ServerPlayer viewer, ServerPlayer target, double eyeY) {
+	private static EyeView spawnView(ServerPlayer viewer, ServerPlayer target, DivineGazeSession session) {
 		if (viewer == null || target == null || viewer.connection == null) return null;
-		Display.ItemDisplay display = new Display.ItemDisplay(EntityType.ITEM_DISPLAY, target.level());
-		display.setItemStack(createEyeStack());
+		List<Display.ItemDisplay> displays = new ArrayList<>(OrthodoxEyeComposition.PART_COUNT);
+		for (int part = 0; part < OrthodoxEyeComposition.PART_COUNT; part++) {
+			Display.ItemDisplay display = createDisplay(target.level(), session.composition.model(part));
+			display.setPos(target.getX(), session.lastEyeY, target.getZ());
+			display.setTransformation(session.composition.transformation(part, 1.0F, 0.0F));
+			sendSpawn(viewer, display);
+			display.getEntityData().packDirty();
+			displays.add(display);
+		}
+		EyeView view = new EyeView(displays, target.level());
+		return view;
+	}
+
+	private static Display.ItemDisplay createDisplay(ServerLevel level, String model) {
+		Display.ItemDisplay display = new Display.ItemDisplay(EntityType.ITEM_DISPLAY, level);
+		display.setItemStack(createEyeStack(model));
 		display.setItemTransform(ItemDisplayContext.FIXED);
 		display.setBillboardConstraints(Display.BillboardConstraints.FIXED);
 		display.setNoGravity(true);
@@ -274,37 +283,32 @@ public final class OrthodoxAttackSystem {
 		display.setShadowRadius(0.0F);
 		display.setShadowStrength(0.0F);
 		display.setBrightnessOverride(Brightness.FULL_BRIGHT);
-		display.setWidth(EYE_WIDTH_BLOCKS + 4.0F);
-		display.setHeight(4.0F);
 		display.setViewRange(1_000_000.0F);
 		display.setPosRotInterpolationDuration(2);
 		display.setTransformationInterpolationDelay(0);
 		display.setTransformationInterpolationDuration(2);
-		display.setPos(target.getX(), eyeY, target.getZ());
-		display.setTransformation(eyeTransformation(0.0F, 0.0F));
+		// Zero display dimensions disable frustum culling for the off-center ray tips.
 		ItemDisplayHitboxHelper.clear(display);
-		sendSpawn(viewer, display);
-		return new EyeView(display, 0.0F, target.level());
+		return display;
 	}
 
-	private static void updateView(ServerPlayer viewer, EyeView view, DivineGazeSession session, Vec3 targetPosition, float desiredScale) {
+	private static void updateView(ServerPlayer viewer, EyeView view, DivineGazeSession session, Vec3 targetPosition, boolean withinRadius) {
 		if (viewer == null || view == null || targetPosition == null) return;
-		view.currentScale = approach(view.currentScale, desiredScale, VIEW_SCALE_STEP);
-		Display.ItemDisplay display = view.display;
-		display.setPos(targetPosition.x, session.lastEyeY, targetPosition.z);
-		display.setTransformation(eyeTransformation(view.currentScale, session.openProgress));
-		sendFrame(viewer, display);
-	}
-
-	private static Transformation eyeTransformation(float proximity, float open) {
-		float visible = Mth.clamp(proximity, 0.0F, 1.0F);
-		float opening = Mth.clamp(open, 0.0F, 1.0F);
-		float x = Math.max(0.001F, EYE_WIDTH_BLOCKS * visible);
-		// The eye is hundreds of blocks above the viewer; exaggerating its vertical
-		// depth keeps the lens, eyelids and halo visibly three-dimensional from below.
-		float y = Math.max(0.001F, 3.5F * visible);
-		float z = Math.max(0.001F, EYE_DEPTH_BLOCKS * visible * opening);
-		return new Transformation(new Vector3f(), new Quaternionf(), new Vector3f(x, y, z), new Quaternionf());
+		view.openProgress = approach(view.openProgress, withinRadius ? 1.0F : 0.0F, OPEN_STEP);
+		view.closedTicks = !withinRadius && view.openProgress <= 0.001F ? view.closedTicks + 1 : 0;
+		float renderedOpen = Math.min(session.openProgress, view.openProgress);
+		boolean transformChanged = view.lastRenderedOpen != renderedOpen;
+		view.lastRenderedOpen = renderedOpen;
+		for (int part = 0; part < view.displays.size(); part++) {
+			Display.ItemDisplay display = view.displays.get(part);
+			boolean moved = display.getX() != targetPosition.x || display.getY() != session.lastEyeY || display.getZ() != targetPosition.z;
+			if (moved) display.setPos(targetPosition.x, session.lastEyeY, targetPosition.z);
+			if (transformChanged) {
+				display.setTransformation(session.composition.transformation(part, 1.0F, renderedOpen));
+				display.setTransformationInterpolationDelay(0);
+			}
+			if (moved || transformChanged) sendFrame(viewer, display, moved);
+		}
 	}
 
 	private static double calculateEyeY(ServerPlayer target) {
@@ -337,14 +341,6 @@ public final class OrthodoxAttackSystem {
 		));
 	}
 
-	private static float proximityScale(double distance, double radius) {
-		if (distance >= radius) return 0.0F;
-		double fadeStart = Math.max(0.0D, radius - Math.min(DISTANCE_FADE_BLOCKS, radius));
-		if (distance <= fadeStart) return 1.0F;
-		float value = (float) ((radius - distance) / Math.max(0.001D, radius - fadeStart));
-		return value * value * (3.0F - 2.0F * value);
-	}
-
 	private static double horizontalDistance(ServerPlayer viewer, ServerPlayer target) {
 		double dx = viewer.getX() - target.getX();
 		double dz = viewer.getZ() - target.getZ();
@@ -367,9 +363,9 @@ public final class OrthodoxAttackSystem {
 		level.playSound(null, target.getX(), target.getY(), target.getZ(), SoundEvents.END_PORTAL_SPAWN, SoundSource.PLAYERS, 1.2F, 1.75F);
 	}
 
-	private static ItemStack createEyeStack() {
+	private static ItemStack createEyeStack(String model) {
 		ItemStack stack = new ItemStack(Items.PAPER);
-		stack.set(DataComponents.ITEM_MODEL, EYE_MODEL_ID);
+		stack.set(DataComponents.ITEM_MODEL, Identifier.fromNamespaceAndPath(Lg2.MOD_ID, model));
 		return stack;
 	}
 
@@ -381,17 +377,19 @@ public final class OrthodoxAttackSystem {
 		if (values != null && !values.isEmpty()) viewer.connection.send(new ClientboundSetEntityDataPacket(display.getId(), values));
 	}
 
-	private static void sendFrame(ServerPlayer viewer, Display.ItemDisplay display) {
+	private static void sendFrame(ServerPlayer viewer, Display.ItemDisplay display, boolean moved) {
 		if (viewer.connection == null) return;
-		PositionMoveRotation pose = new PositionMoveRotation(display.position(), Vec3.ZERO, 0.0F, 0.0F);
-		viewer.connection.send(ClientboundTeleportEntityPacket.teleport(display.getId(), pose, ABSOLUTE_TELEPORT, false));
-		List<SynchedEntityData.DataValue<?>> values = display.getEntityData().getNonDefaultValues();
+		if (moved) {
+			PositionMoveRotation pose = new PositionMoveRotation(display.position(), Vec3.ZERO, 0.0F, 0.0F);
+			viewer.connection.send(ClientboundTeleportEntityPacket.teleport(display.getId(), pose, ABSOLUTE_TELEPORT, false));
+		}
+		List<SynchedEntityData.DataValue<?>> values = display.getEntityData().packDirty();
 		if (values != null && !values.isEmpty()) viewer.connection.send(new ClientboundSetEntityDataPacket(display.getId(), values));
 	}
 
 	private static void removeView(ServerPlayer viewer, EyeView view) {
 		if (viewer != null && viewer.connection != null && view != null) {
-			viewer.connection.send(new ClientboundRemoveEntitiesPacket(view.display.getId()));
+			viewer.connection.send(new ClientboundRemoveEntitiesPacket(view.displays.stream().mapToInt(Entity::getId).toArray()));
 		}
 	}
 
@@ -433,10 +431,12 @@ public final class OrthodoxAttackSystem {
 		private final long blindnessTicks;
 		private final Map<UUID, Boolean> attackedFirstByTarget = new HashMap<>();
 		private final Map<UUID, EyeView> views = new HashMap<>();
+		private final OrthodoxEyeComposition composition;
 		private Vec3 lastTargetPosition;
 		private double lastEyeY;
 		private final long activationOverlayRestoreTick;
 		private float openProgress;
+		private int closedTicks;
 		private boolean soundOpen;
 		private boolean terminating;
 		private boolean activationOverlayRestored;
@@ -446,6 +446,7 @@ public final class OrthodoxAttackSystem {
 				long activationOverlayRestoreTick) {
 			this.casterId = casterId;
 			this.targetId = targetId;
+			this.composition = new OrthodoxEyeComposition(casterId.getMostSignificantBits() ^ targetId.getLeastSignificantBits() ^ activationOverlayRestoreTick);
 			this.remainingTicks = remainingTicks;
 			this.visibilityRadius = visibilityRadius;
 			this.remainingHealthPoints = remainingHealthPoints;
@@ -457,13 +458,14 @@ public final class OrthodoxAttackSystem {
 	}
 
 	private static final class EyeView {
-		private final Display.ItemDisplay display;
-		private float currentScale;
+		private final List<Display.ItemDisplay> displays;
+		private float openProgress;
+		private int closedTicks;
+		private float lastRenderedOpen = -1.0F;
 		private final ServerLevel level;
 
-		private EyeView(Display.ItemDisplay display, float currentScale, ServerLevel level) {
-			this.display = display;
-			this.currentScale = currentScale;
+		private EyeView(List<Display.ItemDisplay> displays, ServerLevel level) {
+			this.displays = displays;
 			this.level = level;
 		}
 	}

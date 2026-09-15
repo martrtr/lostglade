@@ -314,6 +314,8 @@ public final class RaceConfig {
 			changed |= normalizeNonNegative(ability.ancientUkrCreditMinHourlyPercent, value -> ability.ancientUkrCreditMinHourlyPercent = value);
 			changed |= normalizeNonNegative(ability.ancientUkrCreditMaxHourlyPercent, value -> ability.ancientUkrCreditMaxHourlyPercent = value);
 			changed |= normalizeNonNegative(ability.ancientUkrCreditMaxDebtMultiplier, value -> ability.ancientUkrCreditMaxDebtMultiplier = value);
+			changed |= normalizeNonNegative(ability.ancientUkrCollectorMinIntervalMinutes, value -> ability.ancientUkrCollectorMinIntervalMinutes = value);
+			changed |= normalizeNonNegative(ability.ancientUkrCollectorMaxIntervalMinutes, value -> ability.ancientUkrCollectorMaxIntervalMinutes = value);
 		changed |= normalizeNonNegative(ability.ancientUkrStockPorkHungerMultiplier, value -> ability.ancientUkrStockPorkHungerMultiplier = value);
 		changed |= normalizeNonNegative(ability.ancientUkrStockPorkPoisonSeconds, value -> ability.ancientUkrStockPorkPoisonSeconds = value);
 		changed |= normalizeNonNegative(ability.orthodoxAttackEyeVisibilityRadiusBlocks, value -> ability.orthodoxAttackEyeVisibilityRadiusBlocks = value);
@@ -594,6 +596,8 @@ public final class RaceConfig {
 		addDoubleIfNonZero(json, "ancientUkrCreditMinHourlyPercent", ability.ancientUkrCreditMinHourlyPercent);
 		addDoubleIfNonZero(json, "ancientUkrCreditMaxHourlyPercent", ability.ancientUkrCreditMaxHourlyPercent);
 		addDoubleIfNonZero(json, "ancientUkrCreditMaxDebtMultiplier", ability.ancientUkrCreditMaxDebtMultiplier);
+		addDoubleIfNonZero(json, "ancientUkrCollectorMinIntervalMinutes", ability.ancientUkrCollectorMinIntervalMinutes);
+		addDoubleIfNonZero(json, "ancientUkrCollectorMaxIntervalMinutes", ability.ancientUkrCollectorMaxIntervalMinutes);
 		addDoubleIfNonZero(json, "ancientUkrStockPorkHungerMultiplier", ability.ancientUkrStockPorkHungerMultiplier);
 		addDoubleIfNonZero(json, "ancientUkrStockPorkPoisonSeconds", ability.ancientUkrStockPorkPoisonSeconds);
 		addDoubleIfNonZero(json, "orthodoxAttackEyeVisibilityRadiusBlocks", ability.orthodoxAttackEyeVisibilityRadiusBlocks);
@@ -852,6 +856,8 @@ public final class RaceConfig {
 		public double ancientUkrCreditMinHourlyPercent = 0.0D;
 		public double ancientUkrCreditMaxHourlyPercent = 0.0D;
 		public double ancientUkrCreditMaxDebtMultiplier = 0.0D;
+		public double ancientUkrCollectorMinIntervalMinutes = 0.0D;
+		public double ancientUkrCollectorMaxIntervalMinutes = 0.0D;
 		public double ancientUkrStockPorkHungerMultiplier = 0.0D;
 		public double ancientUkrStockPorkPoisonSeconds = 0.0D;
 		public double orthodoxAttackEyeVisibilityRadiusBlocks = 0.0D;

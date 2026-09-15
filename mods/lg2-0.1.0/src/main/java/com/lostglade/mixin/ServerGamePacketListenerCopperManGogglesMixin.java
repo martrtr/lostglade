@@ -3,7 +3,9 @@ package com.lostglade.mixin;
 import com.lostglade.server.CopperManGogglesSystem;
 import com.lostglade.server.CopperManRepulsorSystem;
 import com.lostglade.server.ServerRaceSystem;
+import com.lostglade.item.ModItems;
 import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
+import net.minecraft.network.protocol.game.ClientboundSetCursorItemPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCreativeModeSlotPacket;
@@ -65,18 +67,30 @@ public abstract class ServerGamePacketListenerCopperManGogglesMixin {
 			cancellable = true
 	)
 	private void lg2$lockAncientUkrGasMaskCreativeSlot(ServerboundSetCreativeModeSlotPacket packet, CallbackInfo ci) {
-		if (packet == null || !ServerRaceSystem.isLockedAncientUkrGasMaskSlot(
-				this.player, this.player.inventoryMenu, packet.slotNum()
-		)) {
+		if (packet == null || !this.player.hasInfiniteMaterials()) return;
+		int headSlot = net.minecraft.world.inventory.InventoryMenu.ARMOR_SLOT_START;
+		if (!ServerRaceSystem.isLockedAncientUkrGasMaskSlot(this.player, this.player.inventoryMenu, headSlot)) return;
+		// Creative clients copy a helmet directly into a destination-slot/drop packet.
+		// Refusing only the head-slot write leaves that copy available for duplication.
+		if (packet.slotNum() != headSlot && !packet.itemStack().is(ModItems.ANCIENT_UKR_GAS_MASK)) {
 			return;
 		}
 		int slotIndex = packet.slotNum();
+		if (slotIndex >= 1 && slotIndex < this.player.inventoryMenu.slots.size() && slotIndex != headSlot) {
+			this.player.connection.send(new ClientboundContainerSetSlotPacket(
+					this.player.inventoryMenu.containerId,
+					this.player.inventoryMenu.incrementStateId(),
+					slotIndex,
+					this.player.inventoryMenu.getSlot(slotIndex).getItem()
+			));
+		}
 		this.player.connection.send(new ClientboundContainerSetSlotPacket(
 				this.player.inventoryMenu.containerId,
 				this.player.inventoryMenu.incrementStateId(),
-				slotIndex,
-				this.player.inventoryMenu.getSlot(slotIndex).getItem()
+				headSlot,
+				this.player.inventoryMenu.getSlot(headSlot).getItem()
 		));
+		this.player.connection.send(new ClientboundSetCursorItemPacket(this.player.containerMenu.getCarried()));
 		ci.cancel();
 	}
 

@@ -1,0 +1,797 @@
+{
+    "duration":  2,
+    "bones":  [
+                  {
+                      "name":  "orthodox_angel_wing_left_1",
+                      "parent":  -1,
+                      "pivot":  [
+                                    -2,
+                                    17.5,
+                                    2
+                                ],
+                      "idleRotation":  [
+                                           -7.5768241069,
+                                           56.1243117307,
+                                           11.1952808888
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            40.9841757293,
+                                                            32.2402131649,
+                                                            17.9320939895
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            35.3868850697,
+                                                            20.6539206355,
+                                                            48.0209016053
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            32.2472639763,
+                                                            17.1599032506,
+                                                            84.4790302685
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            38.9528551142,
+                                                            26.9126459207,
+                                                            59.0700046125
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            40.9841757293,
+                                                            32.2402131649,
+                                                            17.9320939895
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_left_2",
+                      "parent":  0,
+                      "pivot":  [
+                                    -2,
+                                    18,
+                                    5.5
+                                ],
+                      "idleRotation":  [
+                                           0,
+                                           12.5,
+                                           0
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            15.1626709712,
+                                                            2.0881570027,
+                                                            -1.9586953943
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            17.1660718743,
+                                                            0.6211307866,
+                                                            2.8664565211
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            19.7328907495,
+                                                            18.2529437907,
+                                                            13.6609888951
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            18.2203859395,
+                                                            18.4099864406,
+                                                            8.9108471397
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            15.1626709712,
+                                                            2.0881570027,
+                                                            -1.9586953943
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_left_3",
+                      "parent":  1,
+                      "pivot":  [
+                                    -2,
+                                    18,
+                                    10.5
+                                ],
+                      "idleRotation":  [
+                                           32.5990681728,
+                                           4.2154088774,
+                                           2.6913572849
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           -2
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            15.5202651247,
+                                                            -11.8418914629,
+                                                            -2.4673047925
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            8.7351277161,
+                                                            -10.2321826547,
+                                                            2.3695218554
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            1.6819548976,
+                                                            16.0942120444,
+                                                            10.9762477559
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            8.731171814,
+                                                            21.0848817643,
+                                                            7.4143475925
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            15.5202651247,
+                                                            -11.8418914629,
+                                                            -2.4673047925
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_left_4",
+                      "parent":  2,
+                      "pivot":  [
+                                    -2,
+                                    17.5,
+                                    15.5
+                                ],
+                      "idleRotation":  [
+                                           17.5156529399,
+                                           2.3842239189,
+                                           0.7521987292
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            -12.5
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            5.7721494797,
+                                                            -4.3641725809,
+                                                            -4.9838985219
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            1.6263075199,
+                                                            16.1450005772,
+                                                            5.0517893417
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            5.8075455108,
+                                                            19.3054830808,
+                                                            -2.0765091068
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            -12.5
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_left_5",
+                      "parent":  3,
+                      "pivot":  [
+                                    -2,
+                                    18,
+                                    21.5
+                                ],
+                      "idleRotation":  [
+                                           -40.4324610862,
+                                           7.6442700563,
+                                           -6.4663543942
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           2,
+                                           -3
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            4.0209711544,
+                                                            -11.3392850638,
+                                                            0.1770039099
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            -2.0252097522,
+                                                            17.22575355,
+                                                            3.1338757168
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            3.6823357177,
+                                                            15.3880859032,
+                                                            2.0778149254
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_left_6",
+                      "parent":  4,
+                      "pivot":  [
+                                    -2,
+                                    18,
+                                    27.5
+                                ],
+                      "idleRotation":  [
+                                           0,
+                                           10,
+                                           0
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            5,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            -5.6330427691,
+                                                            -27.3865603281,
+                                                            2.5977513994
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            -15,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            -5.7010275054,
+                                                            11.6634438452,
+                                                            -1.1511900343
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            5,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_right_1",
+                      "parent":  -1,
+                      "pivot":  [
+                                    2,
+                                    17.5,
+                                    2
+                                ],
+                      "idleRotation":  [
+                                           -7.5768241069,
+                                           -56.1243117307,
+                                           -11.1952808888
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            40.9841757293,
+                                                            -32.2402131649,
+                                                            -17.9320939895
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            35.3868850697,
+                                                            -20.6539206355,
+                                                            -48.0209016053
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            32.2472639763,
+                                                            -17.1599032506,
+                                                            -84.4790302685
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            38.9528551142,
+                                                            -26.9126459207,
+                                                            -59.0700046125
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            40.9841757293,
+                                                            -32.2402131649,
+                                                            -17.9320939895
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_right_2",
+                      "parent":  6,
+                      "pivot":  [
+                                    2,
+                                    18,
+                                    5.5
+                                ],
+                      "idleRotation":  [
+                                           0,
+                                           -12.5,
+                                           0
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            15.1626709712,
+                                                            -2.0881570027,
+                                                            1.9586953943
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            17.1660718743,
+                                                            -0.6211307866,
+                                                            -2.8664565211
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            19.7328907495,
+                                                            -18.2529437907,
+                                                            -13.6609888951
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            18.2203859395,
+                                                            -18.4099864406,
+                                                            -8.9108471397
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            15.1626709712,
+                                                            -2.0881570027,
+                                                            1.9586953943
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_right_3",
+                      "parent":  7,
+                      "pivot":  [
+                                    2,
+                                    18,
+                                    10.5
+                                ],
+                      "idleRotation":  [
+                                           32.5990681728,
+                                           -4.2154088774,
+                                           -2.6913572849
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           -2
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            15.5202651247,
+                                                            11.8418914629,
+                                                            2.4673047925
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            8.7351277161,
+                                                            10.2321826547,
+                                                            -2.3695218554
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            1.6819548976,
+                                                            -16.0942120444,
+                                                            -10.9762477559
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            8.731171814,
+                                                            -21.0848817643,
+                                                            -7.4143475925
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            15.5202651247,
+                                                            11.8418914629,
+                                                            2.4673047925
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_right_4",
+                      "parent":  8,
+                      "pivot":  [
+                                    2,
+                                    17.5,
+                                    15.5
+                                ],
+                      "idleRotation":  [
+                                           17.5156529399,
+                                           -2.3842239189,
+                                           -0.7521987292
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           -1
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            12.5
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            5.7721494797,
+                                                            4.3641725809,
+                                                            4.9838985219
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            1.6263075199,
+                                                            -16.1450005772,
+                                                            -5.0517893417
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            5.8075455108,
+                                                            -19.3054830808,
+                                                            2.0765091068
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            12.5
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_right_5",
+                      "parent":  9,
+                      "pivot":  [
+                                    2,
+                                    18,
+                                    21.5
+                                ],
+                      "idleRotation":  [
+                                           -40.4324610862,
+                                           -7.6442700563,
+                                           6.4663543942
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           2,
+                                           -3
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            4.0209711544,
+                                                            11.3392850638,
+                                                            -0.1770039099
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            -2.0252097522,
+                                                            -17.22575355,
+                                                            -3.1338757168
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            3.6823357177,
+                                                            -15.3880859032,
+                                                            -2.0778149254
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            10,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  },
+                  {
+                      "name":  "orthodox_angel_wing_right_6",
+                      "parent":  10,
+                      "pivot":  [
+                                    2,
+                                    18,
+                                    27.5
+                                ],
+                      "idleRotation":  [
+                                           0,
+                                           -10,
+                                           0
+                                       ],
+                      "idlePosition":  [
+                                           0,
+                                           0,
+                                           0
+                                       ],
+                      "flyRotation":  [
+                                          {
+                                              "time":  0,
+                                              "value":  [
+                                                            5,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  0.5,
+                                              "value":  [
+                                                            -5.6330427691,
+                                                            27.3865603281,
+                                                            -2.5977513994
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1,
+                                              "value":  [
+                                                            -15,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  1.5,
+                                              "value":  [
+                                                            -5.7010275054,
+                                                            -11.6634438452,
+                                                            1.1511900343
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          },
+                                          {
+                                              "time":  2,
+                                              "value":  [
+                                                            5,
+                                                            0,
+                                                            0
+                                                        ],
+                                              "interpolation":  "catmullrom"
+                                          }
+                                      ]
+                  }
+              ]
+}

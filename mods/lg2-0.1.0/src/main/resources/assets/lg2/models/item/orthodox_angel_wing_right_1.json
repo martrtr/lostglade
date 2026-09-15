@@ -1,23 +1,22 @@
 {
     "ambientocclusion":  false,
-    "gui_light":  "side",
     "textures":  {
                      "wing":  "lg2:item/orthodox_angel_wings",
                      "particle":  "lg2:item/orthodox_angel_wings"
                  },
     "elements":  [
                      {
+                         "shade":  false,
                          "from":  [
                                       7.99,
-                                      -2.0750000000000011,
-                                      7.675
+                                      -7.51,
+                                      7.49
                                   ],
                          "to":  [
                                     8.01,
-                                    14.825,
-                                    10.275
+                                    18.51,
+                                    11.51
                                 ],
-                         "shade":  true,
                          "faces":  {
                                        "east":  {
                                                     "uv":  [
@@ -39,24 +38,5 @@
                                                 }
                                    }
                      }
-                 ],
-    "display":  {
-                    "fixed":  {
-                                  "rotation":  [
-                                                   0,
-                                                   0,
-                                                   0
-                                               ],
-                                  "translation":  [
-                                                      0,
-                                                      0,
-                                                      0
-                                                  ],
-                                  "scale":  [
-                                                1,
-                                                1,
-                                                1
-                                            ]
-                              }
-                }
+                 ]
 }

@@ -1,6 +1,6 @@
 {
     "model":  {
-                  "type":  "minecraft:model",
-                  "model":  "lg2:item/orthodox_angel_wing_left_6"
+                  "model":  "lg2:item/orthodox_angel_wing_left_6",
+                  "type":  "minecraft:model"
               }
 }

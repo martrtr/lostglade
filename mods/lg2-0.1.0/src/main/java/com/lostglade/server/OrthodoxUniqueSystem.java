@@ -232,7 +232,12 @@ public final class OrthodoxUniqueSystem {
 	}
 
 	private static boolean isIncineratedByLight(LivingEntity entity) {
-		return entity.getType().is(EntityTypeTags.UNDEAD) || NATIVE_NETHER_MOBS.contains(entity.getType());
+		return !ServerRaceSystem.isAncientUkrCreditor(entity)
+				&& (entity.getType().is(EntityTypeTags.UNDEAD) || isNativeNetherMob(entity.getType()));
+	}
+
+	static boolean isNativeNetherMob(EntityType<?> type) {
+		return NATIVE_NETHER_MOBS.contains(type);
 	}
 
 	private static void incinerate(ServerLevel level, LivingEntity entity) {

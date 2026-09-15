@@ -7,7 +7,6 @@ import com.lostglade.block.ModBlocks;
 import com.lostglade.config.RaceConfig.RaceAbilityConfig;
 import com.lostglade.config.RaceConfig.RaceAbilitySlot;
 import com.lostglade.network.Lg2Payloads;
-import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
@@ -16,7 +15,6 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -31,7 +29,6 @@ import net.minecraft.server.level.ChunkTrackingView;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.permissions.Permissions;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.core.Direction;
@@ -155,14 +152,6 @@ public final class ServerMilkPocketDimensionSystem {
 		UseBlockCallback.EVENT.register(ServerMilkPocketDimensionSystem::onUseBlock);
 		PlayerBlockBreakEvents.BEFORE.register(ServerMilkPocketDimensionSystem::beforeBlockBreak);
 
-		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-				dispatcher.register(
-						Commands.literal("milk_pocket")
-								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
-								.then(Commands.literal("clear_access")
-										.executes(context -> clearAccessCommand(context.getSource())))
-				)
-		);
 	}
 
 	public static boolean isMilkPocket(Level level) {
@@ -1254,7 +1243,7 @@ public final class ServerMilkPocketDimensionSystem {
 				&& pos.getY() <= BUILD_MAX_Y;
 	}
 
-	private static int clearAccessCommand(CommandSourceStack source) {
+	static int clearAccessCommand(CommandSourceStack source) {
 		ACCESS_PLAYERS.clear();
 		stateDirty = true;
 		saveState(source.getServer());

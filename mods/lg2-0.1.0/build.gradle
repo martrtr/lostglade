@@ -186,6 +186,47 @@ tasks.named("test", Test) {
 	failOnNoDiscoveredTests = false
 }
 
+tasks.register("runOrthodoxLightSyncTest", JavaExec) {
+	group = "verification"
+	description = "Checks moving virtual-light updates, cleanup, overlap and concurrent batching."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.OrthodoxLightSyncTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runAncientUkrCreditorSelectionTest", JavaExec) {
+	group = "verification"
+	description = "Checks creditor AI actions, amount validation and repayment lifecycle."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.AncientUkrCreditorSelectionTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runAncientUkrCollectorRulesTest", JavaExec) {
+	group = "verification"
+	description = "Checks collector debt threshold and wave sizing rules."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.AncientUkrCollectorRulesTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runOrthodoxWingRigTest", JavaExec) {
+	group = "verification"
+	description = "Checks defense wing assets, articulated poses and flight transitions."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.OrthodoxWingRigTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runOrthodoxEyeCompositionTest", JavaExec) {
+	group = "verification"
+	description = "Checks divine eye assets, ray roots, animation and wing attachments."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.OrthodoxEyeCompositionTest"
+	args "--preview"
+	dependsOn(tasks.named("testClasses"))
+}
+
 tasks.register("runDronePhysicsSimulationTest", JavaExec) {
 	group = "verification"
 	description = "Runs the standalone drone physics simulation checks."
@@ -235,6 +276,11 @@ tasks.register("runMicrophoneSpeakerCapturePolicyTest", JavaExec) {
 }
 
 tasks.named("check") {
+	dependsOn(tasks.named("runAncientUkrCreditorSelectionTest"))
+	dependsOn(tasks.named("runAncientUkrCollectorRulesTest"))
+	dependsOn(tasks.named("runOrthodoxLightSyncTest"))
+	dependsOn(tasks.named("runOrthodoxWingRigTest"))
+	dependsOn(tasks.named("runOrthodoxEyeCompositionTest"))
 	dependsOn(tasks.named("runDronePhysicsSimulationTest"))
 	dependsOn(tasks.named("runMonitorMediaStateMachineTest"))
 	dependsOn(tasks.named("runYandexMapTopDownRenderTest"))

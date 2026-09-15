@@ -67,6 +67,7 @@ public final class OrthodoxStockSystem {
 		ServerTickEvents.END_SERVER_TICK.register(OrthodoxStockSystem::tick);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> clearPlayer(server, handler.player));
 		ServerLifecycleEvents.SERVER_STOPPING.register(OrthodoxStockSystem::clearAll);
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> OrthodoxLightSync.clear());
 	}
 
 	private static void tick(MinecraftServer server) {
@@ -85,6 +86,7 @@ public final class OrthodoxStockSystem {
 			}
 			syncEnchantedPenalty(player);
 		}
+		OrthodoxLightSync.flush(server);
 	}
 
 	private static void clearPositiveStock(MinecraftServer server, ServerPlayer player) {
@@ -177,7 +179,10 @@ public final class OrthodoxStockSystem {
 	private static void acquireLight(ServerLevel level, UUID playerId, LightPlacement placement) {
 		LightKey key = placement.key;
 		ManagedLight managed = MANAGED_LIGHTS.computeIfAbsent(key, ignored -> new ManagedLight());
-		if (managed.owners.add(playerId)) requestLightUpdate(level, key);
+		if (managed.owners.add(playerId)) {
+			if (managed.owners.size() == 1) OrthodoxLightSync.retain(level, BlockPos.of(key.pos));
+			requestLightUpdate(level, key);
+		}
 	}
 
 	private static void releaseLight(MinecraftServer server, UUID playerId, LightPlacement placement) {
@@ -187,7 +192,10 @@ public final class OrthodoxStockSystem {
 		if (managed == null || !managed.owners.remove(playerId)) return;
 		ServerLevel level = server.getLevel(key.dimension);
 		if (!managed.owners.isEmpty() || !MANAGED_LIGHTS.remove(key, managed)) return;
-		if (level != null) requestLightUpdate(level, key);
+		if (level != null) {
+			requestLightUpdate(level, key);
+			OrthodoxLightSync.releaseAfterUpdate(level, BlockPos.of(key.pos));
+		}
 	}
 
 	private static void requestLightUpdate(ServerLevel level, LightKey key) {
@@ -252,7 +260,10 @@ public final class OrthodoxStockSystem {
 		if (server != null) {
 			for (LightKey key : lightKeys) {
 				ServerLevel level = server.getLevel(key.dimension);
-				if (level != null) requestLightUpdate(level, key);
+				if (level != null) {
+					requestLightUpdate(level, key);
+					OrthodoxLightSync.releaseAfterUpdate(level, BlockPos.of(key.pos));
+				}
 			}
 		}
 		HEIGHT_REGENERATION.clearAll(server);

@@ -164,6 +164,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.ai.memory.MemoryStatus;
 import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.ai.util.DefaultRandomPos;
@@ -335,11 +336,12 @@ public final class ServerRaceSystem {
 	private static final int ANCIENT_UKR_GAS_MASK_HEAD_INVENTORY_SLOT = 39;
 	private static final double ANCIENT_UKR_ATTACK_UNCHARGED_IRON_SWORD_DAMAGE = 1.2D;
 	private static final long ANCIENT_UKR_ATTACK_REHIT_TICKS = 16L;
-	private static final double ANCIENT_UKR_ATTACK_BLADE_HEIGHT_OFFSET = 0.25D;
-	private static final float ANCIENT_UKR_ATTACK_ROTATION_DEGREES_PER_TICK = 4.0F;
+	private static final double ANCIENT_UKR_ATTACK_BLADE_HEIGHT_OFFSET = -0.25D;
+	private static final float ANCIENT_UKR_ATTACK_ROTATION_DEGREES_PER_TICK = 8.0F;
 	private static final double ANCIENT_UKR_DEFENSE_DEFAULT_SMOKE_RADIUS = 7.0D;
 	private static final double ANCIENT_UKR_DEFENSE_DEFAULT_SMOKE_DURATION_SECONDS = 8.0D;
 	private static final long ANCIENT_UKR_DEFENSE_EXPAND_TICKS = 40L;
+	private static final long ANCIENT_UKR_DEFENSE_MOB_VISION_TICKS = 60L;
 	private static final long ANCIENT_UKR_DEFENSE_EXIT_SPEED_TICKS = 200L;
 	private static final double ANCIENT_UKR_UNIQUE_DEFAULT_HIGHLIGHT_SECONDS = 30.0D;
 	private static final double ANCIENT_UKR_SHNYAGA_DEFAULT_MAX_DISTANCE_BLOCKS = 48.0D;
@@ -2017,6 +2019,8 @@ public final class ServerRaceSystem {
 					)
 					.then(literal("reset_cooldown").executes(ServerRaceSystem::resetAllRaceAbilityCooldownsFromCommand))
 					.then(literal("accrue_credit_interest").executes(AncientUkrCreditSystem::forceInterestAccrual))
+					.then(literal("holines_reset").executes(OrthodoxHolinessSystem::resetHolinessCommand))
+					.then(literal("milk_pocket_clear").executes(context -> ServerMilkPocketDimensionSystem.clearAccessCommand(context.getSource())))
 			);
 
 			dispatcher.register(literal("use")
@@ -5013,6 +5017,10 @@ private static final class AncientUkrSmokeSession {
 		private final MobEffectInstance previousOwnerSpeed;
 		private final Set<UUID> slowedTargets = new HashSet<>();
 		private final Map<UUID, MobEffectInstance> previousSlowness = new HashMap<>();
+		private final Map<UUID, Long> mobVisionUntilTick = new HashMap<>();
+		private final Set<UUID> mobsRememberingOwner = new HashSet<>();
+		private final Set<UUID> mobsRememberingBrainTarget = new HashSet<>();
+		private double currentRadius;
 		private boolean ownerInside;
 		private boolean cloudFinished;
 		private boolean grenadeLanded;
@@ -17820,15 +17828,26 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		return stack != null && !stack.isEmpty() && stack.is(ModItems.ANCIENT_UKR_GAS_MASK);
 	}
 
+	public static boolean isLockedAncientUkrGasMaskSlot(ServerPlayer player, EquipmentSlot slot) {
+		return slot == EquipmentSlot.HEAD && isAncientUkrPlayer(player)
+				&& isAncientUkrGasMask(player.getItemBySlot(EquipmentSlot.HEAD));
+	}
+
 	public static boolean isLockedAncientUkrGasMaskSlot(
 			ServerPlayer player,
 			AbstractContainerMenu menu,
 			int slotIndex
 	) {
 		if (!isAncientUkrPlayer(player) || menu == null || slotIndex < 0 || slotIndex >= menu.slots.size()) return false;
-		Slot slot = menu.getSlot(slotIndex);
-		return slot.container == player.getInventory()
-				&& slot.getContainerSlot() == ANCIENT_UKR_GAS_MASK_HEAD_INVENTORY_SLOT;
+		return isLockedAncientUkrGasMaskSlot(player, menu.getSlot(slotIndex));
+	}
+
+	public static boolean isLockedAncientUkrGasMaskSlot(ServerPlayer player, Slot slot) {
+		return isAncientUkrPlayer(player)
+				&& slot != null
+				&& slot.container == player.getInventory()
+				&& slot.getContainerSlot() == ANCIENT_UKR_GAS_MASK_HEAD_INVENTORY_SLOT
+				&& isAncientUkrGasMask(slot.getItem());
 	}
 	private static int useAncientUkrUnique(ServerPlayer player, PlayerRaceConfig race, RaceAbilityConfig ability) {
 		if (player == null || race == null || ability == null || !(player.level() instanceof ServerLevel level) || !player.isAlive() || player.isSpectator()) return 0;
@@ -18091,6 +18110,10 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 		creditor.setXRot(Mth.clamp(pitch, -90.0F, 90.0F));
 	}
 
+	static boolean isAncientUkrCreditor(Entity entity) {
+		return entity instanceof AncientUkrCreditorEntity;
+	}
+
 	static UUID getActiveAncientUkrCreditorId(UUID ownerId) {
 		AncientUkrCreditorSession session = ownerId == null ? null : ANCIENT_UKR_CREDITOR_SESSIONS.get(ownerId);
 		return session == null ? null : session.entityId();
@@ -18118,7 +18141,9 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 		ServerLevel level = server.getLevel(session.dimension());
 		if (level != null) {
 			Entity entity = level.getEntity(session.entityId());
-			if (entity != null) {
+			if (entity instanceof AncientUkrCreditorEntity creditor) {
+				creditor.removeForSessionCleanup();
+			} else if (entity != null) {
 				entity.discard();
 			}
 			sendCartelLawyerAppearanceRemoval(level, session.profileId());
@@ -18238,10 +18263,13 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 				double progress = Mth.clamp((nowTick - session.smokeStartTick + 1.0D) / ANCIENT_UKR_DEFENSE_EXPAND_TICKS, 0.0D, 1.0D);
 				double smoothProgress = 1.0D - (1.0D - progress) * (1.0D - progress);
 				double currentRadius = session.radius * smoothProgress;
+				session.currentRadius = currentRadius;
 				spawnAncientUkrSmokeParticles(level, session.origin, currentRadius);
 				applyAncientUkrSmokeEffects(level, owner, session, currentRadius, nowTick);
 			} else if (!session.cloudFinished) {
 				removeAncientUkrSmokeSlowness(level, session);
+				restoreAncientUkrSmokeAggro(level, owner, session);
+				session.currentRadius = 0.0D;
 				beginAncientUkrExitSpeed(owner, session, nowTick);
 				session.cloudFinished = true;
 			}
@@ -18340,12 +18368,18 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 	private static void applyAncientUkrSmokeEffects(ServerLevel level, ServerPlayer owner, AncientUkrSmokeSession session, double radius, long nowTick) {
 		AABB bounds = new AABB(session.origin.x - radius, session.origin.y - radius, session.origin.z - radius, session.origin.x + radius, session.origin.y + radius, session.origin.z + radius);
 		Set<UUID> inside = new HashSet<>();
+		Set<UUID> insideMobIds = new HashSet<>();
+		List<Mob> insideMobs = new ArrayList<>();
 		double radiusSqr = radius * radius;
 		for (LivingEntity target : level.getEntitiesOfClass(LivingEntity.class, bounds, entity -> entity.isAlive() && !(entity instanceof ServerPlayer serverPlayer && serverPlayer.isSpectator()))) {
 			Vec3 targetCenter = target.position().add(0.0D, target.getBbHeight() * 0.5D, 0.0D);
 			if (targetCenter.distanceToSqr(session.origin) > radiusSqr) continue;
 			inside.add(target.getUUID());
 			if (target == owner) continue;
+			if (target instanceof Mob mob) {
+				insideMobs.add(mob);
+				insideMobIds.add(mob.getUUID());
+			}
 			if (session.slowedTargets.add(target.getUUID())) {
 				MobEffectInstance previous = target.getEffect(MobEffects.SLOWNESS);
 				session.previousSlowness.put(target.getUUID(), previous == null ? null : new MobEffectInstance(previous));
@@ -18354,6 +18388,30 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 		}
 		for (UUID targetId : new ArrayList<>(session.slowedTargets)) if (!inside.contains(targetId)) restoreAncientUkrSmokeSlowness(level, session, targetId);
 		boolean ownerInside = inside.contains(owner.getUUID());
+		for (UUID mobId : new ArrayList<>(session.mobsRememberingOwner)) {
+			if (!ownerInside || !insideMobIds.contains(mobId)) {
+				restoreAncientUkrSmokeAggro(level, owner, session, mobId);
+			}
+		}
+		if (ownerInside) {
+			for (Mob mob : insideMobs) {
+				UUID mobId = mob.getUUID();
+				boolean brainTargetsOwner = ancientUkrSmokeBrainTarget(mob) == owner;
+				if (mob.getTarget() == owner || brainTargetsOwner) {
+					if (session.mobsRememberingOwner.add(mobId)) {
+						session.mobVisionUntilTick.put(mobId, nowTick + ANCIENT_UKR_DEFENSE_MOB_VISION_TICKS);
+					}
+					if (brainTargetsOwner) session.mobsRememberingBrainTarget.add(mobId);
+				}
+				Long visibleUntil = session.mobVisionUntilTick.get(mobId);
+				if (visibleUntil != null && nowTick >= visibleUntil
+						&& (mob.getTarget() == owner || brainTargetsOwner)) {
+					if (mob.getTarget() == owner) mob.setTarget(null);
+					if (brainTargetsOwner) mob.getBrain().eraseMemory(MemoryModuleType.ATTACK_TARGET);
+					mob.getNavigation().stop();
+				}
+			}
+		}
 		if (ownerInside) {
 			session.ownerInside = true;
 			owner.addEffect(new MobEffectInstance(MobEffects.SPEED, MobEffectInstance.INFINITE_DURATION, 1, false, true, true));
@@ -18361,6 +18419,59 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 			session.ownerInside = false;
 			beginAncientUkrExitSpeed(owner, session, nowTick);
 		}
+	}
+
+	private static LivingEntity ancientUkrSmokeBrainTarget(Mob mob) {
+		if (!mob.getBrain().checkMemory(MemoryModuleType.ATTACK_TARGET, MemoryStatus.REGISTERED)) return null;
+		Optional<LivingEntity> target = mob.getBrain().getMemory(MemoryModuleType.ATTACK_TARGET);
+		return target == null ? null : target.orElse(null);
+	}
+
+	private static void restoreAncientUkrSmokeAggro(ServerLevel level, ServerPlayer owner, AncientUkrSmokeSession session) {
+		for (UUID mobId : new ArrayList<>(session.mobsRememberingOwner)) {
+			restoreAncientUkrSmokeAggro(level, owner, session, mobId);
+		}
+	}
+
+	private static void restoreAncientUkrSmokeAggro(ServerLevel level, ServerPlayer owner, AncientUkrSmokeSession session, UUID mobId) {
+		session.mobsRememberingOwner.remove(mobId);
+		boolean brainTarget = session.mobsRememberingBrainTarget.remove(mobId);
+		session.mobVisionUntilTick.remove(mobId);
+		if (level == null || owner == null || !owner.isAlive() || owner.level() != level) return;
+		Entity entity = level.getEntity(mobId);
+		if (!(entity instanceof Mob mob) || !mob.isAlive()) return;
+		mob.setTarget(owner);
+		if (brainTarget && mob.getBrain().checkMemory(MemoryModuleType.ATTACK_TARGET, MemoryStatus.REGISTERED)) {
+			mob.getBrain().setMemory(MemoryModuleType.ATTACK_TARGET, owner);
+		}
+	}
+
+	private static boolean insideAncientUkrSmoke(LivingEntity entity, AncientUkrSmokeSession session) {
+		return entity.position().add(0.0D, entity.getBbHeight() * 0.5D, 0.0D)
+				.distanceToSqr(session.origin) <= session.currentRadius * session.currentRadius;
+	}
+
+	public static boolean blocksAncientUkrSmokeTarget(Mob mob, LivingEntity target) {
+		if (!(target instanceof ServerPlayer owner) || !(mob.level() instanceof ServerLevel level)) return false;
+		AncientUkrSmokeSession session = ANCIENT_UKR_SMOKE_SESSIONS.get(owner.getUUID());
+		if (session == null || !session.grenadeLanded || session.cloudFinished || level.getGameTime() >= session.endTick
+				|| owner.level() != level || !session.dimension.equals(level.dimension())) return false;
+		Long visibleUntil = session.mobVisionUntilTick.get(mob.getUUID());
+		return (visibleUntil == null || level.getGameTime() >= visibleUntil)
+				&& insideAncientUkrSmoke(owner, session)
+				&& insideAncientUkrSmoke(mob, session);
+	}
+
+	public static void handleAncientUkrSmokeProvocation(ServerLevel level, LivingEntity victim, DamageSource source, boolean applied) {
+		if (!applied || !(victim instanceof Mob mob) || !(source.getEntity() instanceof ServerPlayer owner)) return;
+		AncientUkrSmokeSession session = ANCIENT_UKR_SMOKE_SESSIONS.get(owner.getUUID());
+		if (session == null || !session.grenadeLanded || session.cloudFinished || level.getGameTime() >= session.endTick
+				|| !session.dimension.equals(level.dimension()) || owner.level() != level
+				|| !insideAncientUkrSmoke(owner, session) || !insideAncientUkrSmoke(mob, session)) return;
+		session.mobsRememberingOwner.add(mob.getUUID());
+		if (ancientUkrSmokeBrainTarget(mob) == owner) session.mobsRememberingBrainTarget.add(mob.getUUID());
+		session.mobVisionUntilTick.put(mob.getUUID(), level.getGameTime() + ANCIENT_UKR_DEFENSE_MOB_VISION_TICKS);
+		mob.setTarget(owner);
 	}
 
 	private static void beginAncientUkrExitSpeed(ServerPlayer owner, AncientUkrSmokeSession session, long nowTick) {
@@ -18390,6 +18501,9 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 
 	private static void cleanupAncientUkrSmoke(ServerLevel level, AncientUkrSmokeSession session, ServerPlayer owner, boolean restoreOwnerSpeed) {
 		removeAncientUkrSmokeSlowness(level, session);
+		if (session != null) {
+			restoreAncientUkrSmokeAggro(level, owner, session);
+		}
 		if (level != null && session != null && session.grenadeEntityId != null) {
 			Entity grenade = level.getEntity(session.grenadeEntityId);
 			if (grenade != null) grenade.discard();
@@ -18484,7 +18598,9 @@ private static int useAncientUkrAttack(ServerPlayer player, PlayerRaceConfig rac
 		Vec3 center = new Vec3(player.getX(), bladeHeight, player.getZ());
 		Vec3 start = center.add(direction.scale(0.28D)); Vec3 end = center.add(direction.scale(1.72D));
 		AABB searchBox = new AABB(start, end).inflate(0.72D, 0.55D, 0.72D);
-		for (LivingEntity target : level.getEntitiesOfClass(LivingEntity.class, searchBox, candidate -> candidate != player && candidate.isAlive() && !(candidate instanceof ServerPlayer serverPlayer && serverPlayer.isSpectator()))) {
+		for (LivingEntity target : level.getEntitiesOfClass(LivingEntity.class, searchBox, candidate ->
+				candidate != player && !(candidate instanceof AncientUkrCreditorEntity) && candidate.isAlive()
+						&& !(candidate instanceof ServerPlayer serverPlayer && serverPlayer.isSpectator()))) {
 			if (Math.abs(target.getY() + target.getBbHeight() * 0.5D - bladeHeight) > target.getBbHeight() * 0.5D + 0.36D) continue;
 			Vec3 point = new Vec3(target.getX(), bladeHeight, target.getZ());
 			if (distanceToHorizontalSegmentSqr(point, start, end) > Math.pow(0.18D + target.getBbWidth() * 0.5D, 2.0D)) continue;
@@ -28529,6 +28645,8 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 
 
 	private static final class AncientUkrCreditorEntity extends PathfinderMob {
+		private boolean removingFromSession;
+
 		private AncientUkrCreditorEntity(ServerLevel level) {
 			super(EntityType.HUSK, level);
 			this.xpReward = 0;
@@ -28544,6 +28662,32 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 
 		private void attachPolymerAppearance(GameProfile profile) {
 			PolymerEntityUtils.setPolymerEntity(this, new CartelLawyerOverlay(profile));
+		}
+
+		private void removeForSessionCleanup() {
+			this.removingFromSession = true;
+			this.discard();
+		}
+
+		@Override
+		public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
+			return false;
+		}
+
+		@Override
+		public void setHealth(float health) {
+			super.setHealth(Math.max(1.0F, health));
+		}
+
+		@Override
+		public void die(DamageSource source) {
+		}
+
+		@Override
+		public void remove(Entity.RemovalReason reason) {
+			if (!this.removingFromSession
+					&& (reason == Entity.RemovalReason.DISCARDED || reason == Entity.RemovalReason.KILLED)) return;
+			super.remove(reason);
 		}
 
 		@Override

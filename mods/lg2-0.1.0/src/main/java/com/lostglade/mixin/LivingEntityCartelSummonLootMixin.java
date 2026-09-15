@@ -14,6 +14,7 @@ public abstract class LivingEntityCartelSummonLootMixin {
 	private static final String CARTEL_LAWYER_TAG = "lg2.cartel_lawyer";
 	private static final String GENNADIY_DONKEY_TAG = "lg2.gennadiy_battle_donkey";
 	private static final String MILK_MOUSE_SILVERFISH_TAG = "lg2.milk_mouse_silverfish";
+	private static final String ANCIENT_UKR_COLLECTOR_TAG = "lg2.ancient_ukr_collector";
 
 	@Inject(method = "dropAllDeathLoot", at = @At("HEAD"), cancellable = true)
 	private void lg2$disableCartelSummonLoot(ServerLevel level, DamageSource damageSource, CallbackInfo ci) {
@@ -21,7 +22,8 @@ public abstract class LivingEntityCartelSummonLootMixin {
 		if (entity.getTags().contains(CARTEL_SUMMON_TAG)
 				|| entity.getTags().contains(CARTEL_LAWYER_TAG)
 				|| entity.getTags().contains(GENNADIY_DONKEY_TAG)
-				|| entity.getTags().contains(MILK_MOUSE_SILVERFISH_TAG)) {
+				|| entity.getTags().contains(MILK_MOUSE_SILVERFISH_TAG)
+				|| entity.getTags().contains(ANCIENT_UKR_COLLECTOR_TAG)) {
 			ci.cancel();
 		}
 	}

@@ -657,7 +657,7 @@
         "enabled": true,
         "abilityId": "ancient_ukr_attack",
         "name": "Вертолётик",
-        "description": "",
+        "description": "Вокруг тебя появляются восемь парящих железных мечей, которые быстро вращаются. Любой, кто подойдёт слишком близко, будет получать урон.",
         "priceBitcoins": 300,
         "cooldownSeconds": 900.0,
         "ancientUkrAttackSwordCount": 8,
@@ -667,7 +667,7 @@
         "enabled": true,
         "abilityId": "ancient_ukr_defense",
         "name": "Ухилянт",
-        "description": "",
+        "description": "Ты бросаешь дымовую шашку, создавая густое облако дыма вокруг. Враги в нём слепнут и замедляются, а ты сам становишься быстрее.",
         "priceBitcoins": 600,
         "cooldownSeconds": 600.0,
         "ancientUkrDefenseSmokeRadius": 7.0,
@@ -677,7 +677,7 @@
         "enabled": true,
         "abilityId": "ancient_ukr_unique",
         "name": "Чуйка на ленд-лиз",
-        "description": "",
+        "description": "Твои глаза вспыхивают золотым блеском. Ты начинаешь видеть все сундуки, шалкеры и клады сквозь стены в радиусе тридцати блоков, а сам получаешь ускорение и спешку.",
         "priceBitcoins": 1000,
         "cooldownSeconds": 900.0,
         "ancientUkrUniqueHighlightSeconds": 30.0
@@ -686,14 +686,16 @@
         "enabled": true,
         "abilityId": "ancient_ukr_shnyaga",
         "name": "Проклятый кредит",
-        "description": "",
+        "description": "/creditbar - для скрытия. Ты можешь взять в долг до двух тысяч биткоинов у кредитора. Проценты капают каждый час, и чем больше кредитов ты берёшь, тем выше ставка. Если не платишь — приходят коллекторы, которые с каждым часом становятся многочисленнее. Убьют — заберут все твои биткоины.",
         "priceBitcoins": 1500,
         "ancientUkrShnyagaMaxDistanceBlocks": 48.0,
         "ancientUkrCreditMaxActive": 3,
         "ancientUkrCreditMaxPrincipalBitcoins": 1000,
         "ancientUkrCreditMinHourlyPercent": 5.0,
         "ancientUkrCreditMaxHourlyPercent": 10.0,
-        "ancientUkrCreditMaxDebtMultiplier": 3.0
+        "ancientUkrCreditMaxDebtMultiplier": 3.0,
+        "ancientUkrCollectorMinIntervalMinutes": 1.0,
+        "ancientUkrCollectorMaxIntervalMinutes": 1.0
       },
       "stock": {
         "enabled": true,
@@ -718,7 +720,7 @@
         "priceBitcoins": 300,
         "cooldownSeconds": 900.0,
         "activationRangeBlocks": 32.0,
-        "orthodoxAttackEyeVisibilityRadiusBlocks": 50.0,
+        "orthodoxAttackEyeVisibilityRadiusBlocks": 96.0,
         "orthodoxAttackDurationSeconds": 600.0,
         "orthodoxAttackRemainingHealthHearts": 0.5,
         "orthodoxAttackBlindnessSeconds": 10.0
@@ -745,14 +747,14 @@
         "enabled": true,
         "abilityId": "orthodox_shnyaga",
         "name": "Шкала святости",
-        "description": "Совершай добрые дела — святость растёт. Греши — падает. Если святость опустится до нуля — ты потеряешь все свои силы и станешь обычным человеком.",
+        "description": "Грешишь — теряешь способности. Не нарушаешь - восстанавливается. Если святость опустится до нуля — ты потеряешь все свои силы и станешь обычным человеком.",
         "priceBitcoins": 1500,
         "orthodoxHolinessSelfDefenseSeconds": 300.0,
         "orthodoxHolinessBitcoinInventoryFraction": 0.5,
         "orthodoxHolinessAfkMinutes": 20.0,
         "orthodoxHolinessNetherMinutes": 5.0,
-        "orthodoxHolinessRepentanceMinecraftDays": 40.0,
-        "orthodoxHolinessRecoveryMinutes": 30.0
+        "orthodoxHolinessRepentanceMinecraftDays": 0.01,
+        "orthodoxHolinessRecoveryMinutes": 1.0
       },
       "stock": {
         "enabled": true,

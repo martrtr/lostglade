@@ -2,6 +2,7 @@ package com.lostglade.server.glitch;
 
 import com.google.gson.JsonObject;
 import com.lostglade.config.GlitchConfig;
+import com.lostglade.server.AncientUkrCreditorChatSystem;
 import com.lostglade.server.ServerBackroomsSystem;
 import com.lostglade.server.ServerMilkPocketDimensionSystem;
 import net.minecraft.commands.CommandSourceStack;
@@ -112,7 +113,8 @@ public final class ChatInterferenceGlitch implements ChatMessageGlitchHandler {
 			double stabilityPercent,
 			ServerPlayer sender,
 			PlayerChatMessage message,
-			ChatType.Bound params
+			ChatType.Bound params,
+			boolean routeCreditor
 	) {
 		if (sender == null || message == null || params == null) {
 			return false;
@@ -135,6 +137,11 @@ public final class ChatInterferenceGlitch implements ChatMessageGlitchHandler {
 				continue;
 			}
 			player.sendSystemMessage(glitchedDecorated);
+		}
+		if (routeCreditor) {
+			UUID displayedAuthorId = mutation.displayNameOverridePlayerId() != null
+					? mutation.displayNameOverridePlayerId() : sender.getUUID();
+			AncientUkrCreditorChatSystem.handleDisplayedChatMessage(server, displayedAuthorId, mutation.content());
 		}
 		if (mutation.displayNameOverridePlayerId() != null) {
 			ServerPlayer effectiveSender = server.getPlayerList().getPlayer(mutation.displayNameOverridePlayerId());

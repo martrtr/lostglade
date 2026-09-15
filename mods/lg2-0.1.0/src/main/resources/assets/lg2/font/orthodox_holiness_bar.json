@@ -3,10 +3,10 @@
     {
       "type": "bitmap",
       "file": "lg2:font/orthodox_holiness_bar.png",
-      "ascent": 10,
-      "height": 30,
+      "ascent": 6,
+      "height": 101,
       "chars": [
-        "\ue906"
+        "\ue906\ue907\ue908\ue909\ue90a"
       ]
     },
     {

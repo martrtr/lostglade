@@ -227,18 +227,17 @@ public final class ServerGlitchSystem {
 	}
 
 	private static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
-		AncientUkrCreditorChatSystem.handlePlayerChatMessage(message, sender);
-		return handleBroadcastedPlayerMessage(message, sender, params);
+		return handleBroadcastedPlayerMessage(message, sender, params, true);
 	}
 
 	private static boolean onAllowCommandMessage(PlayerChatMessage message, CommandSourceStack source, ChatType.Bound params) {
 		if (source == null || !(source.getEntity() instanceof ServerPlayer sender)) {
 			return true;
 		}
-		return handleBroadcastedPlayerMessage(message, sender, params);
+		return handleBroadcastedPlayerMessage(message, sender, params, false);
 	}
 
-	private static boolean handleBroadcastedPlayerMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
+	private static boolean handleBroadcastedPlayerMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params, boolean routeCreditor) {
 		if (sender == null || message == null || params == null) {
 			return true;
 		}
@@ -259,6 +258,9 @@ public final class ServerGlitchSystem {
 		GlitchConfig.ConfigData config = GlitchConfig.get();
 		if (!config.enabled) {
 			ServerMilkPocketDimensionSystem.handleChatMessage(message, sender, params);
+			if (routeCreditor) {
+				AncientUkrCreditorChatSystem.handleDisplayedChatMessage(server, sender.getUUID(), message.signedContent());
+			}
 			if (raceDisplayNameOverride == null) {
 				return true;
 			}
@@ -295,7 +297,7 @@ public final class ServerGlitchSystem {
 						);
 						double effectiveChance = baseChance * ((1.0D - influence) + (rangeInstabilityFactor * influence));
 						if (effectiveChance > 0.0D && random.nextDouble() <= effectiveChance) {
-							triggered = chatHandler.triggerChat(server, random, entry, stabilityPercent, sender, message, outgoingParams);
+							triggered = chatHandler.triggerChat(server, random, entry, stabilityPercent, sender, message, outgoingParams, routeCreditor);
 							if (triggered) {
 								long cooldownTicks = Math.max(
 										0L,
@@ -316,6 +318,9 @@ public final class ServerGlitchSystem {
 		ServerMilkPocketDimensionSystem.handleChatMessage(message, sender, params);
 		Component decorated = outgoingParams.decorate(Component.literal(message.signedContent()));
 		server.getPlayerList().broadcastSystemMessage(decorated, false);
+		if (routeCreditor) {
+			AncientUkrCreditorChatSystem.handleDisplayedChatMessage(server, sender.getUUID(), message.signedContent());
+		}
 		return false;
 	}
 

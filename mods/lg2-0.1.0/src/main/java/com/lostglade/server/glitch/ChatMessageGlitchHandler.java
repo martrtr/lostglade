@@ -18,7 +18,8 @@ public interface ChatMessageGlitchHandler extends ServerGlitchHandler {
 			double stabilityPercent,
 			ServerPlayer sender,
 			PlayerChatMessage message,
-			ChatType.Bound params
+			ChatType.Bound params,
+			boolean routeCreditor
 	);
 
 	default boolean triggerPrivateMessage(

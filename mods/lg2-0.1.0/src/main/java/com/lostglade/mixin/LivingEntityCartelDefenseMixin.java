@@ -5,6 +5,7 @@ import com.lostglade.server.ServerRaceSystem;
 import com.lostglade.server.PuroSanStockSystem;
 import com.lostglade.server.OrthodoxAttackSystem;
 import com.lostglade.server.OrthodoxDefenseSystem;
+import com.lostglade.server.AncientUkrCollectorSystem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
@@ -91,6 +92,8 @@ public abstract class LivingEntityCartelDefenseMixin {
 		ServerRaceSystem.handleKilkaIncomingDamage(level, (LivingEntity) (Object) this, damageSource, damage, cir.getReturnValueZ());
 		ServerRaceSystem.handlePuroSanOverdriveCombatDamage(level, (LivingEntity) (Object) this, damageSource, damage, cir.getReturnValueZ());
 		ServerRaceSystem.handleMilkDefenseDodge(level, (LivingEntity) (Object) this, damageSource, damage, cir.getReturnValueZ());
+		AncientUkrCollectorSystem.onSuccessfulDamage((LivingEntity) (Object) this, damageSource, cir.getReturnValueZ());
+		ServerRaceSystem.handleAncientUkrSmokeProvocation(level, (LivingEntity) (Object) this, damageSource, cir.getReturnValueZ());
 		if (cir.getReturnValueZ()) {
 			OrthodoxAttackSystem.onSuccessfulDamage(level, (LivingEntity) (Object) this, damageSource, damage);
 		}

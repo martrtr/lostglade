@@ -9,15 +9,12 @@ import com.lostglade.config.RaceConfig.RaceAbilitySlot;
 import com.lostglade.item.ModItems;
 import com.mojang.brigadier.context.CommandContext;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
-import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.commands.Commands;
-import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.Holder;
 import net.minecraft.network.protocol.game.ClientboundSoundPacket;
@@ -27,7 +24,6 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerBossEvent;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.permissions.Permissions;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -68,7 +64,7 @@ public final class OrthodoxHolinessSystem {
 	private static final double DEFAULT_NETHER_MINUTES = 5.0D;
 	private static final double DEFAULT_REPENTANCE_DAYS = 40.0D;
 	private static final double DEFAULT_RECOVERY_MINUTES = 30.0D;
-	private static final String BAR_SYMBOL = "\ue906";
+	private static final String BAR_SYMBOLS = "\ue906\ue907\ue908\ue909\ue90a";
 	private static final FontDescription BAR_FONT = new FontDescription.Resource(
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "orthodox_holiness_bar")
 	);
@@ -84,15 +80,6 @@ public final class OrthodoxHolinessSystem {
 	}
 
 	public static void register() {
-		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-				dispatcher.register(
-						Commands.literal("holiness")
-								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
-								.then(Commands.literal("reset")
-										.then(Commands.argument("player", EntityArgument.player())
-												.executes(OrthodoxHolinessSystem::resetHolinessCommand)))
-				)
-		);
 		ServerLifecycleEvents.SERVER_STARTED.register(OrthodoxHolinessSystem::load);
 		ServerLifecycleEvents.SERVER_STOPPING.register(OrthodoxHolinessSystem::shutdown);
 		ServerTickEvents.END_SERVER_TICK.register(OrthodoxHolinessSystem::tick);
@@ -137,7 +124,7 @@ public final class OrthodoxHolinessSystem {
 		int holiness = getHoliness(player);
 		if (holiness >= required) return true;
 		player.displayClientMessage(
-				Component.literal("\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0441\u0432\u044f\u0442\u043e\u0441\u0442\u0438: " + holiness + "/" + MAX_HOLINESS)
+				Component.literal("\u0411\u043e\u0436\u0435\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0435 \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b, \u043f\u043e\u043a\u0430 \u0434\u0443\u0448\u0430 \u0433\u0440\u0435\u0448\u043d\u0430")
 						.withStyle(ChatFormatting.RED),
 				true
 		);
@@ -151,8 +138,8 @@ public final class OrthodoxHolinessSystem {
 		markDirty();
 		player.displayClientMessage(
 				Component.literal(state.barHidden
-						? "\u0428\u043a\u0430\u043b\u0430 \u0441\u0432\u044f\u0442\u043e\u0441\u0442\u0438 \u0441\u043a\u0440\u044b\u0442\u0430"
-						: "\u0428\u043a\u0430\u043b\u0430 \u0441\u0432\u044f\u0442\u043e\u0441\u0442\u0438 \u043f\u043e\u043a\u0430\u0437\u0430\u043d\u0430")
+						? "\u0418\u043d\u0434\u0438\u043a\u0430\u0442\u043e\u0440 \u0441\u0432\u044f\u0442\u043e\u0441\u0442\u0438 \u0441\u043a\u0440\u044b\u0442"
+						: "\u0418\u043d\u0434\u0438\u043a\u0430\u0442\u043e\u0440 \u0441\u0432\u044f\u0442\u043e\u0441\u0442\u0438 \u043f\u043e\u043a\u0430\u0437\u0430\u043d")
 						.withStyle(state.barHidden ? ChatFormatting.GRAY : ChatFormatting.GOLD),
 				true
 		);
@@ -199,9 +186,9 @@ public final class OrthodoxHolinessSystem {
 		tracker.penaltyApplied = false;
 	}
 
-	private static int resetHolinessCommand(CommandContext<CommandSourceStack> context)
+	static int resetHolinessCommand(CommandContext<CommandSourceStack> context)
 			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer target = EntityArgument.getPlayer(context, "player");
+		ServerPlayer target = context.getSource().getPlayerOrException();
 		if (!isOrthodox(target)) {
 			context.getSource().sendFailure(Component.literal(
 					"\u0423\u043a\u0430\u0437\u0430\u043d\u043d\u044b\u0439 \u0438\u0433\u0440\u043e\u043a \u043d\u0435 \u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f \u043f\u0440\u0430\u0432\u043e\u0441\u043b\u0430\u0432\u043d\u044b\u043c"
@@ -386,8 +373,8 @@ public final class OrthodoxHolinessSystem {
 		state.holiness = clampHoliness(value);
 		if (state.holiness == previous || player == null || !hasShnyaga(player) || state.barHidden) return;
 		SoundEvent sound = state.holiness > previous
-				? SoundEvents.EXPERIENCE_ORB_PICKUP
-				: SoundEvents.BEACON_DEACTIVATE;
+				? SoundEvents.UI_TOAST_CHALLENGE_COMPLETE
+				: SoundEvents.ELDER_GUARDIAN_CURSE;
 		Vec3 position = player.position();
 		player.connection.send(new ClientboundSoundPacket(
 				Holder.direct(sound),
@@ -395,8 +382,8 @@ public final class OrthodoxHolinessSystem {
 				position.x,
 				position.y,
 				position.z,
-				0.65F,
-				state.holiness > previous ? 1.25F : 1.1F,
+				1.0F,
+				state.holiness > previous ? 1.0F : 0.9F,
 				player.getRandom().nextLong()
 		));
 	}
@@ -419,6 +406,7 @@ public final class OrthodoxHolinessSystem {
 		) * 1000.0D));
 		Map<UUID, Long> attackers = RECENT_ATTACKERS.get(orthodox.getUUID());
 		Long attackedAt = attackers == null ? null : attackers.remove(victim.getUUID());
+		if (OrthodoxUniqueSystem.isNativeNetherMob(victim.getType())) return;
 		if (attackedAt == null || now - attackedAt > window) commitSin(orthodox);
 	}
 
@@ -456,7 +444,7 @@ public final class OrthodoxHolinessSystem {
 		ServerBossEvent bossBar = BOSS_BARS.computeIfAbsent(player.getUUID(), ignored -> createBossBar());
 		int holiness = getHoliness(player);
 		bossBar.setName(buildBarTitle(player, holiness));
-		bossBar.setProgress(holiness / (float) MAX_HOLINESS);
+		bossBar.setProgress(0.0F);
 		bossBar.setVisible(true);
 		boolean added = false;
 		if (!bossBar.getPlayers().contains(player)) {
@@ -472,7 +460,7 @@ public final class OrthodoxHolinessSystem {
 	private static ServerBossEvent createBossBar() {
 		ServerBossEvent event = new ServerBossEvent(
 				Component.empty(),
-				BossEvent.BossBarColor.WHITE,
+				BossEvent.BossBarColor.GREEN,
 				BossEvent.BossBarOverlay.PROGRESS
 		);
 		event.setDarkenScreen(false);
@@ -483,7 +471,8 @@ public final class OrthodoxHolinessSystem {
 
 	private static Component buildBarTitle(ServerPlayer player, int holiness) {
 		if (PolymerResourcePackUtils.hasMainPack(player)) {
-			return Component.literal(BAR_SYMBOL).withStyle(style -> style
+			int frame = MAX_HOLINESS - clampHoliness(holiness);
+			return Component.literal(String.valueOf(BAR_SYMBOLS.charAt(frame))).withStyle(style -> style
 					.withColor(0xFFFFFF)
 					.withItalic(false)
 					.withBold(false)

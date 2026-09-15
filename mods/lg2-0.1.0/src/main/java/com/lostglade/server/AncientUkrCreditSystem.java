@@ -15,6 +15,7 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.FontDescription;
 import net.minecraft.network.chat.MutableComponent;
@@ -34,7 +35,12 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.BundleContents;
+import net.minecraft.world.item.component.ItemContainerContents;
+import net.minecraft.world.level.block.ShulkerBoxBlock;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.DisplaySlot;
@@ -82,6 +88,11 @@ public final class AncientUkrCreditSystem {
     private static final double DEFAULT_MIN_RATE = 5.0D;
     private static final double DEFAULT_MAX_RATE = 10.0D;
     private static final double DEFAULT_MAX_DEBT_MULTIPLIER = 3.0D;
+    private static final double DEFAULT_COLLECTOR_MIN_INTERVAL_MINUTES = 30.0D;
+    private static final double DEFAULT_COLLECTOR_MAX_INTERVAL_MINUTES = 60.0D;
+    private static final int COLLECTORS_PER_ACTIVE_CREDIT = 3;
+    private static final long COLLECTOR_SPAWN_RETRY_MILLIS = 10_000L;
+    private static final int BITCOIN_CONTAINER_SCAN_MAX_DEPTH = 8;
     private static final long LOAN_PAYOUT_STACK_INTERVAL_TICKS = 4L;
     private static final String COIN_GLYPH = "\ue981";
     private static final String FALLBACK_COIN = "\u20bf";
@@ -106,11 +117,11 @@ public final class AncientUkrCreditSystem {
 
     private static CreditStore store = new CreditStore();
     private static final Map<UUID, Objective> CLIENT_OBJECTIVES = new HashMap<>();
-    private static final Map<UUID, PendingOffer> PENDING_OFFERS = new HashMap<>();
     private static final Map<UUID, RepaymentSession> REPAYMENTS = new HashMap<>();
     private static final Map<UUID, Deque<LoanPayout>> LOAN_PAYOUTS = new HashMap<>();
     private static final Set<UUID> CREDIT_OVERLAY_HIDDEN = new HashSet<>();
     private static long lastPeriodicTick = Long.MIN_VALUE;
+    private static long lastCollectorTick = Long.MIN_VALUE;
     private static boolean loaded;
 
     private AncientUkrCreditSystem() {
@@ -122,17 +133,16 @@ public final class AncientUkrCreditSystem {
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             save(server);
             CLIENT_OBJECTIVES.clear();
-            PENDING_OFFERS.clear();
             REPAYMENTS.clear();
             LOAN_PAYOUTS.clear();
             CREDIT_OVERLAY_HIDDEN.clear();
+            AncientUkrCollectorSystem.clearAll(server, false);
             loaded = false;
         });
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
                 server.execute(() -> onPlayerJoined(server, handler.player)));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             CLIENT_OBJECTIVES.remove(handler.player.getUUID());
-            PENDING_OFFERS.remove(handler.player.getUUID());
             REPAYMENTS.remove(handler.player.getUUID());
         });
         ServerTickEvents.END_SERVER_TICK.register(AncientUkrCreditSystem::tick);
@@ -146,7 +156,6 @@ public final class AncientUkrCreditSystem {
     }
 
     static void onCreditorSpawned(MinecraftServer server, UUID ownerId) {
-        PENDING_OFFERS.remove(ownerId);
         REPAYMENTS.remove(ownerId);
         ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
         if (owner != null) {
@@ -158,7 +167,6 @@ public final class AncientUkrCreditSystem {
     }
 
     static void onCreditorRemoved(UUID ownerId) {
-        PENDING_OFFERS.remove(ownerId);
         REPAYMENTS.remove(ownerId);
     }
     static String buildAiContext(MinecraftServer server, UUID ownerId) {
@@ -168,17 +176,18 @@ public final class AncientUkrCreditSystem {
         CreditTerms terms = terms();
         StringBuilder out = new StringBuilder("FACTS:\n");
         out.append("nickname=").append(owner == null ? storedNickname(borrower, ownerId) : owner.getGameProfile().name()).append('\n');
-        out.append("active=").append(borrower == null ? 0 : borrower.credits.size()).append('/').append(terms.maxActive()).append('\n');
+        int activeCount = borrower == null ? 0 : borrower.credits.size();
+        out.append("activeCreditCount=").append(activeCount)
+                .append("; maxActiveCredits=").append(terms.maxActive())
+                .append("; freeCreditSlots=").append(Math.max(0, terms.maxActive() - activeCount)).append('\n');
+        out.append("maxPrincipalPerCredit=").append(terms.maxPrincipal())
+                .append("; maxNextCreditPrincipal=").append(activeCount < terms.maxActive() ? terms.maxPrincipal() : 0)
+                .append("; sharedPrincipalLimit=none; existing_debts_do_not_reduce_per_credit_limit=true\n");
         out.append("currentNewCreditHourlyRate=").append(formatPercent(currentRatePercent()))
                 .append("%; possibleRateRange=").append(formatPercent(terms.minRate())).append("%-")
-                .append(formatPercent(terms.maxRate())).append("%; maxPrincipal=")
-                .append(terms.maxPrincipal()).append(" bitcoins\n");
-        out.append("Rate rules: the current rate for a newly negotiated credit is randomly recalculated every hour ")
-                .append("within the stated range. It is not the only permanent rate. Once a credit offer is created, ")
-                .append("that offer keeps its quoted rate; once issued, that individual credit keeps the same rate ")
-                .append("for its whole lifetime. Different credits may therefore have different fixed rates. ")
-                .append("Interest uses each credit's own fixed simple hourly rate from principal, also offline; stop interest at ")
-                .append(formatAmount(BigDecimal.valueOf(terms.maxDebtMultiplier()))).append("x principal after a full charge.\n");
+                .append(formatPercent(terms.maxRate())).append("%\n");
+        out.append("rateRule=new rate changes hourly; each issued loan fixes the rate at issuance; simple hourly interest on principal, offline; cap after charge at ")
+                .append(formatAmount(BigDecimal.valueOf(terms.maxDebtMultiplier()))).append("x principal\n");
         if (borrower == null || borrower.credits.isEmpty()) {
             out.append("credits=none\n");
         } else {
@@ -188,16 +197,12 @@ public final class AncientUkrCreditSystem {
                             .append(" debt=").append(formatAmount(credit.debt)).append(" rate=")
                             .append(formatPercent(credit.interestRatePercent)).append("%\n"));
         }
-        PendingOffer offer = PENDING_OFFERS.get(ownerId);
-        out.append("pendingOffer=").append(offer == null ? "none" : offer.amount() + " bitcoins, " + formatPercent(offer.interestRatePercent()) + "% hourly").append('\n');
         RepaymentSession repayment = REPAYMENTS.get(ownerId);
+        out.append("canStartRepayment=").append(activeCount > 0)
+                .append("; receptionActive=").append(repayment != null).append('\n');
         out.append("repayment=").append(repayment == null ? "none" :
                 "credits " + repayment.creditNumbers + ", paid " + repayment.totalPaid).append('\n');
         return out.toString();
-    }
-
-    static boolean hasPendingOffer(UUID ownerId) {
-        return ownerId != null && PENDING_OFFERS.containsKey(ownerId);
     }
 
     static List<Integer> activeCreditNumbers(UUID ownerId) {
@@ -212,24 +217,18 @@ public final class AncientUkrCreditSystem {
                 .toList();
     }
 
-    static boolean hasActiveRepayment(UUID ownerId) {
-        return ownerId != null && REPAYMENTS.containsKey(ownerId);
-    }
-
     static ActionResolution applyAiAction(MinecraftServer server, UUID ownerId, String actionType,
                                           Integer creditNumber, List<Integer> creditNumbers,
                                           Integer amount, String modelReply) {
         String type = actionType == null ? "none" : actionType.trim().toLowerCase(Locale.ROOT);
         return switch (type) {
             case "", "none" -> new ActionResolution(modelReply, false);
-            case "offer_credit" -> offerCredit(server, ownerId, amount);
             case "open_credit" -> openCredit(server, ownerId, amount);
             case "start_repayment" -> startRepayment(server, ownerId, creditNumber, creditNumbers);
             case "continue_repayment" -> continueRepayment(server, ownerId);
             case "stop_repayment" -> stopRepayment(ownerId);
-            case "finish" -> new ActionResolution(
-                    "\u0411\u043b\u0430\u0433\u043e\u0434\u0430\u0440\u044e \u0437\u0430 \u043e\u0431\u0440\u0430\u0449\u0435\u043d\u0438\u0435. \u0412\u0441\u0435\u0433\u043e \u0434\u043e\u0431\u0440\u043e\u0433\u043e.", true);
-            default -> result("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044e. \u0423\u0442\u043e\u0447\u043d\u0438\u0442\u0435 \u0437\u0430\u043f\u0440\u043e\u0441.");
+            case "finish" -> finishConversation(ownerId);
+            default -> result("action_rejected; reason=unknown_action" );
         };
     }
 
@@ -291,10 +290,11 @@ public final class AncientUkrCreditSystem {
     }
     private static void load(MinecraftServer server) {
         lastPeriodicTick = Long.MIN_VALUE;
+        lastCollectorTick = Long.MIN_VALUE;
         CLIENT_OBJECTIVES.clear();
-        PENDING_OFFERS.clear();
         REPAYMENTS.clear();
         LOAN_PAYOUTS.clear();
+        AncientUkrCollectorSystem.clearAll(server, false);
         store = new CreditStore();
         Path path = statePath(server);
         if (Files.isRegularFile(path)) {
@@ -320,9 +320,14 @@ public final class AncientUkrCreditSystem {
 
     private static void tick(MinecraftServer server) {
         if (!loaded || server == null) return;
+        AncientUkrCollectorSystem.tick(server);
         tickLoanPayouts(server);
         tickRepayments(server);
         long tick = server.overworld().getGameTime();
+        if (lastCollectorTick == Long.MIN_VALUE || tick - lastCollectorTick >= 20L) {
+            lastCollectorTick = tick;
+            tickCollectorVisits(server);
+        }
         if (lastPeriodicTick != Long.MIN_VALUE && tick - lastPeriodicTick < 20L) return;
         lastPeriodicTick = tick;
         accrueMissedHours(server, currentEpochHour());
@@ -405,54 +410,37 @@ public final class AncientUkrCreditSystem {
         player.connection.send(new ClientboundSoundPacket(sound, SoundSource.PLAYERS,
                 position.x, position.y, position.z, 0.8F, 1.0F, player.getRandom().nextLong()));
     }
-    private static ActionResolution offerCredit(MinecraftServer server, UUID ownerId, Integer amount) {
-        ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
-        CreditTerms terms = terms();
-        BorrowerState borrower = borrower(ownerId, owner == null ? ownerId.toString() : owner.getGameProfile().name());
-        if (borrower.credits.size() >= terms.maxActive()) {
-            return result("\u0414\u043e\u0441\u0442\u0438\u0433\u043d\u0443\u0442 \u043b\u0438\u043c\u0438\u0442 \u0432 " + terms.maxActive() + " \u043e\u0434\u043d\u043e\u0432\u0440\u0435\u043c\u0435\u043d\u043d\u044b\u0445 \u043a\u0440\u0435\u0434\u0438\u0442\u0430.");
-        }
-        if (amount == null || amount <= 0 || amount > terms.maxPrincipal()) {
-            return result("\u0414\u043e\u043f\u0443\u0441\u0442\u0438\u043c\u0430\u044f \u0441\u0443\u043c\u043c\u0430: \u043e\u0442 1 \u0434\u043e " + terms.maxPrincipal() + " " + FALLBACK_COIN + ".");
-        }
-        PendingOffer existing = PENDING_OFFERS.get(ownerId);
-        if (existing != null && existing.amount() == amount) {
-            return result("The pending offer is unchanged. Reply briefly to the client's latest message without repeating the confirmation question.");
-        }
-        double fixedRatePercent = currentRatePercent();
-        PENDING_OFFERS.put(ownerId, new PendingOffer(amount, fixedRatePercent));
-        return result("Final confirmation for a credit of " + amount + " bitcoins at a fixed "
-                + formatPercent(fixedRatePercent) + "% hourly rate. State only the amount and rate, then ask once for confirmation.");
+    static boolean validPrincipal(Integer amount, int maximum) {
+        return amount != null && amount > 0 && amount <= maximum;
     }
+
+    static boolean hasActiveRepayment(UUID ownerId) {
+        return ownerId != null && REPAYMENTS.containsKey(ownerId);
+    }
+
     private static ActionResolution openCredit(MinecraftServer server, UUID ownerId, Integer amount) {
-        PendingOffer pending = PENDING_OFFERS.get(ownerId);
-        if (pending == null) {
-            return result("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u0443\u0436\u043d\u043e \u0441\u043e\u0433\u043b\u0430\u0441\u043e\u0432\u0430\u0442\u044c \u0441\u0443\u043c\u043c\u0443 \u0438 \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0432\u0430\u0448\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435.");
-        }
-        int confirmedAmount = amount == null ? pending.amount() : amount;
-        if (pending.amount() != confirmedAmount) {
-            return result("\u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435 \u043d\u0435 \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442 \u0441 \u0441\u043e\u0433\u043b\u0430\u0441\u043e\u0432\u0430\u043d\u043d\u043e\u0439 \u0441\u0443\u043c\u043c\u043e\u0439.");
+        CreditTerms terms = terms();
+        if (!validPrincipal(amount, terms.maxPrincipal())) {
+            return result("credit_not_issued; reason=invalid_amount; maximum=" + terms.maxPrincipal());
         }
         ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
         if (owner == null || ServerRaceSystem.getActiveAncientUkrCreditorId(ownerId) == null) {
-            return result("\u041e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435 \u0441\u0435\u0439\u0447\u0430\u0441 \u043d\u0435\u0432\u043e\u0437\u043c\u043e\u0436\u043d\u043e.");
+            return result("credit_not_issued; reason=client_or_creditor_unavailable");
         }
-        CreditTerms terms = terms();
         BorrowerState borrower = borrower(ownerId, owner.getGameProfile().name());
-        if (borrower.credits.size() >= terms.maxActive() || confirmedAmount <= 0 || confirmedAmount > terms.maxPrincipal()) {
-            PENDING_OFFERS.remove(ownerId);
-            return result("\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435 \u0441\u043e\u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044e\u0442 \u043b\u0438\u043c\u0438\u0442\u0430\u043c. \u0421\u043e\u0433\u043b\u0430\u0441\u0443\u0435\u043c \u0438\u0445 \u0437\u0430\u043d\u043e\u0432\u043e.");
+        if (borrower.credits.size() >= terms.maxActive()) {
+            return result("credit_not_issued; reason=active_credit_limit");
         }
         int number = nextCreditNumber(borrower, terms.maxActive());
-        if (number <= 0 || !queueLoanBitcoinPayout(owner, confirmedAmount)) {
-            return result("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u044b\u0434\u0430\u0442\u044c \u0431\u0438\u0442\u043a\u043e\u0438\u043d\u044b. \u041a\u0440\u0435\u0434\u0438\u0442 \u043d\u0435 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d.");
+        if (number <= 0 || !queueLoanBitcoinPayout(owner, amount)) {
+            return result("credit_not_issued; reason=payout_unavailable");
         }
-        borrower.credits.add(new Credit(number, confirmedAmount, BigDecimal.valueOf(confirmedAmount), pending.interestRatePercent()));
-        PENDING_OFFERS.remove(ownerId);
+        double rate = currentRatePercent();
+        borrower.credits.add(new Credit(number, amount, BigDecimal.valueOf(amount), rate));
         save(server);
         syncScoreboard(owner);
-        return result("\u041a\u0440\u0435\u0434\u0438\u0442 \u2116" + number + " \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d \u043d\u0430 " + confirmedAmount + " " + FALLBACK_COIN
-                + ". \u0411\u0438\u0442\u043a\u043e\u0438\u043d\u044b \u0432\u044b\u0434\u0430\u043d\u044b. \u0416\u0435\u043b\u0430\u0435\u0442\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0435\u0449\u0451 \u043e\u0434\u043d\u0443 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044e?");
+        return result("credit_issued; number=" + number + "; principal=" + amount
+                + "; fixedHourlyRate=" + formatPercent(rate) + "; payout=throwing_stacks_to_client");
     }
 
     private static ActionResolution startRepayment(MinecraftServer server, UUID ownerId,
@@ -460,47 +448,47 @@ public final class AncientUkrCreditSystem {
         List<Integer> numbers = new ArrayList<>();
         if (requestedNumbers != null) {
             for (Integer number : requestedNumbers) {
-                if (number != null && number > 0 && !numbers.contains(number)) numbers.add(number);
+                if (number == null || number <= 0) return result("reception_not_started; reason=invalid_credit_number");
+                if (!numbers.contains(number)) numbers.add(number);
             }
         }
-        if (numbers.isEmpty() && singleNumber != null && singleNumber > 0) numbers.add(singleNumber);
-        if (numbers.isEmpty()) {
-            List<Integer> activeNumbers = activeCreditNumbers(ownerId);
-            if (activeNumbers.size() == 1) numbers.add(activeNumbers.get(0));
-        }
+        if (numbers.isEmpty() && singleNumber != null) numbers.add(singleNumber);
+        if (numbers.isEmpty()) return result("reception_not_started; reason=missing_credit_selection");
         numbers.sort(Integer::compareTo);
-        if (numbers.isEmpty()) {
-            return result("No credit numbers were selected. Ask the client which credit or credits they want to repay.");
-        }
-        List<Credit> credits = new ArrayList<>();
         for (Integer number : numbers) {
-            Credit credit = findCredit(ownerId, number);
-            if (credit == null) {
-                return result("At least one selected credit does not exist. Ask the client to choose only existing credit numbers.");
+            if (findCredit(ownerId, number) == null) {
+                return result("reception_not_started; reason=unknown_credit; number=" + number);
             }
-            credits.add(credit);
         }
         ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
         if (owner == null || activeCreditorEntity(owner, ownerId) == null) {
-            return result("Repayment cannot be started right now.");
+            return result("reception_not_started; reason=client_or_creditor_unavailable");
+        }
+        RepaymentSession existing = REPAYMENTS.get(ownerId);
+        if (existing != null && existing.creditNumbers.equals(numbers)) {
+            return result("reception_already_active; credits=" + numbers + "; accepted=" + existing.totalPaid);
         }
         REPAYMENTS.put(ownerId, new RepaymentSession(List.copyOf(numbers)));
-        return result("Repayment has started for credits " + numbers
-                + ". Briefly ask the client to give you bitcoins. Do not explain distribution unless asked.");
+        return result("reception_started; credits=" + numbers + "; accepted=0; awaiting_physical_bitcoins=true");
     }
 
     private static ActionResolution continueRepayment(MinecraftServer server, UUID ownerId) {
         RepaymentSession session = REPAYMENTS.get(ownerId);
-        if (session == null) return result("\u0410\u043a\u0442\u0438\u0432\u043d\u043e\u0433\u043e \u043f\u043e\u0433\u0430\u0448\u0435\u043d\u0438\u044f \u043d\u0435\u0442. \u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u043d\u043e\u043c\u0435\u0440 \u043a\u0440\u0435\u0434\u0438\u0442\u0430.");
-
-        return result("\u0425\u043e\u0440\u043e\u0448\u043e, \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u044e \u043f\u0440\u0438\u043d\u0438\u043c\u0430\u0442\u044c \u0431\u0438\u0442\u043a\u043e\u0438\u043d\u044b.");
+        return session == null ? result("reception_inactive")
+                : result("reception_continues; credits=" + session.creditNumbers + "; accepted=" + session.totalPaid);
     }
 
     private static ActionResolution stopRepayment(UUID ownerId) {
-        REPAYMENTS.remove(ownerId);
-        return result("\u041f\u0440\u0438\u0451\u043c \u043f\u043b\u0430\u0442\u0435\u0436\u0435\u0439 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d. \u0416\u0435\u043b\u0430\u0435\u0442\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u0434\u0440\u0443\u0433\u0443\u044e \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044e?");
+        RepaymentSession session = REPAYMENTS.remove(ownerId);
+        if (session == null) return result("reception_already_inactive; debts_unchanged=true");
+        return result("reception_stopped; credits=" + session.creditNumbers + "; accepted=" + session.totalPaid
+                + "; remaining_debts_in_FACTS=true; no_debt_forgiven=true");
     }
 
+    private static ActionResolution finishConversation(UUID ownerId) {
+        ActionResolution reception = stopRepayment(ownerId);
+        return new ActionResolution("conversation_finished; " + reception.event(), true);
+    }
     private static void tickRepayments(MinecraftServer server) {
         if (REPAYMENTS.isEmpty()) return;
         Iterator<Map.Entry<UUID, RepaymentSession>> iterator = REPAYMENTS.entrySet().iterator();
@@ -518,6 +506,8 @@ public final class AncientUkrCreditSystem {
             int accepted = collectNearbyBitcoins(creditor, owner, credits);
             if (accepted > 0) {
                 session.totalPaid += accepted;
+                Lg2.LOGGER.info("Ancient Ukr creditor accepted {} bitcoins from {} for credits {}",
+                        accepted, owner.getGameProfile().name(), session.creditNumbers);
                 BorrowerState borrower = store.borrowers.get(ownerId.toString());
                 if (borrower != null) {
                     borrower.credits.removeIf(credit -> credit.debt.signum() <= 0);
@@ -530,8 +520,8 @@ public final class AncientUkrCreditSystem {
             if (remainingCredits.isEmpty()) {
                 iterator.remove();
                 AncientUkrCreditorChatSystem.narrateEvent(server, ownerId,
-                        "All selected credits " + session.creditNumbers
-                                + " have been fully repaid. Ask whether the client needs another available service.");
+                        "selected_credits_fully_repaid; credits=" + session.creditNumbers
+                                + "; accepted=" + session.totalPaid + "; reception_stopped=true");
                 continue;
             }
 
@@ -608,6 +598,164 @@ public final class AncientUkrCreditSystem {
             }
         }
     }
+
+    static int confiscateAllBitcoinsAndRepay(MinecraftServer server, ServerPlayer owner) {
+        if (server == null || owner == null) return 0;
+        int confiscated = 0;
+        Inventory inventory = owner.getInventory();
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+            confiscated += removeAllBitcoins(inventory.getItem(slot), 0);
+            if (inventory.getItem(slot).isEmpty()) inventory.setItem(slot, ItemStack.EMPTY);
+        }
+        ItemStack carried = owner.containerMenu == null ? ItemStack.EMPTY : owner.containerMenu.getCarried();
+        if (!carried.isEmpty()) {
+            confiscated += removeAllBitcoins(carried, 0);
+            if (carried.isEmpty()) owner.containerMenu.setCarried(ItemStack.EMPTY);
+        }
+        inventory.setChanged();
+        if (owner.containerMenu != null) owner.containerMenu.broadcastChanges();
+
+        BorrowerState borrower = store.borrowers.get(owner.getUUID().toString());
+        if (borrower != null && confiscated > 0) {
+            List<Credit> active = borrower.credits.stream()
+                    .filter(credit -> credit != null && credit.debt.signum() > 0)
+                    .sorted(Comparator.comparingInt(credit -> credit.number))
+                    .toList();
+            distributePaymentEvenly(active, BigDecimal.valueOf(confiscated));
+            borrower.credits.removeIf(credit -> credit.debt.signum() <= 0);
+            if (!hasCollectorThresholdDebt(borrower)) borrower.nextCollectorVisitEpochMillis = 0L;
+            removeEmptyBorrower(owner.getUUID(), borrower);
+            save(server);
+            syncScoreboard(owner);
+        }
+        return confiscated;
+    }
+
+    private static int removeAllBitcoins(ItemStack stack, int depth) {
+        if (stack == null || stack.isEmpty()) return 0;
+        if (stack.is(ModItems.BITCOIN)) {
+            int removed = stack.getCount();
+            stack.setCount(0);
+            return removed;
+        }
+        if (depth >= BITCOIN_CONTAINER_SCAN_MAX_DEPTH) return 0;
+
+        int removed = 0;
+        ItemContainerContents container = shulkerContents(stack);
+        if (container != null) {
+            List<ItemStack> contents = container.stream().map(ItemStack::copy).toList();
+            List<ItemStack> updated = new ArrayList<>(contents);
+            for (int index = 0; index < updated.size(); index++) {
+                removed += removeAllBitcoins(updated.get(index), depth + 1);
+                if (updated.get(index).isEmpty()) updated.set(index, ItemStack.EMPTY);
+            }
+            if (removed > 0) stack.set(DataComponents.CONTAINER, ItemContainerContents.fromItems(updated));
+        }
+
+        BundleContents bundle = bundleContents(stack);
+        if (bundle != null) {
+            List<ItemStack> updated = new ArrayList<>();
+            for (ItemStack item : bundle.itemsCopy()) updated.add(item.copy());
+            int bundleRemoved = 0;
+            for (ItemStack item : updated) bundleRemoved += removeAllBitcoins(item, depth + 1);
+            if (bundleRemoved > 0) {
+                BundleContents.Mutable mutable = new BundleContents.Mutable(bundle);
+                mutable.clearItems();
+                for (ItemStack item : updated) if (!item.isEmpty()) mutable.tryInsert(item);
+                stack.set(DataComponents.BUNDLE_CONTENTS, mutable.toImmutable());
+                removed += bundleRemoved;
+            }
+        }
+        return removed;
+    }
+
+    private static ItemContainerContents shulkerContents(ItemStack stack) {
+        if (!(stack.getItem() instanceof BlockItem blockItem)
+                || !(blockItem.getBlock() instanceof ShulkerBoxBlock)) return null;
+        ItemContainerContents contents = stack.get(DataComponents.CONTAINER);
+        return contents == null || contents == ItemContainerContents.EMPTY ? null : contents;
+    }
+
+    private static BundleContents bundleContents(ItemStack stack) {
+        BundleContents contents = stack.get(DataComponents.BUNDLE_CONTENTS);
+        return contents == null || contents.isEmpty() ? null : contents;
+    }
+
+    private static void tickCollectorVisits(MinecraftServer server) {
+        long now = System.currentTimeMillis();
+        CollectorTerms terms = collectorTerms();
+        boolean changed = false;
+        for (ServerPlayer owner : server.getPlayerList().getPlayers()) {
+            BorrowerState borrower = store.borrowers.get(owner.getUUID().toString());
+            if (borrower == null || !isAncientUkr(owner) || !hasCollectorThresholdDebt(borrower)) {
+                if (borrower != null && borrower.nextCollectorVisitEpochMillis != 0L) {
+                    borrower.nextCollectorVisitEpochMillis = 0L;
+                    changed = true;
+                }
+                continue;
+            }
+            if (borrower.nextCollectorVisitEpochMillis <= 0L
+                    || collectorVisitScheduledTooLate(now, borrower.nextCollectorVisitEpochMillis, terms.maxMinutes())) {
+                borrower.nextCollectorVisitEpochMillis = now + randomCollectorDelayMillis(terms);
+                changed = true;
+                continue;
+            }
+            if (now < borrower.nextCollectorVisitEpochMillis) continue;
+            int activeCredits = (int) borrower.credits.stream()
+                    .filter(credit -> credit != null && credit.debt.signum() > 0)
+                    .count();
+            int spawned = AncientUkrCollectorSystem.spawnWave(owner, collectorWaveSize(activeCredits));
+            borrower.nextCollectorVisitEpochMillis = now + (spawned > 0
+                    ? randomCollectorDelayMillis(terms) : COLLECTOR_SPAWN_RETRY_MILLIS);
+            changed = true;
+        }
+        if (changed) save(server);
+    }
+
+    static int collectorWaveSize(int activeCredits) {
+        return Math.max(0, activeCredits) * COLLECTORS_PER_ACTIVE_CREDIT;
+    }
+
+    private static boolean hasCollectorThresholdDebt(BorrowerState borrower) {
+        return borrower.credits.stream().anyMatch(credit -> credit != null
+                && collectorThresholdExceeded(credit.principal, credit.debt));
+    }
+
+    static boolean collectorThresholdExceeded(int principal, BigDecimal debt) {
+        return principal > 0 && debt != null && debt.compareTo(BigDecimal.valueOf(principal)) > 0;
+    }
+
+    private static boolean isAncientUkr(ServerPlayer player) {
+        return ServerRaceSystem.getRace(player)
+                .map(race -> race.id != null && RACE_ID.equalsIgnoreCase(race.id.trim()))
+                .orElse(false);
+    }
+
+    static boolean collectorVisitScheduledTooLate(long now, long scheduled, double maxMinutes) {
+        long maxDelayMillis = Math.max(1L, (long) Math.ceil(maxMinutes * 60_000.0D));
+        return scheduled > now && scheduled - now > maxDelayMillis;
+    }
+
+    private static long randomCollectorDelayMillis(CollectorTerms terms) {
+        double minutes = ThreadLocalRandom.current().nextDouble(terms.minMinutes(), Math.nextUp(terms.maxMinutes()));
+        return Math.max(1L, Math.round(minutes * 60_000.0D));
+    }
+
+    private static CollectorTerms collectorTerms() {
+        RaceAbilityConfig config = null;
+        for (PlayerRaceConfig race : RaceConfig.get().races) {
+            if (race != null && race.id != null && RACE_ID.equalsIgnoreCase(race.id.trim())) {
+                config = race.shnyaga;
+                break;
+            }
+        }
+        double min = config == null || config.ancientUkrCollectorMinIntervalMinutes <= 0.0D
+                ? DEFAULT_COLLECTOR_MIN_INTERVAL_MINUTES : config.ancientUkrCollectorMinIntervalMinutes;
+        double max = config == null || config.ancientUkrCollectorMaxIntervalMinutes <= 0.0D
+                ? DEFAULT_COLLECTOR_MAX_INTERVAL_MINUTES : config.ancientUkrCollectorMaxIntervalMinutes;
+        return new CollectorTerms(Math.min(min, max), Math.max(min, max));
+    }
+
     private static boolean queueLoanBitcoinPayout(ServerPlayer owner, int amount) {
         if (owner == null || amount <= 0 || !(owner.level() instanceof ServerLevel)) return false;
         Entity creditor = activeCreditorEntity(owner, owner.getUUID());
@@ -954,7 +1102,7 @@ public final class AncientUkrCreditSystem {
                                double maxRate, double maxDebtMultiplier) {
     }
 
-    private record PendingOffer(int amount, double interestRatePercent) {
+    private record CollectorTerms(double minMinutes, double maxMinutes) {
     }
 
     private static final class RepaymentSession {
@@ -986,6 +1134,7 @@ public final class AncientUkrCreditSystem {
         private String nickname = "";
         private BigDecimal pendingInterestNotification = BigDecimal.ZERO;
         private List<Credit> credits = new ArrayList<>();
+        private long nextCollectorVisitEpochMillis;
     }
 
     private static final class Credit {
