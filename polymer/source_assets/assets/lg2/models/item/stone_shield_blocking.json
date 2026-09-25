@@ -1,7 +1,0 @@
-﻿{
-    "parent":  "lg2:item/mark_shield_blocking_base",
-    "textures":  {
-                     "shield":  "lg2:item/stone_shield",
-                     "particle":  "lg2:item/stone_shield"
-                 }
-}

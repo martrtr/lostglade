@@ -1,6 +1,0 @@
-{
-  "parent": "minecraft:block/cube_all",
-  "textures": {
-    "all": "lg2:block/deepslate_bitcoin_ore"
-  }
-}

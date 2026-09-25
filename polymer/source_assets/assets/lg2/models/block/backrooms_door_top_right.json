@@ -1,7 +1,0 @@
-﻿{
-    "parent":  "minecraft:block/door_top_right",
-    "textures":  {
-                     "bottom":  "lg2:block/backrooms_door_bottom",
-                     "top":  "lg2:block/backrooms_door_top"
-                 }
-}

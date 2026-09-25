@@ -1,7 +1,0 @@
-{
-  "parent": "minecraft:item/generated",
-  "textures": {
-    "layer0": "lg2:item/stability_potion_overlay",
-    "layer1": "minecraft:item/potion"
-  }
-}

@@ -1,8 +1,0 @@
-{
-  "parent": "minecraft:block/cube_bottom_top",
-  "textures": {
-    "top": "lg2:block/backrooms_top",
-    "bottom": "lg2:block/backrooms_bottom",
-    "side": "lg2:block/backrooms_side_1"
-  }
-}
