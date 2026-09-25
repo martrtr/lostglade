@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public final class RendererBotProcessSystem {
 	private static final Object LOCK = new Object();
@@ -133,6 +134,12 @@ public final class RendererBotProcessSystem {
 		terminateStaleBotProcesses(modDir, botName.trim(), serverAddress);
 		List<String> command = new ArrayList<>();
 		command.add(gradlew.toString());
+		// The renderer inherits its OpenGL loader paths from this process.  A
+		// reused Gradle daemon retains the environment of the first build that
+		// started it, which made renderer startup depend on unrelated earlier
+		// commands (notably on Nix/Xwayland).  Give the bot an isolated launcher
+		// so the graphics environment is deterministic.
+		command.add("--no-daemon");
 		command.add("--console=plain");
 		command.add("-Dlg2.rendererBotName=" + botName.trim());
 		command.add("-Dlg2.rendererBotServer=" + serverAddress);
@@ -152,6 +159,7 @@ public final class RendererBotProcessSystem {
 		builder.redirectOutput(ProcessBuilder.Redirect.appendTo(logFile.toFile()));
 
 		Map<String, String> environment = builder.environment();
+		configureOpenGlLibraryPath(environment);
 		if (headlessRequested) {
 			environment.remove("DISPLAY");
 			environment.remove("WAYLAND_DISPLAY");
@@ -175,6 +183,114 @@ public final class RendererBotProcessSystem {
 			);
 		} catch (IOException e) {
 			Lg2.LOGGER.error("Failed to start renderer bot process", e);
+		}
+	}
+
+	/**
+	 * GLFW dynamically opens libGLX/libEGL after the JVM has started.  On Nix
+	 * those libraries live outside the JVM's default loader paths even though
+	 * the active Xwayland display is fully OpenGL-capable.  Add only existing
+	 * system driver directories, retaining the inherited path for conventional
+	 * Linux and VPS installations.
+	 */
+	private static void configureOpenGlLibraryPath(Map<String, String> environment) {
+		List<Path> candidates = new ArrayList<>();
+		Path activeXServerGlvnd = activeXServerGlvndDirectory();
+		if (activeXServerGlvnd != null) {
+			candidates.add(activeXServerGlvnd);
+		}
+		for (String rawPath : List.of(
+				"/run/opengl-driver/lib",
+				"/usr/lib/x86_64-linux-gnu",
+				"/usr/lib64",
+				"/usr/lib"
+		)) {
+			Path path = Path.of(rawPath);
+			if (Files.isDirectory(path)) {
+				candidates.add(path);
+			}
+		}
+
+		Path nixStore = Path.of("/nix/store");
+		if (Files.isDirectory(nixStore)) {
+			try (Stream<Path> entries = Files.list(nixStore)) {
+				entries
+						.filter(path -> path.getFileName().toString().contains("-libglvnd-"))
+						.map(path -> path.resolve("lib"))
+						.filter(path -> Files.isRegularFile(path.resolve("libGLX.so.0"))
+								&& Files.isRegularFile(path.resolve("libEGL.so.1")))
+						.sorted()
+						.findFirst()
+						.ifPresent(candidates::add);
+			} catch (IOException ignored) {
+				// Native graphics setup is best-effort; normal loader paths remain.
+			}
+		}
+
+		if (candidates.isEmpty()) {
+			return;
+		}
+		String prefix = candidates.stream()
+				.map(Path::toString)
+				.distinct()
+				.collect(Collectors.joining(java.io.File.pathSeparator));
+		String inherited = environment.get("LD_LIBRARY_PATH");
+		environment.put("LD_LIBRARY_PATH", isBlank(inherited) ? prefix : prefix + java.io.File.pathSeparator + inherited);
+	}
+
+	/**
+	 * Nix may have several libglvnd builds in its immutable store.  The one
+	 * linked by the active Xwayland/Xorg process is the compatible one for the
+	 * current display; choosing an arbitrary store entry can make GLFW report
+	 * that GLX is unavailable.  /proc is Linux-only and optional, hence all
+	 * failures simply fall back to the usual library-directory candidates.
+	 */
+	private static Path activeXServerGlvndDirectory() {
+		for (ProcessHandle handle : ProcessHandle.allProcesses().toList()) {
+			String command = handle.info().command().orElse("");
+			String lowerCommand = command.toLowerCase(java.util.Locale.ROOT);
+			if (!lowerCommand.contains("xwayland") && !lowerCommand.endsWith("/xorg")) {
+				continue;
+			}
+			Path maps = Path.of("/proc", Long.toString(handle.pid()), "maps");
+			try (Stream<String> lines = Files.lines(maps)) {
+				Optional<Path> directory = lines
+						.map(RendererBotProcessSystem::mappedLibraryPath)
+						.filter(Optional::isPresent)
+						.map(Optional::get)
+						.filter(path -> {
+							String name = path.getFileName().toString();
+							return name.startsWith("libGLX.so") || name.startsWith("libGL.so");
+						})
+						.map(Path::getParent)
+						.filter(path -> path != null && Files.isRegularFile(path.resolve("libEGL.so.1")))
+						.findFirst();
+				if (directory.isPresent()) {
+					return directory.get();
+				}
+			} catch (IOException | SecurityException ignored) {
+				// Try the next display server or the generic fallback below.
+			}
+		}
+		return null;
+	}
+
+	private static Optional<Path> mappedLibraryPath(String mapsLine) {
+		if (mapsLine == null || mapsLine.isBlank()) {
+			return Optional.empty();
+		}
+		int pathStart = mapsLine.indexOf('/');
+		if (pathStart < 0) {
+			return Optional.empty();
+		}
+		String rawPath = mapsLine.substring(pathStart).replace(" (deleted)", "").trim();
+		if (rawPath.isBlank()) {
+			return Optional.empty();
+		}
+		try {
+			return Optional.of(Path.of(rawPath));
+		} catch (RuntimeException ignored) {
+			return Optional.empty();
 		}
 	}
 

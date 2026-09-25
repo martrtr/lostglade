@@ -70,9 +70,7 @@ public final class RendererBotClientCapture {
 			1,
 			6
 	);
-	private static final long MAP_TILE_TIMEOUT_MS = Long.getLong("lg2.rendererBotMapTileTimeoutMs", 60_000L);
 	private static final long ITEM_ICON_TIMEOUT_MS = Long.getLong("lg2.rendererBotItemIconTimeoutMs", 30_000L);
-	private static final int MAP_TILE_WARMUP_FRAMES = Math.max(0, Integer.getInteger("lg2.rendererBotMapTileWarmupFrames", 8));
 	private static final int ITEM_ICON_ALPHA_THRESHOLD = 6;
 	private static final boolean LIVE_STREAM_DITHERING = Boolean.getBoolean("lg2.rendererBotLiveStreamDithering");
 	private static final int LIVE_STREAM_PARALLEL_PIXELS_THRESHOLD = Math.max(65_536, Integer.getInteger("lg2.rendererBotLiveParallelPixelsThreshold", 131_072));
@@ -85,8 +83,6 @@ public final class RendererBotClientCapture {
 
 	private static final Map<UUID, PendingCapture> PENDING_CAPTURES = new HashMap<>();
 	private static final Map<UUID, LiveStreamSession> LIVE_STREAM_SESSIONS = new HashMap<>();
-	private static final Map<UUID, PendingMapTile> PENDING_MAP_TILES = new HashMap<>();
-	private static long nextMapTileSequence;
 	private static final Map<UUID, PendingItemIcon> PENDING_ITEM_ICONS = new HashMap<>();
 	private static volatile CapturedFrame latestFrame;
 	private static TextureTarget itemIconRenderTarget;
@@ -119,10 +115,6 @@ public final class RendererBotClientCapture {
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotLiveStreamStopS2CPayload.TYPE,
 				(payload, context) -> context.client().execute(() -> clearLiveStreamSession(payload.streamId()))
-		);
-		ClientPlayNetworking.registerGlobalReceiver(
-				RendererBotPayloads.RendererBotMapTileRequestS2CPayload.TYPE,
-				(payload, context) -> context.client().execute(() -> beginMapTile(payload))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotItemIconRequestS2CPayload.TYPE,
@@ -202,15 +194,6 @@ public final class RendererBotClientCapture {
 		}
 	}
 
-	private static void beginMapTile(RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload) {
-		if (payload == null || payload.requestId() == null) {
-			return;
-		}
-		synchronized (LOCK) {
-			PENDING_MAP_TILES.put(payload.requestId(), new PendingMapTile(payload, System.currentTimeMillis(), nextMapTileSequence++));
-		}
-	}
-
 	private static void beginItemIcon(RendererBotPayloads.RendererBotItemIconRequestS2CPayload payload) {
 		if (payload == null || payload.requestId() == null || payload.stack() == null || payload.stack().isEmpty()) {
 			return;
@@ -223,12 +206,10 @@ public final class RendererBotClientCapture {
 	private static void onClientTick(Minecraft client) {
 		List<PendingCapture> captures;
 		List<LiveStreamSession> liveStreams;
-		List<PendingMapTile> mapTiles;
 		List<PendingItemIcon> itemIcons;
 		synchronized (LOCK) {
 			captures = new ArrayList<>(PENDING_CAPTURES.values());
 			liveStreams = new ArrayList<>(LIVE_STREAM_SESSIONS.values());
-			mapTiles = new ArrayList<>(PENDING_MAP_TILES.values());
 			itemIcons = new ArrayList<>(PENDING_ITEM_ICONS.values());
 		}
 		long now = System.currentTimeMillis();
@@ -263,15 +244,6 @@ public final class RendererBotClientCapture {
 				clearLiveStreamSession(liveStream.payload().streamId());
 			}
 		}
-		for (PendingMapTile mapTile : mapTiles) {
-			if (mapTile == null || mapTile.rendering()) {
-				continue;
-			}
-			if (!handVideoActive && now - mapTile.requestStartedAt() >= MAP_TILE_TIMEOUT_MS) {
-				sendMapTileFailure(mapTile.payload(), "Renderer bot map tile did not become ready in time");
-				clearPendingMapTile(mapTile.payload().requestId());
-			}
-		}
 		for (PendingItemIcon itemIcon : itemIcons) {
 			if (itemIcon == null || itemIcon.rendering()) {
 				continue;
@@ -282,13 +254,9 @@ public final class RendererBotClientCapture {
 			}
 		}
 		// A camera photo/video owns the off-screen target until its final readback.
-		// Map tiles, item icons and tiny monitor streams may otherwise render into
-		// the same target later in this tick and invalidate that readback.
+		// Item icons and tiny monitor streams must not invalidate that readback.
 		boolean cameraCapturePending = hasPendingCameraCapture();
-		// A live stream owns the same GPU budget as a still camera. In-flight
-		// readbacks used to make dispatchReadyRenders return false for a few
-		// ticks, which accidentally let map tiles start their own world renders
-		// between live frames and tank the volunteer's FPS.
+		// A live stream owns the same GPU budget as a still camera.
 		boolean cameraWorkActive = cameraCapturePending || hasActiveLiveStream();
 		if (!cameraWorkActive && !handVideoActive) {
 			dispatchReadyItemIconRender(client);
@@ -297,9 +265,6 @@ public final class RendererBotClientCapture {
 		// the same render target, so postponing the photo for these few recording
 		// ticks is safer than allowing two sequential renders to race its readback.
 		boolean renderedCameraFrame = !handVideoActive && dispatchReadyRenders(client, System.nanoTime());
-		if (!cameraWorkActive && !handVideoActive && !renderedCameraFrame) {
-			dispatchReadyMapTileRender(client);
-		}
 	}
 
 	private static boolean hasPendingCameraCapture() {
@@ -410,133 +375,6 @@ public final class RendererBotClientCapture {
 		} catch (Throwable throwable) {
 			sendItemIconFailure(payload, throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName());
 			clearPendingItemIcon(payload.requestId());
-		}
-	}
-
-	private static void dispatchReadyMapTileRender(Minecraft client) {
-		if (client == null || client.level == null || RendererBotOffscreenWorldRenderer.isOffscreenRenderActive()) {
-			return;
-		}
-		PendingMapTile selected = null;
-		synchronized (LOCK) {
-			for (PendingMapTile candidate : PENDING_MAP_TILES.values()) {
-				if (candidate == null || candidate.rendering()) {
-					continue;
-				}
-				RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload = candidate.payload();
-				RendererBotTopDownMapRenderer.TileRequest request = mapTileRenderRequest(payload);
-				if (!RendererBotTopDownMapRenderer.hasRequiredChunks(client, request)) {
-					continue;
-				}
-				if (candidate.remainingWarmupFrames() <= 0
-						&& !RendererBotTopDownMapRenderer.isTerrainReadyForCapture(client, request)) {
-					continue;
-				}
-				if (selected == null
-						|| payload.priorityScore() > selected.payload().priorityScore()
-						|| (payload.priorityScore() == selected.payload().priorityScore()
-								&& (candidate.requestStartedAt() < selected.requestStartedAt()
-										|| (candidate.requestStartedAt() == selected.requestStartedAt() && candidate.sequence() < selected.sequence())))) {
-					selected = candidate;
-				}
-			}
-			if (selected == null) {
-				return;
-			}
-			selected.markRendering();
-		}
-		if (selected == null) {
-			return;
-		}
-		dispatchTopDownMapTile(client, selected);
-	}
-
-	private static void dispatchTopDownMapTile(Minecraft client, PendingMapTile mapTile) {
-		RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload = mapTile.payload();
-		RendererBotTopDownMapRenderer.TileRequest request = mapTileRenderRequest(payload);
-		try {
-			if (mapTile.remainingWarmupFrames() > 0) {
-				boolean warmed = RendererBotTopDownMapRenderer.renderToTarget(client, request, ignored -> {
-				});
-				if (warmed) {
-					mapTile.decrementWarmupFrames();
-				}
-				clearPendingMapTileRendering(payload.requestId());
-				return;
-			}
-			boolean rendered = RendererBotTopDownMapRenderer.renderToTarget(client, request, renderTarget -> {
-				try {
-					CompletableFuture<MapTileFrame> pixelsFuture = takeScreenshotFuture(renderTarget).thenApplyAsync(image -> {
-						try (image) {
-							int[] sourcePixels = image.makePixelArray();
-							if (image.getWidth() == payload.tileSize() && image.getHeight() == payload.tileSize()) {
-								return encodeExactRgbFrame(sourcePixels, image.getWidth(), image.getHeight());
-							}
-							return encodeNearestRgbFrame(sourcePixels, image.getWidth(), image.getHeight(), payload.tileSize(), payload.tileSize());
-						}
-					}, CAPTURE_EXECUTOR).thenCombine(takeDepthCoverageFuture(renderTarget), MapTileFrame::new);
-					pixelsFuture.whenComplete((frame, throwable) -> client.execute(() -> {
-						if (throwable != null) {
-							sendMapTileFailure(payload, throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName());
-							clearPendingMapTile(payload.requestId());
-							return;
-						}
-						if (frame == null || frame.pixels() == null) {
-							sendMapTileFailure(payload, "Renderer bot map tile did not produce pixels");
-							clearPendingMapTile(payload.requestId());
-							return;
-						}
-						// Do not blacklist a colour: a flat block or an ItemDisplay can
-						// legitimately fill the entire tile.  The depth buffer instead
-						// tells us whether the rendered world contributed any geometry.
-						// With a non-air terrain surface known from the synchronized
-						// chunks, an all-one-colour frame without depth is necessarily
-						// the sky/empty-render race, not a valid map image.
-						double expectedGroundCoverage = RendererBotTopDownMapRenderer.expectedGroundCoverage(client, request);
-						boolean missingAllTerrain = isUniformRgbFrame(frame.pixels())
-								&& frame.depthCoverage().readable()
-								&& !frame.depthCoverage().hasWorldDepth()
-								&& RendererBotTopDownMapRenderer.expectsTerrain(client, request);
-						// Do not accept a frame which is only partly empty either.  This is
-						// most visible beneath transparent foliage: its section may be
-						// drawn while a lower terrain section is still rebuilding, yielding
-						// blue rectangular holes instead of the ground below.
-						boolean missingPartialTerrain = frame.depthCoverage().readable()
-								&& expectedGroundCoverage >= 0.25D
-								&& frame.depthCoverage().worldDepthCoverage() + 0.03D < expectedGroundCoverage;
-						if (missingAllTerrain || missingPartialTerrain) {
-							if (mapTile.restartAfterMissingTerrain()) {
-								RendererBotTopDownMapRenderer.rebuildTerrain(client, request);
-								clearPendingMapTileRendering(payload.requestId());
-								return;
-							}
-							sendMapTileFailure(payload, "Renderer bot captured incomplete map terrain");
-							clearPendingMapTile(payload.requestId());
-							return;
-						}
-						ClientPlayNetworking.send(new RendererBotPayloads.RendererBotMapTileC2SPayload(
-								payload.requestId(),
-								payload.lod(),
-								payload.tileX(),
-								payload.tileZ(),
-								System.nanoTime(),
-								frame.pixels()
-						));
-						clearPendingMapTile(payload.requestId());
-					}));
-				} catch (Throwable throwable) {
-					client.execute(() -> {
-						sendMapTileFailure(payload, throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName());
-						clearPendingMapTile(payload.requestId());
-					});
-				}
-			});
-			if (!rendered) {
-				clearPendingMapTileRendering(payload.requestId());
-			}
-		} catch (Throwable throwable) {
-			sendMapTileFailure(payload, throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getSimpleName());
-			clearPendingMapTile(payload.requestId());
 		}
 	}
 
@@ -830,87 +668,6 @@ public final class RendererBotClientCapture {
 			future.completeExceptionally(throwable);
 		}
 		return future;
-	}
-
-	private static CompletableFuture<DepthCoverage> takeDepthCoverageFuture(RenderTarget renderTarget) {
-		CompletableFuture<DepthCoverage> future = new CompletableFuture<>();
-		if (renderTarget == null || renderTarget.getDepthTexture() == null || renderTarget.width <= 0 || renderTarget.height <= 0) {
-			future.complete(DepthCoverage.unavailable());
-			return future;
-		}
-		GpuTexture depthTexture = renderTarget.getDepthTexture();
-		long byteSize = (long) renderTarget.width * renderTarget.height * Math.max(1, depthTexture.getFormat().pixelSize());
-		if (byteSize <= 0L) {
-			future.complete(DepthCoverage.unavailable());
-			return future;
-		}
-		GpuBuffer buffer = null;
-		try {
-			buffer = RenderSystem.getDevice().createBuffer(
-					() -> "lg2 map tile depth readback",
-					GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_COPY_DST,
-					byteSize
-			);
-			GpuBuffer readbackBuffer = buffer;
-			CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-			encoder.copyTextureToBuffer(depthTexture, readbackBuffer, 0L, () -> {
-				try (GpuBuffer.MappedView mapped = encoder.mapBuffer(readbackBuffer, true, false)) {
-					future.complete(analyzeDepthCoverage(mapped.data()));
-				} catch (Throwable throwable) {
-					// Some GPU backends can render a depth attachment but cannot copy it
-					// to CPU memory.  Keep the map usable there; section-readiness still
-					// protects the normal path, just without this extra confirmation.
-					future.complete(DepthCoverage.unavailable());
-				} finally {
-					readbackBuffer.close();
-				}
-			}, 0);
-		} catch (Throwable throwable) {
-			if (buffer != null) {
-				buffer.close();
-			}
-			future.complete(DepthCoverage.unavailable());
-		}
-		return future;
-	}
-
-	private static boolean hasWrittenDepth(ByteBuffer data) {
-		return analyzeDepthCoverage(data).hasWorldDepth();
-	}
-
-	private static DepthCoverage analyzeDepthCoverage(ByteBuffer data) {
-		if (data == null) {
-			return DepthCoverage.unavailable();
-		}
-		int pixels = data.capacity() / Integer.BYTES;
-		if (pixels <= 0) {
-			return DepthCoverage.unavailable();
-		}
-		int worldPixels = 0;
-		for (int index = 0; index < pixels; index++) {
-			int depthBits = data.getInt(index * Integer.BYTES);
-			// The renderer clears DEPTH32 to 1.0f.  Accept both byte orders because
-			// different GPU backends expose their mapped readback buffer differently.
-			if (depthBits != 0x3F800000 && depthBits != 0x0000803F) {
-				worldPixels++;
-			}
-		}
-		return new DepthCoverage(worldPixels > 0, true, worldPixels, pixels);
-	}
-
-	private static boolean isUniformRgbFrame(byte[] pixels) {
-		if (pixels == null || pixels.length < 3) {
-			return false;
-		}
-		byte red = pixels[0];
-		byte green = pixels[1];
-		byte blue = pixels[2];
-		for (int offset = 3; offset + 2 < pixels.length; offset += 3) {
-			if (pixels[offset] != red || pixels[offset + 1] != green || pixels[offset + 2] != blue) {
-				return false;
-			}
-		}
-		return true;
 	}
 
 	private static TextureTarget renderItemIconToTarget(Minecraft client, ItemStack stack, int requestedIconSize, int clearColor) {
@@ -1406,16 +1163,6 @@ public final class RendererBotClientCapture {
 		}
 	}
 
-	private static void clearPendingMapTile(UUID requestId) {
-		synchronized (LOCK) {
-			if (requestId == null) {
-				PENDING_MAP_TILES.clear();
-				return;
-			}
-			PENDING_MAP_TILES.remove(requestId);
-		}
-	}
-
 	private static void clearPendingItemIcon(UUID requestId) {
 		synchronized (LOCK) {
 			if (requestId == null) {
@@ -1423,15 +1170,6 @@ public final class RendererBotClientCapture {
 				return;
 			}
 			PENDING_ITEM_ICONS.remove(requestId);
-		}
-	}
-
-	private static void clearPendingMapTileRendering(UUID requestId) {
-		synchronized (LOCK) {
-			PendingMapTile pending = PENDING_MAP_TILES.get(requestId);
-			if (pending != null) {
-				pending.clearRendering();
-			}
 		}
 	}
 
@@ -1450,7 +1188,6 @@ public final class RendererBotClientCapture {
 		synchronized (LOCK) {
 			PENDING_CAPTURES.clear();
 			LIVE_STREAM_SESSIONS.clear();
-			PENDING_MAP_TILES.clear();
 			PENDING_ITEM_ICONS.clear();
 			latestFrame = null;
 		}
@@ -1466,14 +1203,6 @@ public final class RendererBotClientCapture {
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotCaptureFailureC2SPayload(
 				payload.requestId(),
 				message == null || message.isBlank() ? "Renderer bot capture failed" : message
-		));
-	}
-
-	private static void sendMapTileFailure(RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload, String message) {
-		Lg2.LOGGER.warn("Renderer bot failing map tile {} lod {} {},{}: {}", payload.requestId(), payload.lod(), payload.tileX(), payload.tileZ(), message);
-		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotMapTileFailureC2SPayload(
-				payload.requestId(),
-				message == null || message.isBlank() ? "Renderer bot map tile failed" : message
 		));
 	}
 
@@ -1524,9 +1253,6 @@ public final class RendererBotClientCapture {
 				renderWidth,
 				renderHeight,
 				false,
-				false,
-				0.0D,
-				0.0D,
 				0.0F,
 				false
 		);
@@ -1550,96 +1276,9 @@ public final class RendererBotClientCapture {
 				renderWidth,
 				renderHeight,
 				pose != null,
-				false,
-				0.0D,
-				0.0D,
 				pose == null ? 0.0F : pose.cameraBankRadians(),
 				payload.hideCameraCollisionBlock()
 		);
-	}
-
-	private static RendererBotTopDownMapRenderer.TileRequest mapTileRenderRequest(RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload) {
-		return new RendererBotTopDownMapRenderer.TileRequest(
-				payload.renderSessionId(),
-				payload.dimensionId(),
-				payload.centerX(),
-				payload.centerZ(),
-				Math.max(1, payload.tileSize()),
-				Math.max(1, payload.tileSize()),
-				Math.max(1.0D / 16.0D, payload.blocksPerPixel())
-		);
-	}
-
-	private static final class PendingMapTile {
-		private final RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload;
-		private final long requestStartedAt;
-		private final long sequence;
-		private int remainingWarmupFrames;
-		private boolean rendering;
-		private boolean missingTerrainRecoveryUsed;
-
-		private PendingMapTile(RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload, long requestStartedAt, long sequence) {
-			this.payload = payload;
-			this.requestStartedAt = requestStartedAt;
-			this.sequence = sequence;
-			this.remainingWarmupFrames = MAP_TILE_WARMUP_FRAMES;
-			this.rendering = false;
-			this.missingTerrainRecoveryUsed = false;
-		}
-
-		private RendererBotPayloads.RendererBotMapTileRequestS2CPayload payload() {
-			return this.payload;
-		}
-
-		private long requestStartedAt() {
-			return this.requestStartedAt;
-		}
-
-		private long sequence() {
-			return this.sequence;
-		}
-
-		private boolean rendering() {
-			return this.rendering;
-		}
-
-		private int remainingWarmupFrames() {
-			return this.remainingWarmupFrames;
-		}
-
-		private void decrementWarmupFrames() {
-			this.remainingWarmupFrames = Math.max(0, this.remainingWarmupFrames - 1);
-		}
-
-		private boolean restartAfterMissingTerrain() {
-			if (this.missingTerrainRecoveryUsed) {
-				return false;
-			}
-			this.missingTerrainRecoveryUsed = true;
-			this.remainingWarmupFrames = Math.max(4, MAP_TILE_WARMUP_FRAMES);
-			return true;
-		}
-
-		private void markRendering() {
-			this.rendering = true;
-		}
-
-		private void clearRendering() {
-			this.rendering = false;
-		}
-	}
-
-	private record MapTileFrame(byte[] pixels, DepthCoverage depthCoverage) {
-	}
-
-	private record DepthCoverage(boolean hasWorldDepth, boolean readable, int worldPixels, int totalPixels) {
-		private static DepthCoverage unavailable() {
-			return new DepthCoverage(false, false, 0, 0);
-		}
-
-		private double worldDepthCoverage() {
-			return this.totalPixels <= 0 ? 0.0D : (double) this.worldPixels / (double) this.totalPixels;
-		}
 	}
 
 	private static final class PendingItemIcon {

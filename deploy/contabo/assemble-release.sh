@@ -7,7 +7,7 @@ archive_path="${repo_dir}/dist/lostglade-contabo-vps8.tar.zst"
 
 if [[ "${LG2_SKIP_BUILD:-0}" != "1" ]]; then
   cd "${repo_dir}/mods/lg2-0.1.0"
-  ./gradlew --no-daemon --console=plain build remapGameplayClientJar
+  ./gradlew --no-daemon --console=plain prepareDevResourcePack build remapGameplayClientJar
   cd "${repo_dir}"
 fi
 
@@ -28,7 +28,6 @@ rsync -a \
   --exclude='logs/' \
   --exclude='crash-reports/' \
   --exclude='cache/' \
-  --exclude='bluemap/' \
   --exclude='debug/' \
   --exclude='server-secrets/' \
   --exclude='usercache.json' \

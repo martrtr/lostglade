@@ -989,23 +989,6 @@ public final class SeasonStartSystem {
 	 * there.  The check works from immutable chunk coordinates so the async MCA
 	 * inventory can defer the same area safely.
 	 */
-	static boolean shouldDeferYandexMapChunk(ResourceKey<Level> dimension, ChunkPos chunkPos) {
-		BlockPos anchor = serverAnchor;
-		if (dimension == null
-				|| chunkPos == null
-				|| !Level.OVERWORLD.equals(dimension)
-				|| completed
-				|| !(active || shellDissolving || worldRevealActive)
-				|| anchor == null) {
-			return false;
-		}
-		BoxGeometry cube = computeOuterBoxGeometry(anchor);
-		return chunkPos.getMaxBlockX() >= cube.minX
-				&& chunkPos.getMinBlockX() <= cube.maxX
-				&& chunkPos.getMaxBlockZ() >= cube.minZ
-				&& chunkPos.getMinBlockZ() <= cube.maxZ;
-	}
-
 	public static boolean shouldFreezeSceneBoundaryPhysics(Level level, BlockPos pos) {
 		if (!isInsideFrozenScenePhysicsArea(level, pos)) {
 			return false;

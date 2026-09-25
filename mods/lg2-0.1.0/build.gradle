@@ -31,6 +31,10 @@ def serverXmsProp = providers.systemProperty("lg2.serverXms").orElse("8G")
 def serverXmxProp = providers.systemProperty("lg2.serverXmx").orElse("8G")
 def rendererBotXmsProp = providers.systemProperty("lg2.rendererBotXms").orElse("4G")
 def rendererBotXmxProp = providers.systemProperty("lg2.rendererBotXmx").orElse("4G")
+// GLFW's GLX path is not available in every otherwise-valid Xwayland/Xorg
+// session.  Keep this an explicit launcher argument so the renderer bot can
+// consistently select its EGL context path when requested by the server.
+def rendererBotHeadlessProp = providers.systemProperty("lg2.rendererBotHeadless").orElse("false")
 
 repositories {
 	// Add repositories to retrieve artifacts from in here.
@@ -75,10 +79,11 @@ loom {
 			vmArgs(
 					"-Xms${rendererBotXmsProp.get()}",
 					"-Xmx${rendererBotXmxProp.get()}",
-					"-Dlg2.rendererBot=true",
-					"-Dlg2.rendererBotName=${rendererBotNameProp.get()}",
-					"-Dlg2.rendererBotServer=${rendererBotServerProp.get()}",
-					"-Dlg2.cameraMediaCacheRoot=${cameraMediaCacheRoot.absolutePath}"
+				"-Dlg2.rendererBot=true",
+				"-Dlg2.rendererBotName=${rendererBotNameProp.get()}",
+				"-Dlg2.rendererBotServer=${rendererBotServerProp.get()}",
+				"-Dlg2.rendererBotHeadless=${rendererBotHeadlessProp.get()}",
+				"-Dlg2.cameraMediaCacheRoot=${cameraMediaCacheRoot.absolutePath}"
 			)
 			programArg("--offlineDeveloperMode")
 			programArg("--username=${rendererBotNameProp.get()}")
@@ -243,14 +248,6 @@ tasks.register("runMonitorMediaStateMachineTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
-tasks.register("runYandexMapTopDownRenderTest", JavaExec) {
-	group = "verification"
-	description = "Runs Yandex map top-down block rendering regression checks."
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = "com.lostglade.server.YandexMapTopDownRenderTest"
-	dependsOn(tasks.named("testClasses"))
-}
-
 tasks.register("runDroneScreenLinkPolicyTest", JavaExec) {
 	group = "verification"
 	description = "Runs powered screen-link and unloaded drone control regression checks."
@@ -283,7 +280,6 @@ tasks.named("check") {
 	dependsOn(tasks.named("runOrthodoxEyeCompositionTest"))
 	dependsOn(tasks.named("runDronePhysicsSimulationTest"))
 	dependsOn(tasks.named("runMonitorMediaStateMachineTest"))
-	dependsOn(tasks.named("runYandexMapTopDownRenderTest"))
 	dependsOn(tasks.named("runDroneScreenLinkPolicyTest"))
 	dependsOn(tasks.named("runMonitorScreenTouchProjectionTest"))
 	dependsOn(tasks.named("runMicrophoneSpeakerCapturePolicyTest"))

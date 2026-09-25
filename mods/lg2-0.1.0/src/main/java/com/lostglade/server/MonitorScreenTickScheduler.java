@@ -32,8 +32,6 @@ final class MonitorScreenTickScheduler {
 		updateDebugAimCursors(server);
 		processPendingComponentSyncs(server);
 		processPendingSpeakerRefreshes(server);
-		MonitorYandexMapsClientTileRenderer.tick(server);
-		MonitorYandexMapsRuntime.tick(server);
 		if ((server.getTickCount() % POWER_REFRESH_FALLBACK_INTERVAL_TICKS) == 0L) {
 			enqueuePeriodicPowerRefreshes();
 		}

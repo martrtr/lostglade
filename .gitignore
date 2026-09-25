@@ -14,6 +14,7 @@
 
 # Generated packs/artifacts
 /polymer/resource_pack.zip
+/polymer/source_assets/
 
 # Bot client runtime outputs
 /run-renderer-bot/.fabric/
@@ -42,9 +43,24 @@
 # Temp files
 /.tmp/
 /tmp/
+/\.tmp_*.txt
+/\.codex_tmp/
+/\.codex_packet_src/
+/\.codex_polymer_src/
+/assets/
+/tmp-*/
+/tmp_import_assets/
 *.tmp
 /scripts/.deps/
 /scripts/__pycache__/
+/mods/lg2-0.1.0/scripts/__pycache__/
+/debug/
+/backrooms-opt.jfr
+/backrooms-opt-samples.txt
+/mods/*.disabled
+/bluemap/
+/config/bluemap/
+/server-assets/bluemap-*.jar
 
 # Local Qwen TTS weights.  The generator scripts in /scripts stay versioned;
 # only the downloaded model checkout and optional local model drop folders do not.

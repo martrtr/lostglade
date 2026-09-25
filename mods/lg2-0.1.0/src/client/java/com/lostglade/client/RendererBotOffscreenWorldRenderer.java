@@ -48,8 +48,6 @@ import java.util.function.Consumer;
 public final class RendererBotOffscreenWorldRenderer {
 	private static final Object LOCK = new Object();
 	private static final double STATIC_CAMERA_EYE_HEIGHT = 1.62D;
-	private static final double TOP_DOWN_CAMERA_HEADROOM_BLOCKS = 16.0D;
-	private static final long MAP_RENDER_GAME_TIME = 0L;
 	private static final Map<UUID, OffscreenSessionState> SESSION_STATES = new HashMap<>();
 	private static boolean offscreenRenderActive;
 	private static Camera activeCamera;
@@ -79,7 +77,6 @@ public final class RendererBotOffscreenWorldRenderer {
 			}
 			SESSION_STATES.clear();
 		}
-		RendererBotTopDownMapRenderer.clearCaches();
 		DroneCameraTilt.clear();
 	}
 
@@ -164,13 +161,6 @@ public final class RendererBotOffscreenWorldRenderer {
 				activeCamera = cameraState.camera();
 				activeLightTexture = sessionState.lightTexture;
 				RenderSystem.backupProjectionMatrix();
-				if (request.topDownMap()) {
-					client.smartCull = false;
-					if (!sessionState.topDownRendererPrimed) {
-						levelRenderer.allChanged();
-						sessionState.topDownRendererPrimed = true;
-					}
-				}
 				((MinecraftMainRenderTargetAccessor) client).lg2$setMainRenderTarget(renderTarget);
 				RendererBotShadowWorldManager.updateCameraContext(request.sessionId(), cameraState.camera());
 				renderOffscreenWorld(
@@ -220,83 +210,48 @@ public final class RendererBotOffscreenWorldRenderer {
 			CameraState cameraState,
 			TextureTarget renderTarget
 	) {
-		TopDownEnvironment topDownEnvironment = request.topDownMap()
-				? beginTopDownEnvironment(renderLevel)
-				: null;
-		try {
-			GameRendererRenderLevelInvoker gameRendererAccessor = (GameRendererRenderLevelInvoker) client.gameRenderer;
-			FogRenderer fogRenderer = sessionState.fogRenderer;
-			float partialTick = client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
-			if (!sessionState.cameraPrimed || request.topDownMap()) {
-				cameraState.camera().attributeProbe().reset();
-				cameraState.camera().attributeProbe().tick(renderLevel, cameraState.camera().position());
-				sessionState.cameraPrimed = true;
-			}
-			sessionState.lightTexture.updateLightTexture(partialTick);
-			applyLevelRenderCameraState(levelRenderer, cameraState.camera(), partialTick);
-			Matrix4f projectionMatrix = request.topDownMap()
-					? topDownProjectionMatrix(renderLevel, request)
-					: new Matrix4f().perspective((float) Math.toRadians(request.fovDegrees()),
-							request.renderWidth() / (float) request.renderHeight(), 0.05F, Math.max(32, shadowViewDistance * 16) * 4.0F);
-			Matrix4f cullingMatrix = request.topDownMap()
-					? new Matrix4f(projectionMatrix)
-					: new Matrix4f(projectionMatrix);
-			Matrix4f viewMatrix = new Matrix4f().rotation(new Quaternionf(cameraState.camera().rotation()).conjugate());
-			Vector4f fogColor = fogRenderer.setupFog(
-					cameraState.camera(),
-					// Each shadow session has its own server-authoritative radius.  Never
-					// use the renderer bot's global Options value here: a background map
-					// tile may have a different radius and changing that option rebuilds
-					// every active world renderer, including a live drone stream.
-					Math.max(2, shadowViewDistance) * 16,
-					client.getDeltaTracker(),
-					0.0F,
-					renderLevel
-			);
-			GpuBufferSlice projectionMatrixSlice = sessionState.projectionBuffer.getBuffer(projectionMatrix);
-			GpuBufferSlice fogBuffer = fogRenderer.getBuffer(request.topDownMap() ? FogRenderer.FogMode.NONE : FogRenderer.FogMode.WORLD);
-			CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-			encoder.clearColorAndDepthTextures(renderTarget.getColorTexture(), 0, renderTarget.getDepthTexture(), 1.0D);
-
-			RenderSystem.setProjectionMatrix(projectionMatrixSlice, request.topDownMap() ? ProjectionType.ORTHOGRAPHIC : ProjectionType.PERSPECTIVE);
-			sessionState.globalSettings.update(
-					request.renderWidth(),
-					request.renderHeight(),
-					client.options.glintStrength().get(),
-					renderLevel.getGameTime(),
-					client.getDeltaTracker(),
-					client.options.getMenuBackgroundBlurriness(),
-					cameraState.camera(),
-					!request.topDownMap() && client.options.textureFiltering().get() == TextureFilteringMethod.RGSS
-			);
-			levelRenderer.renderLevel(
-					GraphicsResourceAllocator.UNPOOLED,
-					client.getDeltaTracker(),
-					false,
-					cameraState.camera(),
-					viewMatrix,
-					projectionMatrix,
-					cullingMatrix,
-					fogBuffer,
-					fogColor,
-					!request.topDownMap()
-			);
-			featureRenderDispatcher.endFrame();
-			levelRenderer.endFrame();
-			fogRenderer.endFrame();
-		} finally {
-			if (topDownEnvironment != null) {
-				topDownEnvironment.restore(client, renderLevel);
-			}
+		FogRenderer fogRenderer = sessionState.fogRenderer;
+		float partialTick = client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		if (!sessionState.cameraPrimed) {
+			cameraState.camera().attributeProbe().reset();
+			cameraState.camera().attributeProbe().tick(renderLevel, cameraState.camera().position());
+			sessionState.cameraPrimed = true;
 		}
-	}
+		sessionState.lightTexture.updateLightTexture(partialTick);
+		applyLevelRenderCameraState(levelRenderer, cameraState.camera(), partialTick);
+		Matrix4f projectionMatrix = new Matrix4f().perspective(
+				(float) Math.toRadians(request.fovDegrees()),
+				request.renderWidth() / (float) request.renderHeight(),
+				0.05F,
+				Math.max(32, shadowViewDistance * 16) * 4.0F
+		);
+		Matrix4f cullingMatrix = new Matrix4f(projectionMatrix);
+		Matrix4f viewMatrix = new Matrix4f().rotation(new Quaternionf(cameraState.camera().rotation()).conjugate());
+		Vector4f fogColor = fogRenderer.setupFog(
+				cameraState.camera(),
+				Math.max(2, shadowViewDistance) * 16,
+				client.getDeltaTracker(),
+				0.0F,
+				renderLevel
+		);
+		GpuBufferSlice projectionMatrixSlice = sessionState.projectionBuffer.getBuffer(projectionMatrix);
+		GpuBufferSlice fogBuffer = fogRenderer.getBuffer(FogRenderer.FogMode.WORLD);
+		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
+		encoder.clearColorAndDepthTextures(renderTarget.getColorTexture(), 0, renderTarget.getDepthTexture(), 1.0D);
 
-	private static Matrix4f topDownProjectionMatrix(ClientLevel level, RenderRequest request) {
-		float halfWidth = (float) Math.max(0.5D, request.orthographicWidthBlocks() * 0.5D);
-		float halfHeight = (float) Math.max(0.5D, request.orthographicHeightBlocks() * 0.5D);
-		double cameraY = clampTopDownCameraY(level, request.y());
-		float depth = (float) Math.max(64.0D, cameraY - level.getMinY() + TOP_DOWN_CAMERA_HEADROOM_BLOCKS);
-		return new Matrix4f().setOrtho(-halfWidth, halfWidth, -halfHeight, halfHeight, 0.01F, depth);
+		RenderSystem.setProjectionMatrix(projectionMatrixSlice, ProjectionType.PERSPECTIVE);
+		sessionState.globalSettings.update(
+				request.renderWidth(), request.renderHeight(), client.options.glintStrength().get(),
+				renderLevel.getGameTime(), client.getDeltaTracker(), client.options.getMenuBackgroundBlurriness(),
+				cameraState.camera(), client.options.textureFiltering().get() == TextureFilteringMethod.RGSS
+		);
+		levelRenderer.renderLevel(
+				GraphicsResourceAllocator.UNPOOLED, client.getDeltaTracker(), false, cameraState.camera(),
+				viewMatrix, projectionMatrix, cullingMatrix, fogBuffer, fogColor, true
+		);
+		featureRenderDispatcher.endFrame();
+		levelRenderer.endFrame();
+		fogRenderer.endFrame();
 	}
 
 	private static void applyLevelRenderCameraState(LevelRenderer levelRenderer, Camera camera, float partialTick) {
@@ -338,13 +293,7 @@ public final class RendererBotOffscreenWorldRenderer {
 			return new CameraState(camera);
 		}
 
-		Vec3 eyePosition = request.topDownMap()
-				? new Vec3(
-						request.x(),
-						clampTopDownCameraY(renderLevel, request.y()),
-						request.z()
-				)
-				: request.absoluteCameraPosition()
+		Vec3 eyePosition = request.absoluteCameraPosition()
 				? new Vec3(request.x(), request.y(), request.z())
 				: new Vec3(request.x(), request.y() + STATIC_CAMERA_EYE_HEIGHT, request.z());
 		Marker anchor = sessionState.ensureStaticAnchor(renderLevel);
@@ -356,15 +305,6 @@ public final class RendererBotOffscreenWorldRenderer {
 		camera.setup(renderLevel, anchor, false, false, partialTick);
 		DroneCameraTilt.applyBank(camera, request.cameraBankRadians());
 		return new CameraState(camera);
-	}
-
-	private static double clampTopDownCameraY(ClientLevel level, double requestedY) {
-		if (level == null || !Double.isFinite(requestedY)) {
-			return requestedY;
-		}
-		double minimumY = level.getMinY() + 1.0D;
-		double maximumY = level.getMaxY() + TOP_DOWN_CAMERA_HEADROOM_BLOCKS;
-		return Mth.clamp(requestedY, minimumY, maximumY);
 	}
 
 	private static Entity resolveFollowTarget(ClientLevel renderLevel, UUID followEntityUuid) {
@@ -450,53 +390,9 @@ public final class RendererBotOffscreenWorldRenderer {
 			int renderWidth,
 			int renderHeight,
 			boolean absoluteCameraPosition,
-			boolean topDownMap,
-			double orthographicWidthBlocks,
-			double orthographicHeightBlocks,
 			float cameraBankRadians,
 			boolean hideCameraCollisionBlock
 	) {
-	}
-
-	private record TopDownEnvironment(
-			long gameTime,
-			long dayTime,
-			boolean tickDayTime,
-			boolean raining,
-			float rainLevel,
-			float thunderLevel
-	) {
-		private void restore(Minecraft client, ClientLevel level) {
-			if (level != null) {
-				level.setTimeFromServer(this.gameTime, this.dayTime, this.tickDayTime);
-				level.getLevelData().setRaining(this.raining);
-				level.setRainLevel(this.rainLevel);
-				level.setThunderLevel(this.thunderLevel);
-				level.environmentAttributes().invalidateTickCache();
-			}
-		}
-	}
-
-	private static TopDownEnvironment beginTopDownEnvironment(ClientLevel level) {
-		TopDownEnvironment previous = new TopDownEnvironment(
-				level != null ? level.getGameTime() : 0L,
-				level != null ? level.getDayTime() : 6000L,
-				level instanceof RendererBotShadowLevel scene && scene.ticksDayTime(),
-				level != null && level.getLevelData().isRaining(),
-				level != null ? level.getRainLevel(1.0F) : 0.0F,
-				level != null ? level.getThunderLevel(1.0F) : 0.0F
-		);
-		if (level != null) {
-			// GlobalSettings uses the level game time for animated shader state.
-			// A constant value makes every map tile use the same terrain frame and
-			// also removes time-of-day lighting from the capture.
-			level.setTimeFromServer(MAP_RENDER_GAME_TIME, 6000L, false);
-			level.getLevelData().setRaining(false);
-			level.setRainLevel(0.0F);
-			level.setThunderLevel(0.0F);
-			level.environmentAttributes().invalidateTickCache();
-		}
-		return previous;
 	}
 
 	private record CameraState(Camera camera) {
@@ -517,7 +413,6 @@ public final class RendererBotOffscreenWorldRenderer {
 		private final Camera staticCamera = new Camera();
 		private final Camera followCamera = new Camera();
 		private boolean renderInProgress;
-		private boolean topDownRendererPrimed;
 
 		private Marker ensureStaticAnchor(ClientLevel level) {
 			if (this.staticAnchor == null || this.staticAnchor.level() != level) {

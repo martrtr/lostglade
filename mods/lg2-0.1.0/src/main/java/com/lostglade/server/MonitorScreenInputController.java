@@ -951,8 +951,6 @@ final class MonitorScreenInputController {
 			}
 		} else if (component.viewMode() == ScreenViewMode.MAX) {
 			MonitorMaxRuntime.handleTouch(player, level, component, layout, touchPoint);
-		} else if (component.viewMode() == ScreenViewMode.YANDEX_MAPS) {
-			MonitorYandexMapsRuntime.handleTouch(player, level, component, layout, touchPoint);
 		} else if (component.viewMode() == ScreenViewMode.SUPPORT) {
 			if (!MonitorSupportRuntime.handleTouch(server, player, component, layout, touchPoint)) {
 				nextMode = ScreenViewMode.HOME;

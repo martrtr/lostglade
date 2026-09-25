@@ -38,6 +38,6 @@ public final class MonitorYandexMapsApp implements MonitorApp {
 
 	@Override
 	public String screenHint() {
-		return "Ванильная карта мира сверху";
+		return "Рендер карты временно отключён";
 	}
 }
