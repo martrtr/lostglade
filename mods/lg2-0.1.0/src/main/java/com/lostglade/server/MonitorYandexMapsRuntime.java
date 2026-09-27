@@ -370,8 +370,6 @@ public final class MonitorYandexMapsRuntime {
 		if (frame != null) {
 			drawMapFrameNearest(graphics, frame, canvas);
 		} else {
-			graphics.setPaint(new GradientPaint(canvas.x(), canvas.y(), new Color(0x182026), canvas.right(), canvas.bottom(), new Color(0x071014)));
-			graphics.fillRect(canvas.x(), canvas.y(), canvas.width(), canvas.height());
 			String statusText = effectiveSnapshot != null && effectiveSnapshot.statusText() != null && !effectiveSnapshot.statusText().isBlank()
 					? effectiveSnapshot.statusText()
 					: "Клиентский рендер карты недоступен";

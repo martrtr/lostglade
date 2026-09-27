@@ -44,6 +44,7 @@ public final class RendererBotClientMode {
 			return;
 		}
 
+		RendererClientDiagnostics.event("BOT", "Dedicated renderer '" + BOT_NAME + "' -> " + SERVER_ADDRESS + (HEADLESS ? " / headless" : " / windowed"));
 		Lg2.LOGGER.info(
 				"Renderer bot client mode enabled for '{}' -> {}{}{}{}",
 				BOT_NAME,
@@ -188,10 +189,12 @@ public final class RendererBotClientMode {
 		nextConnectAttemptAt = 0L;
 		muted = false;
 		visualsConfigured = false;
+		RendererClientDiagnostics.event("BOT", "Подключён к " + SERVER_ADDRESS);
 		Lg2.LOGGER.info("Renderer bot joined {}", SERVER_ADDRESS);
 	}
 
 	private static void scheduleReconnect() {
+		RendererClientDiagnostics.event("BOT", "Соединение закрыто; переподключение запланировано через " + RECONNECT_DELAY_MS + " ms");
 		connectInFlight = false;
 		connectAttemptStartedAt = 0L;
 		muted = false;

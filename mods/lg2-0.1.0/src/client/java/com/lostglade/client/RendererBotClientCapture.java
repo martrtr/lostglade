@@ -87,6 +87,8 @@ public final class RendererBotClientCapture {
 	private static volatile CapturedFrame latestFrame;
 	private static TextureTarget itemIconRenderTarget;
 
+	private static int disconnectGpuCleanupTicks = -1;
+
 	private RendererBotClientCapture() {
 	}
 
@@ -98,7 +100,7 @@ public final class RendererBotClientCapture {
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
 				RendererBotVolunteerClient.sendRendererHello()
 		);
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> clearAllSessions());
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> handleDisconnect());
 		ClientTickEvents.END_CLIENT_TICK.register(RendererBotClientCapture::onClientTick);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE,
@@ -114,7 +116,7 @@ public final class RendererBotClientCapture {
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotLiveStreamStopS2CPayload.TYPE,
-				(payload, context) -> context.client().execute(() -> clearLiveStreamSession(payload.streamId()))
+				(payload, context) -> context.client().execute(() -> stopLiveStream(payload.streamId()))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotItemIconRequestS2CPayload.TYPE,
@@ -125,18 +127,20 @@ public final class RendererBotClientCapture {
 	private static void beginCapture(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, Minecraft client) {
 		long now = System.currentTimeMillis();
 		RendererBotShadowWorldManager.hideEntityFromSession(payload.renderSessionId(), payload.hiddenEntityUuid());
+		synchronized (LOCK) {
+			PENDING_CAPTURES.put(payload.requestId(), new PendingCapture(payload, now));
+		}
+		RendererClientDiagnostics.cameraPhotoAccepted(payload.requestId());
 		CapturedFrame cached = latestFrame;
 		if (cached != null && cached.matches(payload) && cached.capturedAtMillis() + RECENT_FRAME_TTL_MS >= now) {
 			Lg2.LOGGER.info("Renderer bot reusing hot cached frame for {}", payload.requestId());
 			sendFrame(payload, cached.previewPixels(), cached.fullPixels());
+			clearPendingCapture(payload.requestId());
 			return;
 		}
 
 		int renderWidth = computeRenderWidth(payload);
 		int renderHeight = computeRenderHeight(payload, renderWidth);
-		synchronized (LOCK) {
-			PENDING_CAPTURES.put(payload.requestId(), new PendingCapture(payload, now));
-		}
 		Lg2.LOGGER.info(
 				"Renderer bot received capture request {} preview={}x{} full={}x{} render={}x{} stableProbes={}",
 				payload.requestId(),
@@ -162,6 +166,7 @@ public final class RendererBotClientCapture {
 					warmupFrames
 			));
 		}
+		RendererClientDiagnostics.cameraLiveStarted(payload.streamId());
 		hideLiveStreamCameraCarriers(payload);
 		Lg2.LOGGER.info(
 				"Renderer bot started live stream {} at {} fps {}x{} (render {}x{}, warmup={})",
@@ -204,6 +209,7 @@ public final class RendererBotClientCapture {
 	}
 
 	private static void onClientTick(Minecraft client) {
+		drainDisconnectGpuCleanup();
 		List<PendingCapture> captures;
 		List<LiveStreamSession> liveStreams;
 		List<PendingItemIcon> itemIcons;
@@ -358,11 +364,14 @@ public final class RendererBotClientCapture {
 								clearPendingItemIcon(payload.requestId());
 								return;
 							}
-							ClientPlayNetworking.send(new RendererBotPayloads.RendererBotItemIconC2SPayload(
-									payload.requestId(),
-									Math.max(1, payload.iconSize()),
-									pixels
-							));
+							if (isPendingItemIcon(payload.requestId())
+									&& ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotItemIconC2SPayload.TYPE)) {
+								ClientPlayNetworking.send(new RendererBotPayloads.RendererBotItemIconC2SPayload(
+										payload.requestId(),
+										Math.max(1, payload.iconSize()),
+										pixels
+								));
+							}
 							clearPendingItemIcon(payload.requestId());
 						}));
 					});
@@ -577,7 +586,7 @@ public final class RendererBotClientCapture {
 					clearLiveStreamSession(payload.streamId());
 					return;
 				}
-				ClientPlayNetworking.send(new RendererBotPayloads.RendererBotLiveFrameC2SPayload(payload.streamId(), liveStream.lastFrameAtNanos(), fullPixels));
+				sendLiveFrame(payload.streamId(), liveStream.lastFrameAtNanos(), fullPixels);
 				clearLiveStreamFrameInFlight(payload.streamId());
 			}));
 		} catch (Throwable throwable) {
@@ -781,7 +790,7 @@ public final class RendererBotClientCapture {
 				RendererBotPayloads.RendererBotLiveStreamStartS2CPayload payload = session.payload();
 				byte[] fullPixels = quantizeLiveFrame(pixels, width, height, payload.fullWidth(), payload.fullHeight());
 				client.execute(() -> {
-					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotLiveFrameC2SPayload(payload.streamId(), session.lastFrameAtNanos(), fullPixels));
+					sendLiveFrame(payload.streamId(), session.lastFrameAtNanos(), fullPixels);
 					clearLiveStreamFrameInFlight(payload.streamId());
 				});
 			}
@@ -1101,12 +1110,26 @@ public final class RendererBotClientCapture {
 	}
 
 	private static void sendFrame(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, byte[] previewPixels, byte[] fullPixels) {
+		if (payload == null || !isPendingCapture(payload.requestId())) return;
+		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotPreviewFrameC2SPayload.TYPE)
+				|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotFullFrameC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotPreviewFrameC2SPayload(payload.requestId(), previewPixels));
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotFullFrameC2SPayload(payload.requestId(), fullPixels));
+		RendererClientDiagnostics.cameraPhotoCompleted(payload.requestId());
+	}
+
+	private static void sendLiveFrame(UUID streamId, long frameAtNanos, byte[] fullPixels) {
+		if (streamId == null || !isActiveLiveStream(streamId)
+				|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotLiveFrameC2SPayload.TYPE)) return;
+		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotLiveFrameC2SPayload(streamId, frameAtNanos, fullPixels));
 	}
 
 	private static void sendLiveFailure(RendererBotPayloads.RendererBotLiveStreamStartS2CPayload payload, String message) {
+		if (payload == null) return;
 		Lg2.LOGGER.warn("Renderer bot failing live stream {}: {}", payload.streamId(), message);
+		RendererClientDiagnostics.cameraLiveFailed(payload.streamId(), message);
+		if (!isActiveLiveStream(payload.streamId())
+				|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotLiveStreamFailureC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotLiveStreamFailureC2SPayload(
 				payload.streamId(),
 				message == null || message.isBlank() ? "Renderer bot live stream failed" : message
@@ -1141,6 +1164,23 @@ public final class RendererBotClientCapture {
 				capture.clearScreenshotRequested();
 			}
 		}
+	}
+
+	private static void stopLiveStream(UUID streamId) {
+		if (streamId != null && isActiveLiveStream(streamId)) RendererClientDiagnostics.cameraLiveStopped(streamId);
+		clearLiveStreamSession(streamId);
+	}
+
+	private static boolean isPendingCapture(UUID requestId) {
+		synchronized (LOCK) { return requestId != null && PENDING_CAPTURES.containsKey(requestId); }
+	}
+
+	private static boolean isActiveLiveStream(UUID streamId) {
+		synchronized (LOCK) { return streamId != null && LIVE_STREAM_SESSIONS.containsKey(streamId); }
+	}
+
+	private static boolean isPendingItemIcon(UUID requestId) {
+		synchronized (LOCK) { return requestId != null && PENDING_ITEM_ICONS.containsKey(requestId); }
 	}
 
 	private static void clearLiveStreamSession(UUID streamId) {
@@ -1184,13 +1224,23 @@ public final class RendererBotClientCapture {
 		}
 	}
 
-	private static void clearAllSessions() {
+	private static void handleDisconnect() {
 		synchronized (LOCK) {
 			PENDING_CAPTURES.clear();
 			LIVE_STREAM_SESSIONS.clear();
 			PENDING_ITEM_ICONS.clear();
 			latestFrame = null;
 		}
+		// GPU readbacks complete asynchronously. Keep their source targets alive long
+		// enough for stale callbacks to settle; logical registries above already make
+		// every late network callback a no-op.
+		disconnectGpuCleanupTicks = 100;
+	}
+
+	private static void drainDisconnectGpuCleanup() {
+		if (disconnectGpuCleanupTicks < 0) return;
+		if (disconnectGpuCleanupTicks-- > 0) return;
+		disconnectGpuCleanupTicks = -1;
 		if (itemIconRenderTarget != null) {
 			itemIconRenderTarget.destroyBuffers();
 			itemIconRenderTarget = null;
@@ -1199,7 +1249,11 @@ public final class RendererBotClientCapture {
 	}
 
 	private static void sendFailure(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, String message) {
+		if (payload == null) return;
 		Lg2.LOGGER.warn("Renderer bot failing capture {}: {}", payload.requestId(), message);
+		RendererClientDiagnostics.cameraPhotoFailed(payload.requestId(), message);
+		if (!isPendingCapture(payload.requestId())
+				|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotCaptureFailureC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotCaptureFailureC2SPayload(
 				payload.requestId(),
 				message == null || message.isBlank() ? "Renderer bot capture failed" : message
@@ -1207,6 +1261,8 @@ public final class RendererBotClientCapture {
 	}
 
 	private static void sendItemIconFailure(RendererBotPayloads.RendererBotItemIconRequestS2CPayload payload, String message) {
+		if (payload == null || !isPendingItemIcon(payload.requestId())
+				|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotItemIconFailureC2SPayload.TYPE)) return;
 		Lg2.LOGGER.warn("Renderer bot failing item icon {}: {}", payload.requestId(), message);
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotItemIconFailureC2SPayload(
 				payload.requestId(),

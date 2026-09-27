@@ -85,8 +85,12 @@ final class LostgladeSettingsScreen extends Screen {
 			}
 		});
 
+		this.addRenderableWidget(Button.builder(Component.literal("Renderer diagnostics / логи"), button ->
+				this.minecraft.setScreen(new RendererDiagnosticsScreen(this))
+		).bounds(x, y + 112, 200, 20).build());
+
 		this.addRenderableWidget(Button.builder(Component.translatable("gui.done"), button -> this.onClose())
-				.bounds(x, y + 120, 200, 20).build());
+				.bounds(x, y + 140, 200, 20).build());
 		refreshLabels();
 	}
 
@@ -111,7 +115,7 @@ final class LostgladeSettingsScreen extends Screen {
 	@Override
 	public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		graphics.drawCenteredString(this.font, this.title, this.width / 2, this.height / 2 - 104, 0xFFFFFF);
-		graphics.drawCenteredString(this.font, "Статус карт: " + humanStatus(YandexMapRenderClient.displayStatusReason()), this.width / 2, this.height / 2 + 78, 0xAAAAAA);
+		graphics.drawCenteredString(this.font, "Статус карт: " + humanStatus(YandexMapRenderClient.displayStatusReason()), this.width / 2, this.height / 2 + 92, 0xAAAAAA);
 		super.render(graphics, mouseX, mouseY, partialTick);
 	}
 

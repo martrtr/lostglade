@@ -64,7 +64,8 @@ public final class YandexMapRenderPhaseEightTest {
 		require(payloads.contains("int tileBlocks") && payloads.contains("buffer.writeVarInt(this.tileBlocks)"), "scene-start wire contract must carry canonical world span");
 		require(payloads.contains("MapRenderJobCancelS2CPayload.TYPE"), "server-to-client job cancel payload must be registered");
 		require(client.contains("handleCancel(payload)") && client.contains("private static void handleCancel"), "client must handle server job cancellation");
-		require(client.contains("cleanupActiveJob();"), "server cancellation must be able to release client render state");
+		require(client.contains("retireActiveJob(\"server-cancel\")"), "server cancellation must release the logical active job without tearing down an in-flight GL readback");
+		require(client.contains("RETIRED_JOBS") && client.contains("readbackPending()"), "cancelled client render state must be retired after pending readback settles");
 		require(jobs.contains("sendCancel(job, reason)"), "server-side job failure must close the client lease");
 		require(jobs.contains("sendCancel(job, \"lease-expired\")"), "lease expiry must explicitly cancel the client job");
 		require(jobs.contains("MapRenderScheduler.registerWorkerDecline(job.workerUuid, payload.reason())"), "expected volunteer declines must cool down the worker without marking it failed");

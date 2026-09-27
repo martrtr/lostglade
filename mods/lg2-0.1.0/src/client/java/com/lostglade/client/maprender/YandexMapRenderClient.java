@@ -3,6 +3,7 @@ package com.lostglade.client.maprender;
 import com.lostglade.Lg2;
 import com.lostglade.client.LostgladeClientSettings;
 import com.lostglade.client.RendererBotClientMode;
+import com.lostglade.client.RendererClientDiagnostics;
 import com.lostglade.network.YandexMapRenderPayloads;
 import com.lostglade.server.maprender.MapRenderProfile;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -39,6 +40,8 @@ public final class YandexMapRenderClient {
 	private static boolean lastShaderCompatible = true;
 	private static ActiveJob activeJob;
 	private static final Deque<Long> acceptedVolunteerJobs = new ArrayDeque<>();
+	private static final Deque<RetiredJob> RETIRED_JOBS = new ArrayDeque<>();
+	private static long clientTickSequence;
 
 	private YandexMapRenderClient() {
 	}
@@ -46,9 +49,12 @@ public final class YandexMapRenderClient {
 	public static void register() {
 		ClientPlayNetworking.registerGlobalReceiver(
 				YandexMapRenderPayloads.MapWorkerStatusS2CPayload.TYPE,
-				(payload, context) -> context.client().execute(() -> status = new WorkerStatus(
-						payload.eligible(), payload.reason(), payload.canonicalProfileHash()
-				))
+				(payload, context) -> context.client().execute(() -> {
+					WorkerStatus next = new WorkerStatus(payload.eligible(), payload.reason(), payload.canonicalProfileHash());
+					WorkerStatus previous = status;
+					status = next;
+					if (!next.equals(previous)) RendererClientDiagnostics.mapStatus(next.eligible(), next.reason());
+				})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
 				YandexMapRenderPayloads.MapRenderJobOfferS2CPayload.TYPE,
@@ -76,7 +82,8 @@ public final class YandexMapRenderClient {
 		);
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> client.execute(YandexMapRenderClient::requestCapabilityRefresh));
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-			cleanupActiveJob();
+			RendererClientDiagnostics.disconnected();
+			retireActiveJob("disconnect");
 			reset();
 		});
 		ClientTickEvents.END_CLIENT_TICK.register(YandexMapRenderClient::tick);
@@ -163,12 +170,15 @@ public final class YandexMapRenderClient {
 		if (payload == null || System.currentTimeMillis() > payload.expiresAtEpochMs()) {
 			return;
 		}
+		RendererClientDiagnostics.mapOffer(payload.jobId(), payload.tileX(), payload.tileZ());
 		String rejectReason = offerRejectionReason(client, payload);
 		if (rejectReason != null) {
+			RendererClientDiagnostics.mapRejected(payload.jobId(), rejectReason);
 			sendDecision(payload.jobId(), false, rejectReason);
 			return;
 		}
 		activeJob = new ActiveJob(payload.jobId(), payload.profileHash(), payload.tileX(), payload.tileZ(), payload.expiresAtEpochMs());
+		RendererClientDiagnostics.mapAccepted(payload.jobId(), payload.tileX(), payload.tileZ());
 		localStatusReason = "rendering-map-tile";
 		sendDecision(payload.jobId(), true, "accepted");
 	}
@@ -177,7 +187,8 @@ public final class YandexMapRenderClient {
 		ActiveJob job = payload == null ? null : activeOwned(payload.jobId());
 		if (job == null) return;
 		Lg2.LOGGER.debug("Yandex map v2 server cancelled job {}: {}", job.jobId, payload.reason());
-		cleanupActiveJob();
+		RendererClientDiagnostics.mapCancelled(job.jobId, payload.reason());
+		retireActiveJob("server-cancel");
 		localStatusReason = "waiting-for-server";
 	}
 
@@ -241,6 +252,7 @@ public final class YandexMapRenderClient {
 			job.snapshotFingerprint = payload.snapshotFingerprint();
 			job.expectedChunkPackets = payload.chunkPacketCount();
 			job.expectedEntityPackets = payload.entityPacketCount();
+			RendererClientDiagnostics.mapStage(job.jobId, "scene: " + job.expectedChunkPackets + " chunks, " + job.expectedEntityPackets + " entities");
 		} catch (Throwable throwable) {
 			Lg2.LOGGER.warn("Failed to create isolated Yandex map v2 scene for job {}", payload.jobId(), throwable);
 			failActiveJob("scene-create-failed:" + shortError(throwable));
@@ -287,9 +299,12 @@ public final class YandexMapRenderClient {
 			return;
 		}
 		job.ready = true;
+		RendererClientDiagnostics.mapStage(job.jobId, "scene ready / vanilla warmup");
 	}
 
 	private static void tick(Minecraft client) {
+		clientTickSequence++;
+		drainRetiredJobs();
 		if (client == null || client.getConnection() == null) {
 			return;
 		}
@@ -318,6 +333,7 @@ public final class YandexMapRenderClient {
 		YandexMapVanillaTopDownRenderer.AdvanceResult result = job.renderer.advance(frame -> handleRenderedFrame(client, job, frame));
 		if (!Objects.equals(job.lastReadiness, result.readiness())) {
 			job.lastReadiness = result.readiness();
+			RendererClientDiagnostics.mapStage(job.jobId, result.state().name().toLowerCase(java.util.Locale.ROOT) + " / " + result.reason());
 			if (Lg2.LOGGER.isDebugEnabled()) {
 				Lg2.LOGGER.debug("Yandex map v2 job {} readiness: state={}, reason={}, {}, cull={}", job.jobId, result.state(), result.reason(), result.readiness(), job.renderer.cullDiagnostics());
 			}
@@ -379,7 +395,8 @@ public final class YandexMapRenderClient {
 				throw new IllegalStateException("server no longer accepts Yandex map result payloads");
 			}
 			Lg2.LOGGER.info("Yandex map v2 rendered tile {},{} job {} ({} PNG bytes)", job.tileX, job.tileZ, job.jobId, pngBytes.length);
-			cleanupActiveJob();
+			RendererClientDiagnostics.mapRendered(job.jobId, job.tileX, job.tileZ, pngBytes.length);
+			retireActiveJob("completed");
 			localStatusReason = "waiting-for-server";
 		} catch (Throwable throwable) {
 			Lg2.LOGGER.warn("Failed to encode/send Yandex map v2 result for job {}", job.jobId, throwable);
@@ -410,20 +427,48 @@ public final class YandexMapRenderClient {
 			ClientPlayNetworking.send(new YandexMapRenderPayloads.MapRenderFailureC2SPayload(job.jobId, reason));
 		}
 		Lg2.LOGGER.warn("Yandex map v2 client job {} failed: {}", job.jobId, reason);
-		cleanupActiveJob();
+		RendererClientDiagnostics.mapFailed(job.jobId, reason);
+		retireActiveJob("failed");
 		localStatusReason = "waiting-for-server";
 	}
 
-	private static void cleanupActiveJob() {
+	/**
+	 * Detach a completed/cancelled job immediately, but never destroy its GL
+	 * resources from inside Screenshot's readback callback or a disconnect hook.
+	 */
+	private static void retireActiveJob(String reason) {
 		ActiveJob job = activeJob;
 		activeJob = null;
 		if (job == null) return;
+		RETIRED_JOBS.addLast(new RetiredJob(job, clientTickSequence + 2L, clientTickSequence + 120L, reason));
+	}
+
+	private static void drainRetiredJobs() {
+		if (RETIRED_JOBS.isEmpty()) return;
+		var iterator = RETIRED_JOBS.iterator();
+		while (iterator.hasNext()) {
+			RetiredJob retired = iterator.next();
+			if (clientTickSequence < retired.closeAfterTick) continue;
+			ActiveJob job = retired.job;
+			boolean readbackPending = job.renderer != null && job.renderer.readbackPending();
+			if (readbackPending && clientTickSequence < retired.forceCloseAfterTick) continue;
+			closeJobResources(job);
+			iterator.remove();
+		}
+	}
+
+	private static void closeJobResources(ActiveJob job) {
+		if (job == null) return;
 		if (job.renderer != null) {
-			try { job.renderer.close(); } catch (Throwable ignored) { }
+			try { job.renderer.close(); } catch (Throwable throwable) {
+				Lg2.LOGGER.debug("Failed to retire Yandex map renderer cleanly", throwable);
+			}
 			job.renderer = null;
 		}
 		if (job.scene != null) {
-			try { job.scene.close(); } catch (Throwable ignored) { }
+			try { job.scene.close(); } catch (Throwable throwable) {
+				Lg2.LOGGER.debug("Failed to retire Yandex map scene cleanly", throwable);
+			}
 			job.scene = null;
 		}
 	}
@@ -456,6 +501,9 @@ public final class YandexMapRenderClient {
 			reason = Objects.requireNonNullElse(reason, "unknown");
 			canonicalProfileHash = Objects.requireNonNullElse(canonicalProfileHash, "");
 		}
+	}
+
+	private record RetiredJob(ActiveJob job, long closeAfterTick, long forceCloseAfterTick, String reason) {
 	}
 
 	private static final class ActiveJob {

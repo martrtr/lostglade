@@ -142,6 +142,10 @@ public final class YandexMapVanillaTopDownRenderer implements AutoCloseable {
 		return this.cullDiagnostics;
 	}
 
+	public boolean readbackPending() {
+		return this.readbackPending;
+	}
+
 	private boolean renderFrame(boolean capture, Consumer<NativeImage> imageConsumer, float partialTick) {
 		Minecraft client = Minecraft.getInstance();
 		if (client.gameRenderer == null || client.getEntityRenderDispatcher() == null || client.getBlockEntityRenderDispatcher() == null) {

@@ -1,8 +1,11 @@
 package com.lostglade.server.maprender;
 
+import com.lostglade.server.map.MapPaletteQuantizer;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -18,7 +21,9 @@ public final class YandexMapRenderPhaseSevenTest {
 		monitorUiIsStrictlyCacheOnly();
 		monitorRoutingUsesDedicatedYandexRuntime();
 		oldUiFrameContractIsPreserved();
+		flatPlaceholderDoesNotQuantizeToBands();
 		displayCacheDoesNotWaitForDiscovery();
+		clientRendererDiagnosticsAndDisconnectLifecycleAreSafe();
 		System.out.println("Yandex map renderer Phase 7 checks passed");
 	}
 
@@ -53,6 +58,9 @@ public final class YandexMapRenderPhaseSevenTest {
 		require(adapter.contains("MapRenderScheduler.demandVisible"), "viewport must only hint replacement scheduler priority");
 		require(adapter.contains("MIN_ZOOM_EXPONENT = -4"), "adapter must preserve four magnification steps beyond native L0");
 		require(adapter.contains("VALUE_INTERPOLATION_NEAREST_NEIGHBOR"), "close zoom must preserve Minecraft texture texels without smoothing");
+		require(adapter.contains("private static final int MISSING_RGB = 0x18242B;"), "map placeholder must keep the exact old-renderer flat gray background");
+		require(adapter.contains("graphics.setColor(new Color(MISSING_RGB));"), "map compositor must paint the old flat placeholder color");
+		require(adapter.contains("graphics.fillRect(0, 0, safeWidth, safeHeight);"), "map compositor must make uncovered LOD areas opaque instead of exposing the monitor texture");
 		require(adapter.contains("drawMagnifiedTileViewport") && adapter.contains("sourcePerScreenX"), "close zoom must crop visible source texels instead of drawing a huge 4096px tile");
 		require(runtime.contains("YandexMapMarkerStore.markers"), "markers must remain an old-UI overlay over cached imagery");
 	}
@@ -82,12 +90,21 @@ public final class YandexMapRenderPhaseSevenTest {
 	private static void oldUiFrameContractIsPreserved() throws Exception {
 		Path project = Path.of("").toAbsolutePath();
 		String adapter = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorYandexMapsClientTileRenderer.java"));
+		String runtime = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorYandexMapsRuntime.java"));
 		String screens = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorScreenSystem.java"));
-		require(adapter.contains("MISSING_RGB = 0x18242B"), "Yandex map valid frames must keep the historical missing-pixel color");
-		require(adapter.contains("Frame.failure(null, \"Карта недоступна\")") && adapter.contains("Frame.failure(null, \"Карта пока не отрендерена\")"), "unavailable Yandex map must return a null frame so the old gradient/status UI renders");
-		require(adapter.contains("graphics.fillRect(0, 0, safeWidth, safeHeight)"), "valid Yandex map frames must remain fully opaque like the pre-removal compositor");
+		require(!runtime.contains("drawMapCanvasBackground"), "Yandex runtime must not paint a second gradient/textured map background over the compositor frame");
+		require(adapter.contains("Frame.failure(canvas, \"Карта недоступна\")") && adapter.contains("Frame.failure(canvas, \"Карта пока не отрендерена\")"), "even an empty/unavailable cache must return the flat old-renderer background instead of exposing screen_on.png");
 		require(screens.contains("if (work.yandexMapsSnapshot() != null) {\n\t\t\treturn true;"), "Yandex monitor work must keep the old dynamic-render graphics path");
 		require(screens.contains("&& work.yandexMapsSnapshot() == null"), "Yandex snapshots must keep the old static-cache exclusion contract");
+	}
+
+	private static void flatPlaceholderDoesNotQuantizeToBands() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String screens = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorScreenSystem.java"));
+		require(screens.contains("boolean dither = work.viewMode() != ScreenViewMode.YANDEX_MAPS;"), "Yandex map output must keep dithering disabled so a flat placeholder stays one flat map-palette color");
+		int packed = Byte.toUnsignedInt(MapPaletteQuantizer.quantize(0x18242B));
+		require(packed >= 4, "old renderer placeholder must quantize to an opaque Minecraft map color");
+		require(Byte.toUnsignedInt(MapPaletteQuantizer.quantize(0x18242B)) == packed, "flat placeholder quantization must be deterministic");
 	}
 
 	private static void displayCacheDoesNotWaitForDiscovery() throws Exception {
@@ -99,6 +116,34 @@ public final class YandexMapRenderPhaseSevenTest {
 		require(adapter.contains("coverage == bestCoverage && canonical"), "canonical worker profile should win only when visible coverage ties");
 		require(!adapter.contains("discovery == null || discovery.profileHash() == null"), "committed map display must not be gated by discovery availability");
 		require(adapter.contains("discovery == null || discovery.inventory() == null"), "background viewport priority hint must be null-safe while discovery starts");
+	}
+
+	private static void clientRendererDiagnosticsAndDisconnectLifecycleAreSafe() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String mapClient = Files.readString(project.resolve("src/client/java/com/lostglade/client/maprender/YandexMapRenderClient.java"));
+		String mapRenderer = Files.readString(project.resolve("src/client/java/com/lostglade/client/maprender/YandexMapVanillaTopDownRenderer.java"));
+		String capture = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientCapture.java"));
+		String video = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientVideoRecording.java"));
+		String shadow = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
+		String settings = Files.readString(project.resolve("src/client/java/com/lostglade/client/LostgladeSettingsScreen.java"));
+		String diagnostics = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererClientDiagnostics.java"));
+		String diagnosticsScreen = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererDiagnosticsScreen.java"));
+
+		require(mapClient.contains("retireActiveJob(\"disconnect\")"), "map disconnect must detach jobs instead of synchronously destroying GL resources");
+		require(mapClient.contains("RETIRED_JOBS") && mapClient.contains("readbackPending()"), "map GL teardown must wait for screenshot readback retirement");
+		require(mapRenderer.contains("public boolean readbackPending()"), "top-down renderer must expose pending readback state for safe retirement");
+		require(capture.contains("isPendingCapture(payload.requestId())") && capture.contains("ClientPlayNetworking.canSend"), "late camera callbacks must require an active request and live network channel");
+		require(capture.contains("disconnectGpuCleanupTicks = 100"), "camera GPU resources must not be destroyed synchronously from disconnect callback");
+		require(video.contains("isActiveRecording(recording.payload().requestId())") && video.contains("ClientPlayNetworking.canSend"), "late video callbacks must be stale-safe");
+		int abortStart = video.indexOf("private static void abortAll(String message)");
+		int abortEnd = abortStart < 0 ? -1 : video.indexOf("private static void abortRecording", abortStart);
+		String abortBody = abortStart >= 0 && abortEnd > abortStart ? video.substring(abortStart, abortEnd) : "";
+		require(!abortBody.contains("RendererBotOffscreenWorldRenderer.clearCaches()"), "video disconnect must not synchronously destroy shared camera GL caches");
+		require(shadow.contains("retireForDisconnect()") && shadow.contains("DISCONNECT_RETIRED_SESSIONS"), "shadow worlds must be retired away from the disconnect callback");
+		require(settings.contains("Renderer diagnostics / логи") && settings.contains("new RendererDiagnosticsScreen(this)"), "Lostglade settings must expose renderer diagnostics");
+		require(diagnostics.contains("mapAcceptedLastMinute") && diagnostics.contains("activeCameraJobs()"), "renderer diagnostics must expose camera and map throughput");
+		require(diagnostics.contains("[renderer-diagnostics][{}] {}"), "renderer diagnostics must mirror hidden bot events into the ordinary client log");
+		require(diagnosticsScreen.contains("текущий map job") && diagnosticsScreen.contains("Последние события"), "renderer diagnostics UI must show active map work and live event history");
 	}
 
 	private static void require(boolean condition, String message) {

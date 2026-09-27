@@ -53,6 +53,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -67,13 +68,15 @@ public final class RendererBotShadowWorldManager {
 	private static final Map<UUID, ShadowLevelSession> SHADOW_SESSIONS = new HashMap<>();
 	private static final Map<UUID, Long> LAST_RENDER_ACTIVITY_AT = new HashMap<>();
 	private static final Map<UUID, Long> PENDING_SESSION_DESTROY_AT = new HashMap<>();
+	private static final ArrayDeque<ShadowLevelSession> DISCONNECT_RETIRED_SESSIONS = new ArrayDeque<>();
+	private static int disconnectRetireTicks = -1;
 
 	private RendererBotShadowWorldManager() {
 	}
 
 	public static void register() {
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> clear());
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> clear());
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> retireForDisconnect());
 		ClientTickEvents.END_CLIENT_TICK.register(RendererBotShadowWorldManager::tickShadowWorlds);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotShadowLevelInitS2CPayload.TYPE,
@@ -364,16 +367,37 @@ public final class RendererBotShadowWorldManager {
 
 	private static void clearOnClientThread() {
 		synchronized (LOCK) {
-			for (ShadowLevelSession session : SHADOW_SESSIONS.values()) {
-				closeSession(session);
-			}
+			for (ShadowLevelSession session : SHADOW_SESSIONS.values()) closeSession(session);
+			while (!DISCONNECT_RETIRED_SESSIONS.isEmpty()) closeSession(DISCONNECT_RETIRED_SESSIONS.removeFirst());
 			SHADOW_SESSIONS.clear();
 			LAST_RENDER_ACTIVITY_AT.clear();
 			PENDING_SESSION_DESTROY_AT.clear();
+			disconnectRetireTicks = -1;
+		}
+	}
+
+	private static void retireForDisconnect() {
+		synchronized (LOCK) {
+			DISCONNECT_RETIRED_SESSIONS.addAll(SHADOW_SESSIONS.values());
+			SHADOW_SESSIONS.clear();
+			LAST_RENDER_ACTIVITY_AT.clear();
+			PENDING_SESSION_DESTROY_AT.clear();
+			// Camera targets are retired after ~5 s; close their source worlds slightly later.
+			disconnectRetireTicks = 110;
+		}
+	}
+
+	private static void drainDisconnectRetiredSessions() {
+		synchronized (LOCK) {
+			if (disconnectRetireTicks < 0) return;
+			if (disconnectRetireTicks-- > 0) return;
+			disconnectRetireTicks = -1;
+			while (!DISCONNECT_RETIRED_SESSIONS.isEmpty()) closeSession(DISCONNECT_RETIRED_SESSIONS.removeFirst());
 		}
 	}
 
 	private static void tickShadowWorlds(Minecraft client) {
+		drainDisconnectRetiredSessions();
 		if (client == null || client.getConnection() == null) {
 			return;
 		}

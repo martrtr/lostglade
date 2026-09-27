@@ -42,10 +42,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * and its CPU-derived pyramid.</p>
  */
 final class MonitorYandexMapsClientTileRenderer {
-    private static final int MISSING_RGB = 0x18242B;
     private static final String STORE_DIRECTORY = "lostglade/yandex_maps/v2";
     private static final int MIN_ZOOM_EXPONENT = -4;
     private static final int MAX_ZOOM_EXPONENT = MapPyramidBuilder.MAX_LEVEL;
+    // Exact placeholder color used by the pre-rewrite Yandex map compositor.
+    private static final int MISSING_RGB = 0x18242B;
     private static final int IMAGE_CACHE_LIMIT = 512;
     private static final Object IMAGE_CACHE_LOCK = new Object();
     private static final Map<String, BufferedImage> IMAGE_CACHE = new LinkedHashMap<>(128, 0.75F, true) {
@@ -103,8 +104,9 @@ final class MonitorYandexMapsClientTileRenderer {
         int safeHeight = Math.max(1, height);
         BufferedImage canvas = new BufferedImage(safeWidth, safeHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = canvas.createGraphics();
-        // Preserve the exact pre-removal Yandex UI frame contract: a valid map frame
-        // is fully opaque and missing samples use the historical map placeholder RGB.
+        // Match the old renderer exactly: uncovered/not-yet-rendered map pixels are
+        // one flat opaque gray-blue surface. Do not let the monitor's textured
+        // screen_on.png show through transparent LOD quadrants.
         graphics.setColor(new Color(MISSING_RGB));
         graphics.fillRect(0, 0, safeWidth, safeHeight);
 
@@ -113,7 +115,7 @@ final class MonitorYandexMapsClientTileRenderer {
         }
         if (server == null || !Level.OVERWORLD.equals(dimension)) {
             graphics.dispose();
-            return Frame.failure(null, "Карта недоступна");
+            return Frame.failure(canvas, "Карта недоступна");
         }
 
         // Displaying committed cache is deliberately independent from world discovery and
@@ -152,7 +154,7 @@ final class MonitorYandexMapsClientTileRenderer {
         );
         if (displayProfileHash == null || displayProfileHash.isBlank()) {
             graphics.dispose();
-            return Frame.failure(null, "Карта пока не отрендерена");
+            return Frame.failure(canvas, "Карта пока не отрендерена");
         }
         int loaded = 0;
         int missing = 0;

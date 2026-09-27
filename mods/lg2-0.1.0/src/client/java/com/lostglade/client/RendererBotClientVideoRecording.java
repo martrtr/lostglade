@@ -103,6 +103,7 @@ public final class RendererBotClientVideoRecording {
 						captureHeight
 				));
 			}
+			RendererClientDiagnostics.cameraVideoStarted(payload.requestId());
 			Lg2.LOGGER.info(
 					"Renderer bot preparing video recording {} at {} fps {}x{} (capture {}x{}, settledRenders={})",
 					payload.requestId(),
@@ -421,6 +422,8 @@ public final class RendererBotClientVideoRecording {
 					continue;
 				}
 				try {
+					if (!isActiveRecording(recording.payload().requestId())
+							|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingStartedC2SPayload.TYPE)) continue;
 					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingStartedC2SPayload(
 							recording.payload().requestId()
 					));
@@ -468,19 +471,20 @@ public final class RendererBotClientVideoRecording {
 			long durationMs = current.frameCount * 1_000L / targetFps;
 			Lg2.LOGGER.info("Renderer bot finished video recording {} with {} frames ({} ms)", current.payload().requestId(), current.frameCount, durationMs);
 			client.execute(() -> {
-				clearIfMatching(current.payload().requestId());
 				sendCompletedRecording(current, durationMs, targetFps);
+				clearIfMatching(current.payload().requestId());
 			});
 		} catch (Exception exception) {
 			client.execute(() -> {
-				clearIfMatching(current.payload().requestId());
 				sendFailure(current.payload().requestId(), exception.getMessage());
+				clearIfMatching(current.payload().requestId());
 			});
 			Lg2.LOGGER.warn("Renderer bot failed to finish video recording {}", current.payload().requestId(), exception);
 		}
 	}
 
 	private static void sendCompletedRecording(PendingRecording recording, long durationMs, int targetFps) {
+		if (recording == null || !isActiveRecording(recording.payload().requestId())) return;
 		boolean remoteVolunteer = RendererBotVolunteerClient.isVolunteerRenderer() && !RendererBotClientMode.isEnabled();
 		String videoPath = recording.finalPath().toAbsolutePath().toString();
 		if (remoteVolunteer) {
@@ -491,6 +495,7 @@ public final class RendererBotClientVideoRecording {
 				}
 				byte[] videoBytes = Files.readAllBytes(recording.finalPath());
 				int chunks = Math.max(1, (videoBytes.length + REMOTE_VIDEO_CHUNK_BYTES - 1) / REMOTE_VIDEO_CHUNK_BYTES);
+				if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoFileChunkC2SPayload.TYPE)) return;
 				for (int index = 0; index < chunks; index++) {
 					int start = index * REMOTE_VIDEO_CHUNK_BYTES;
 					int end = Math.min(videoBytes.length, start + REMOTE_VIDEO_CHUNK_BYTES);
@@ -505,10 +510,12 @@ public final class RendererBotClientVideoRecording {
 				return;
 			}
 		}
+		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload(
 				recording.payload().requestId(), durationMs, targetFps, videoPath,
 				recording.firstPreviewFrame, recording.firstFullFrame
 		));
+		RendererClientDiagnostics.cameraVideoCompleted(recording.payload().requestId());
 	}
 
 	private static void abortAll(String message) {
@@ -519,7 +526,6 @@ public final class RendererBotClientVideoRecording {
 		for (UUID requestId : requestIds) {
 			abortRecording(requestId, message);
 		}
-		RendererBotOffscreenWorldRenderer.clearCaches();
 	}
 
 	private static void abortRecording(UUID requestId, String message) {
@@ -540,6 +546,10 @@ public final class RendererBotClientVideoRecording {
 		} catch (IOException ignored) {
 		}
 		sendFailure(current.payload().requestId(), message);
+	}
+
+	private static boolean isActiveRecording(UUID requestId) {
+		synchronized (LOCK) { return requestId != null && RECORDINGS.containsKey(requestId); }
 	}
 
 	private static void clearIfMatching(UUID requestId) {
@@ -865,9 +875,9 @@ public final class RendererBotClientVideoRecording {
 	}
 
 	private static void sendFailure(UUID requestId, String message) {
-		if (requestId == null) {
-			return;
-		}
+		if (requestId == null) return;
+		RendererClientDiagnostics.cameraVideoFailed(requestId, message);
+		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotCaptureFailureC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotCaptureFailureC2SPayload(
 				requestId,
 				message == null || message.isBlank() ? "Renderer bot video recording failed" : message
