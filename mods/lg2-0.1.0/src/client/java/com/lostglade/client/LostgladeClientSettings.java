@@ -21,6 +21,10 @@ import java.nio.file.Path;
 public final class LostgladeClientSettings {
 	private static final int MIN_PARALLEL_CAPTURES = 0;
 	private static final int MAX_PARALLEL_CAPTURES = 4;
+	private static final int MIN_MAP_RENDERER_FPS = 20;
+	private static final int MAX_MAP_RENDERER_FPS = 240;
+	private static final int MIN_MAP_RENDERER_JOBS_PER_MINUTE = 1;
+	private static final int MAX_MAP_RENDERER_JOBS_PER_MINUTE = 60;
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("lostglade-client.json");
 	private static Settings settings = Settings.defaults();
@@ -69,6 +73,45 @@ public final class LostgladeClientSettings {
 		write();
 	}
 
+	public static MapRendererMode mapRendererMode() {
+		return settings.mapRendererMode;
+	}
+
+	public static synchronized void setMapRendererMode(MapRendererMode mode) {
+		MapRendererMode safe = mode == null ? MapRendererMode.OFF : mode;
+		if (settings.mapRendererMode == safe) {
+			return;
+		}
+		settings.mapRendererMode = safe;
+		write();
+	}
+
+	public static int mapRendererMinFps() {
+		return settings.mapRendererMinFps;
+	}
+
+	public static synchronized void setMapRendererMinFps(int fps) {
+		int clamped = Math.clamp(fps, MIN_MAP_RENDERER_FPS, MAX_MAP_RENDERER_FPS);
+		if (settings.mapRendererMinFps == clamped) {
+			return;
+		}
+		settings.mapRendererMinFps = clamped;
+		write();
+	}
+
+	public static int mapRendererMaxJobsPerMinute() {
+		return settings.mapRendererMaxJobsPerMinute;
+	}
+
+	public static synchronized void setMapRendererMaxJobsPerMinute(int jobs) {
+		int clamped = Math.clamp(jobs, MIN_MAP_RENDERER_JOBS_PER_MINUTE, MAX_MAP_RENDERER_JOBS_PER_MINUTE);
+		if (settings.mapRendererMaxJobsPerMinute == clamped) {
+			return;
+		}
+		settings.mapRendererMaxJobsPerMinute = clamped;
+		write();
+	}
+
 	public static void registerOptionsScreen() {
 		ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
 			if (!(screen instanceof OptionsScreen)) {
@@ -88,12 +131,27 @@ public final class LostgladeClientSettings {
 			value.maxParallelCaptures = 0;
 			return true;
 		}
+		boolean changed = false;
 		int clamped = Math.clamp(value.maxParallelCaptures, MIN_PARALLEL_CAPTURES, MAX_PARALLEL_CAPTURES);
-		if (clamped == value.maxParallelCaptures) {
-			return false;
+		if (clamped != value.maxParallelCaptures) {
+			value.maxParallelCaptures = clamped;
+			changed = true;
 		}
-		value.maxParallelCaptures = clamped;
-		return true;
+		if (value.mapRendererMode == null) {
+			value.mapRendererMode = MapRendererMode.OFF;
+			changed = true;
+		}
+		int minFps = Math.clamp(value.mapRendererMinFps, MIN_MAP_RENDERER_FPS, MAX_MAP_RENDERER_FPS);
+		if (minFps != value.mapRendererMinFps) {
+			value.mapRendererMinFps = minFps;
+			changed = true;
+		}
+		int jobs = Math.clamp(value.mapRendererMaxJobsPerMinute, MIN_MAP_RENDERER_JOBS_PER_MINUTE, MAX_MAP_RENDERER_JOBS_PER_MINUTE);
+		if (jobs != value.mapRendererMaxJobsPerMinute) {
+			value.mapRendererMaxJobsPerMinute = jobs;
+			changed = true;
+		}
+		return changed;
 	}
 
 	private static void write() {
@@ -107,9 +165,26 @@ public final class LostgladeClientSettings {
 		}
 	}
 
+	public enum MapRendererMode {
+		OFF,
+		IDLE_ONLY,
+		ALWAYS;
+
+		public MapRendererMode next() {
+			return switch (this) {
+				case OFF -> IDLE_ONLY;
+				case IDLE_ONLY -> ALWAYS;
+				case ALWAYS -> OFF;
+			};
+		}
+	}
+
 	private static final class Settings {
 		private boolean cameraRendererEnabled = true;
 		private int maxParallelCaptures = 1;
+		private MapRendererMode mapRendererMode = MapRendererMode.OFF;
+		private int mapRendererMinFps = 50;
+		private int mapRendererMaxJobsPerMinute = 60;
 
 		private static Settings defaults() {
 			return new Settings();

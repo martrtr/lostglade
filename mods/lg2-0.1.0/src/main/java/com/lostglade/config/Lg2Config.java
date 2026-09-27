@@ -50,6 +50,14 @@ public final class Lg2Config {
 	private static final int MAX_CAMERA_RENDER_SAMPLES_PER_AXIS = 4;
 	private static final int MIN_CAMERA_RENDERER_BOT_TIMEOUT_MS = 250;
 	private static final int MAX_CAMERA_RENDERER_BOT_TIMEOUT_MS = 30_000;
+	private static final int MIN_YANDEX_MAP_RENDERER_MAX_GLOBAL_IN_FLIGHT = 1;
+	private static final int MAX_YANDEX_MAP_RENDERER_MAX_GLOBAL_IN_FLIGHT = 64;
+	private static final int MIN_YANDEX_MAP_SNAPSHOT_THREADS = 1;
+	private static final int MAX_YANDEX_MAP_SNAPSHOT_THREADS = 32;
+	private static final int MIN_YANDEX_MAP_VISIBLE_DEMAND_SECONDS = 1;
+	private static final int MAX_YANDEX_MAP_VISIBLE_DEMAND_SECONDS = 300;
+	private static final int MIN_YANDEX_MAP_FAILURE_BACKOFF_MINUTES = 1;
+	private static final int MAX_YANDEX_MAP_FAILURE_BACKOFF_MINUTES = 24 * 60;
 	private static final int MIN_MONITOR_RENDER_THREADS = 1;
 	private static final int MAX_MONITOR_RENDER_THREADS = 64;
 	private static final int MIN_MONITOR_MEDIA_IO_THREADS = 1;
@@ -193,6 +201,18 @@ public final class Lg2Config {
 				MIN_CAMERA_RENDERER_BOT_TIMEOUT_MS,
 				MAX_CAMERA_RENDERER_BOT_TIMEOUT_MS,
 				newValue -> configData.cameraRendererBotTimeoutMs = newValue);
+		changed |= clampSingleValue(configData.yandexMapRendererMaxGlobalInFlight,
+				MIN_YANDEX_MAP_RENDERER_MAX_GLOBAL_IN_FLIGHT, MAX_YANDEX_MAP_RENDERER_MAX_GLOBAL_IN_FLIGHT,
+				newValue -> configData.yandexMapRendererMaxGlobalInFlight = newValue);
+		changed |= clampSingleValue(configData.yandexMapSnapshotThreads,
+				MIN_YANDEX_MAP_SNAPSHOT_THREADS, MAX_YANDEX_MAP_SNAPSHOT_THREADS,
+				newValue -> configData.yandexMapSnapshotThreads = newValue);
+		changed |= clampSingleValue(configData.yandexMapVisibleDemandSeconds,
+				MIN_YANDEX_MAP_VISIBLE_DEMAND_SECONDS, MAX_YANDEX_MAP_VISIBLE_DEMAND_SECONDS,
+				newValue -> configData.yandexMapVisibleDemandSeconds = newValue);
+		changed |= clampSingleValue(configData.yandexMapMaxFailureBackoffMinutes,
+				MIN_YANDEX_MAP_FAILURE_BACKOFF_MINUTES, MAX_YANDEX_MAP_FAILURE_BACKOFF_MINUTES,
+				newValue -> configData.yandexMapMaxFailureBackoffMinutes = newValue);
 		changed |= clampSingleValue(configData.monitorRenderThreads,
 				MIN_MONITOR_RENDER_THREADS,
 				MAX_MONITOR_RENDER_THREADS,
@@ -395,6 +415,12 @@ public final class Lg2Config {
 		/** Client-side opt-in. Never enabled automatically. */
 		public boolean cameraRendererVolunteerEnabled = false;
 		public int cameraRendererBotTimeoutMs = 15_000;
+		/** Server admission for regular Lostglade clients volunteering for map rendering. */
+		public boolean yandexMapRendererAllowPlayerVolunteers = true;
+		public int yandexMapRendererMaxGlobalInFlight = 32;
+		public int yandexMapSnapshotThreads = Math.max(2, Math.min(8, Math.max(1, Runtime.getRuntime().availableProcessors() / 2)));
+		public int yandexMapVisibleDemandSeconds = 30;
+		public int yandexMapMaxFailureBackoffMinutes = 60;
 		public int monitorRenderThreads = Math.max(1, Math.min(4, Math.max(1, (Runtime.getRuntime().availableProcessors() - 1) / 2)));
 		public int monitorMediaIoThreads = Math.max(1, Math.min(2, Math.max(1, Runtime.getRuntime().availableProcessors() / 4)));
 		public int monitorTileQuantizerThreads = Math.max(1, Math.min(3, Math.max(1, (Runtime.getRuntime().availableProcessors() - 1) / 2)));

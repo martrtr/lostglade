@@ -1,6 +1,7 @@
 package com.lostglade.mixin.client;
 
 import com.lostglade.client.RendererBotShadowLevel;
+import com.lostglade.client.maprender.YandexMapRenderWorld;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.ParticleEngine;
@@ -21,7 +22,9 @@ public abstract class LevelRendererCameraSceneMixin {
 
 	@Redirect(method = "*", at = @At(value = "FIELD", target = "Lnet/minecraft/client/Minecraft;particleEngine:Lnet/minecraft/client/particle/ParticleEngine;"))
 	private ParticleEngine lg2$ownedParticles(Minecraft client) {
-		return level instanceof RendererBotShadowLevel scene ? scene.sceneParticles() : client.particleEngine;
+		if (level instanceof RendererBotShadowLevel scene) return scene.sceneParticles();
+		if (level instanceof YandexMapRenderWorld mapScene) return mapScene.sceneParticles();
+		return client.particleEngine;
 	}
 
 	@Redirect(method = "renderLevel", at = @At(value = "FIELD", target = "Lnet/minecraft/client/Minecraft;crosshairPickEntity:Lnet/minecraft/world/entity/Entity;"))
@@ -35,13 +38,13 @@ public abstract class LevelRendererCameraSceneMixin {
 	private boolean lg2$sceneSpectatorState(LocalPlayer player) {
 		// There is intentionally no LocalPlayer in a shadow world.  Its terrain
 		// culling must not inherit the contributing player's spectator state.
-		return level instanceof RendererBotShadowLevel ? false : player.isSpectator();
+		return level instanceof RendererBotShadowLevel || level instanceof YandexMapRenderWorld ? false : player.isSpectator();
 	}
 
 	@Redirect(method = "extractVisibleEntities", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/Entity;hasIndirectPassenger(Lnet/minecraft/world/entity/Entity;)Z"))
 	private boolean lg2$sceneOwnerPassenger(Entity entity, Entity passenger) {
 		// This fallback in vanilla exists solely to keep the local player's vehicle
 		// visible.  A player from the real level can never be a passenger here.
-		return !(level instanceof RendererBotShadowLevel) && entity.hasIndirectPassenger(passenger);
+		return !(level instanceof RendererBotShadowLevel) && !(level instanceof YandexMapRenderWorld) && entity.hasIndirectPassenger(passenger);
 	}
 }

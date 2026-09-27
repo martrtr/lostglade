@@ -1,6 +1,7 @@
 package com.lostglade.mixin.client;
 
 import com.lostglade.client.RendererBotSceneContext;
+import com.lostglade.client.maprender.YandexMapRenderContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
@@ -21,30 +22,31 @@ public abstract class LightTextureCameraSceneMixin {
 	@org.spongepowered.asm.mixin.Shadow private boolean updateLightTexture;
 	@Inject(method = "updateLightTexture", at = @At("HEAD"))
 	private void lg2$refreshSceneLight(float partialTick, org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
-		if (RendererBotSceneContext.level() != null) updateLightTexture = true;
+		if (RendererBotSceneContext.level() != null || YandexMapRenderContext.level() != null) updateLightTexture = true;
 	}
 	@Redirect(method = "updateLightTexture", at = @At(value = "FIELD", target = "Lnet/minecraft/client/Minecraft;level:Lnet/minecraft/client/multiplayer/ClientLevel;"))
 	private ClientLevel lg2$sceneLevel(Minecraft client) {
+		if (YandexMapRenderContext.level() != null) return YandexMapRenderContext.level();
 		return RendererBotSceneContext.level() != null ? RendererBotSceneContext.level() : client.level;
 	}
 	@Redirect(method = "updateLightTexture", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/player/LocalPlayer;getEffectBlendFactor(Lnet/minecraft/core/Holder;F)F"))
 	private float lg2$cameraEffect(LocalPlayer player, Holder<MobEffect> effect, float partialTick) {
-		return RendererBotSceneContext.level() != null ? 0 : player.getEffectBlendFactor(effect, partialTick);
+		return RendererBotSceneContext.level() != null || YandexMapRenderContext.level() != null ? 0 : player.getEffectBlendFactor(effect, partialTick);
 	}
 	@Redirect(method = "updateLightTexture", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/player/LocalPlayer;getWaterVision()F"))
 	private float lg2$cameraWaterVision(LocalPlayer player) {
-		return RendererBotSceneContext.level() != null ? 0 : player.getWaterVision();
+		return RendererBotSceneContext.level() != null || YandexMapRenderContext.level() != null ? 0 : player.getWaterVision();
 	}
 	@Redirect(method = "updateLightTexture", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/player/LocalPlayer;hasEffect(Lnet/minecraft/core/Holder;)Z"))
 	private boolean lg2$cameraHasEffect(LocalPlayer player, Holder<MobEffect> effect) {
-		return RendererBotSceneContext.level() == null && player.hasEffect(effect);
+		return RendererBotSceneContext.level() == null && YandexMapRenderContext.level() == null && player.hasEffect(effect);
 	}
 	@Inject(method = "calculateDarknessScale", at = @At("HEAD"), cancellable = true)
 	private void lg2$cameraDarkness(LivingEntity entity, float darkness, float partialTick, CallbackInfoReturnable<Float> cir) {
-		if (RendererBotSceneContext.level() != null) cir.setReturnValue(0.0F);
+		if (RendererBotSceneContext.level() != null || YandexMapRenderContext.level() != null) cir.setReturnValue(0.0F);
 	}
 	@Redirect(method = "updateLightTexture", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;getDarkenWorldAmount(F)F"))
 	private float lg2$cameraWorldDarkening(GameRenderer renderer, float partialTick) {
-		return RendererBotSceneContext.level() != null ? 0 : ((GameRendererRenderLevelInvoker) renderer).lg2$getDarkenWorldAmount(partialTick);
+		return RendererBotSceneContext.level() != null || YandexMapRenderContext.level() != null ? 0 : ((GameRendererRenderLevelInvoker) renderer).lg2$getDarkenWorldAmount(partialTick);
 	}
 }

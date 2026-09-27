@@ -1,6 +1,7 @@
 package com.lostglade.mixin.client;
 
 import com.lostglade.client.RendererBotOffscreenWorldRenderer;
+import com.lostglade.client.maprender.YandexMapRenderContext;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import org.joml.Matrix4f;
@@ -15,7 +16,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class GameRendererOffscreenProjectionMixin {
 	@Inject(method = "getMainCamera", at = @At("HEAD"), cancellable = true)
 	private void lg2$sceneCamera(CallbackInfoReturnable<net.minecraft.client.Camera> cir) {
-		var camera = RendererBotOffscreenWorldRenderer.activeCamera();
+		var camera = YandexMapRenderContext.camera();
+		if (camera == null) camera = RendererBotOffscreenWorldRenderer.activeCamera();
 		if (camera == null && com.lostglade.client.RendererBotSceneContext.level() != null) {
 			camera = com.lostglade.client.RendererBotSceneContext.level().camera();
 		}
@@ -24,7 +26,8 @@ public abstract class GameRendererOffscreenProjectionMixin {
 
 	@Inject(method = "lightTexture", at = @At("HEAD"), cancellable = true)
 	private void lg2$sceneLight(CallbackInfoReturnable<net.minecraft.client.renderer.LightTexture> cir) {
-		var light = RendererBotOffscreenWorldRenderer.activeLightTexture();
+		var light = YandexMapRenderContext.lightTexture();
+		if (light == null) light = RendererBotOffscreenWorldRenderer.activeLightTexture();
 		if (light != null) cir.setReturnValue(light);
 	}
 	@Shadow
@@ -36,6 +39,11 @@ public abstract class GameRendererOffscreenProjectionMixin {
 
 	@Inject(method = "getProjectionMatrix", at = @At("HEAD"), cancellable = true)
 	private void lg2$useOffscreenTargetAspect(float fovDegrees, CallbackInfoReturnable<Matrix4f> cir) {
+		Matrix4f mapProjection = YandexMapRenderContext.projection();
+		if (mapProjection != null) {
+			cir.setReturnValue(mapProjection);
+			return;
+		}
 		if (!RendererBotOffscreenWorldRenderer.isOffscreenRenderActive() || this.minecraft == null) {
 			return;
 		}

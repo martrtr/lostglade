@@ -96,6 +96,18 @@ record WallpaperVisualSnapshot(
 ) {
 }
 
+record YandexMapsVisualSnapshot(
+		long version,
+		BufferedImage frame,
+		String statusText,
+		String dimensionLabel,
+		double centerX,
+		double centerZ,
+		double zoomBlocks,
+		boolean healthy
+) {
+}
+
 record RenderTileTarget(
 		int tileIndex,
 		MapId mapId,
@@ -154,6 +166,7 @@ record RenderWork(
 		MediaVisualSnapshot mediaSnapshot,
 		CameraAppVisualSnapshot cameraAppSnapshot,
 		MaxVisualSnapshot maxSnapshot,
+		YandexMapsVisualSnapshot yandexMapsSnapshot,
 		SupportVisualSnapshot supportSnapshot,
 		WallpaperVisualSnapshot wallpaperSnapshot,
 		boolean transparentOutput,

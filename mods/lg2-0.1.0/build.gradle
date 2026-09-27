@@ -272,7 +272,84 @@ tasks.register("runMicrophoneSpeakerCapturePolicyTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
+
+tasks.register("runYandexMapRenderPhaseOneTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 0/1 disk-index, tile-store and architecture checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseOneTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+
+tasks.register("runYandexMapRenderPhaseTwoTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 2 worker capability/profile checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseTwoTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+
+tasks.register("runYandexMapRenderPhaseThreeTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 3 snapshot/manifest isolation checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseThreeTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+
+tasks.register("runYandexMapRenderPhaseFourTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 4 isolated vanilla-render architecture checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseFourTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+
+tasks.register("runYandexMapRenderVerticalSliceTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map v2 one-tile lease, validation, and lifecycle regression checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderVerticalSliceTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runYandexMapRenderPhaseSixTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 6 CPU zoom-pyramid checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseSixTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runYandexMapRenderPhaseSevenTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 7 cache-only monitor UI checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseSevenTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runYandexMapRenderPhaseEightTest", JavaExec) {
+	group = "verification"
+	description = "Runs Yandex map renderer Phase 8 worker-health and production-hardening checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseEightTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
 tasks.named("check") {
+	dependsOn(tasks.named("runYandexMapRenderPhaseEightTest"))
+	dependsOn(tasks.named("runYandexMapRenderPhaseSevenTest"))
+	dependsOn(tasks.named("runYandexMapRenderPhaseSixTest"))
+	dependsOn(tasks.named("runYandexMapRenderVerticalSliceTest"))
+	dependsOn(tasks.named("runYandexMapRenderPhaseFourTest"))
+	dependsOn(tasks.named("runYandexMapRenderPhaseThreeTest"))
+	dependsOn(tasks.named("runYandexMapRenderPhaseTwoTest"))
+	dependsOn(tasks.named("runYandexMapRenderPhaseOneTest"))
 	dependsOn(tasks.named("runAncientUkrCreditorSelectionTest"))
 	dependsOn(tasks.named("runAncientUkrCollectorRulesTest"))
 	dependsOn(tasks.named("runOrthodoxLightSyncTest"))
