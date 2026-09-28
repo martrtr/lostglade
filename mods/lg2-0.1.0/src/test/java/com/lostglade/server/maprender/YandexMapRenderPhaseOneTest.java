@@ -26,6 +26,7 @@ public final class YandexMapRenderPhaseOneTest {
 		negativeCoordinateTileMathUsesFloorDivision();
 		regionHeadersDiscoverOnlyExistingChunks();
 		sourceFingerprintChangesWithHeaderStamp();
+		targetedSourceRecheckMatchesSnapshotFingerprint();
 		atomicTileStorePublishesWholeGenerations();
 		renderProfileVersionsUsePhysicalBaseNamespaces();
 		metadataOnlyRefreshPreservesCommittedPixels();
@@ -91,6 +92,39 @@ public final class YandexMapRenderPhaseOneTest {
 			writeRegion(file, List.of(new HeaderEntry(0, 0, 2, 1, 101)));
 			MapTileSourceState after = onlyTile(MapChunkExistenceIndex.scan(region));
 			require(!before.sourceFingerprint().equals(after.sourceFingerprint()), "MCA timestamp change must change source fingerprint");
+		} finally {
+			deleteTree(root);
+		}
+	}
+
+	private static void targetedSourceRecheckMatchesSnapshotFingerprint() throws Exception {
+		Path root = Files.createTempDirectory("lg2-map-targeted-source-");
+		try {
+			Path region = Files.createDirectories(root.resolve("region"));
+			Path entities = Files.createDirectories(root.resolve("entities"));
+			Path terrainFile = region.resolve("r.-1.-1.mca");
+			Path entityFile = entities.resolve("r.-1.-1.mca");
+			writeRegion(terrainFile, List.of(new HeaderEntry(31, 31, 2, 1, 700)));
+			writeRegion(entityFile, List.of(new HeaderEntry(31, 31, 3, 1, 800)));
+			MapTileKey key = new MapTileKey(OVERWORLD, -1, -1, MapRenderProfile.CURRENT.version());
+			MapSnapshotManifest manifest = MapSnapshotManifest.create(
+					MapChunkExistenceIndex.scan(region),
+					MapChunkExistenceIndex.scan(entities),
+					key,
+					MapRenderProfile.CURRENT
+			);
+			MapTileSourceState targeted = MapSnapshotManifest.currentSavedSourceState(region, entities, key, MapRenderProfile.CURRENT);
+			require(targeted.sourceFingerprint().equals(manifest.sourceState().sourceFingerprint()), "targeted MCA recheck must reproduce the exact snapshot source fingerprint");
+			require(targeted.existingChunkMask() == manifest.sourceState().existingChunkMask(), "targeted MCA recheck must reproduce source existence mask");
+			require(MapChunkExistenceIndex.readChunkStamp(region, -1, -1).orElseThrow().storageTimestamp() == 700L, "targeted reader must use floor-correct negative region coordinates");
+
+			writeRegion(entityFile, List.of(new HeaderEntry(31, 31, 3, 1, 801)));
+			MapTileSourceState entityChanged = MapSnapshotManifest.currentSavedSourceState(region, entities, key, MapRenderProfile.CURRENT);
+			require(!entityChanged.sourceFingerprint().equals(targeted.sourceFingerprint()), "saved ItemDisplay/entity header change must invalidate an in-flight map snapshot");
+
+			writeRegion(terrainFile, List.of(new HeaderEntry(31, 31, 2, 1, 701)));
+			MapTileSourceState terrainChanged = MapSnapshotManifest.currentSavedSourceState(region, entities, key, MapRenderProfile.CURRENT);
+			require(!terrainChanged.sourceFingerprint().equals(entityChanged.sourceFingerprint()), "saved terrain header change must invalidate an in-flight map snapshot");
 		} finally {
 			deleteTree(root);
 		}

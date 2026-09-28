@@ -148,10 +148,10 @@ public final class MapPyramidBuilder {
 		int tilePixels = profile.tilePixels();
 		for (int y = 0; y < tilePixels; y++) {
 			for (int x = 0; x < tilePixels; x++) {
-				int red = 0;
-				int green = 0;
-				int blue = 0;
-				int count = 0;
+				long premultipliedRed = 0L;
+				long premultipliedGreen = 0L;
+				long premultipliedBlue = 0L;
+				int alphaSum = 0;
 				for (int dy = 0; dy < 2; dy++) {
 					for (int dx = 0; dx < 2; dx++) {
 						int combinedX = x * 2 + dx;
@@ -159,19 +159,24 @@ public final class MapPyramidBuilder {
 						int childX = combinedX >= tilePixels ? 1 : 0;
 						int childY = combinedY >= tilePixels ? 1 : 0;
 						BufferedImage child = children.get(childY * 2 + childX).image();
-						if (child == null) continue;
-						int rgb = child.getRGB(combinedX % tilePixels, combinedY % tilePixels);
-						red += (rgb >>> 16) & 0xFF;
-						green += (rgb >>> 8) & 0xFF;
-						blue += rgb & 0xFF;
-						count++;
+						if (child == null) continue; // Missing child = transparent sample.
+						int argb = child.getRGB(combinedX % tilePixels, combinedY % tilePixels);
+						int alpha = (argb >>> 24) & 0xFF;
+						if (alpha == 0) continue;
+						alphaSum += alpha;
+						premultipliedRed += ((argb >>> 16) & 0xFFL) * alpha;
+						premultipliedGreen += ((argb >>> 8) & 0xFFL) * alpha;
+						premultipliedBlue += (argb & 0xFFL) * alpha;
 					}
 				}
-				if (count > 0) {
-					downsampled.setRGB(x, y, 0xFF000000
-							| ((red / count) << 16)
-							| ((green / count) << 8)
-							| (blue / count));
+				if (alphaSum > 0) {
+					// Four source samples always contribute to one output texel. Missing/
+					// transparent samples therefore reduce output coverage instead of turning black.
+					int alpha = (alphaSum + 2) / 4;
+					int red = (int) (premultipliedRed / alphaSum);
+					int green = (int) (premultipliedGreen / alphaSum);
+					int blue = (int) (premultipliedBlue / alphaSum);
+					downsampled.setRGB(x, y, (alpha << 24) | (red << 16) | (green << 8) | blue);
 				}
 			}
 		}

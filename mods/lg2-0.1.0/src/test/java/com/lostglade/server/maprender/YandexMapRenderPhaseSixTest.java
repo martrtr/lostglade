@@ -26,6 +26,7 @@ public final class YandexMapRenderPhaseSixTest {
 		fourBaseTilesDeriveOneL1Tile();
 		changingOneBaseTileRebuildsOnlyDerivedContent();
 		pyramidUsesLegacyArithmeticRgbAverage();
+		pyramidPreservesTransparency();
 		pyramidVersionsUsePhysicalCacheNamespaces();
 		pyramidIsCpuOnlyAndProtocolHasNoZoomRenderJobs();
 		System.out.println("Yandex map renderer Phase 6 checks passed");
@@ -89,6 +90,33 @@ public final class YandexMapRenderPhaseSixTest {
 			require(result.getRGB(0, 0) == expected, "pyramid must reproduce the legacy integer 2x2 RGB average exactly");
 			String builder = Files.readString(Path.of("").toAbsolutePath().resolve("src/main/java/com/lostglade/server/maprender/MapPyramidBuilder.java"));
 			require(!builder.contains("VALUE_INTERPOLATION_BILINEAR"), "pyramid must not use Java2D bilinear filtering");
+		} finally {
+			deleteTree(root);
+		}
+	}
+
+	private static void pyramidPreservesTransparency() throws Exception {
+		Path root = Files.createTempDirectory("lg2-map-pyramid-alpha-");
+		try {
+			String profileHash = MapRenderProfile.CURRENT.contractHash();
+			MapTileStore base = new MapTileStore(root);
+			BufferedImage source = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB);
+			// First output texel: one opaque red sample + three transparent samples.
+			source.setRGB(0, 0, 0xFFFF0000);
+			ByteArrayOutputStream png = new ByteArrayOutputStream();
+			require(ImageIO.write(source, "PNG", png), "PNG writer must exist");
+			MapTileKey key = new MapTileKey(OVERWORLD, 0, 0, MapRenderProfile.CURRENT.version());
+			base.commitBaseTile(key, profileHash, MapRenderProfile.CURRENT,
+					new MapTileSourceState(key, 1L, "alpha", 1), png.toByteArray(), 1L, "phase-six-test");
+			MapPyramidTileKey l1 = new MapPyramidTileKey(OVERWORLD, 1, 0, 0, MapRenderProfile.CURRENT.version());
+			require(MapPyramidBuilder.rebuildTile(root, profileHash, MapRenderProfile.CURRENT, l1), "transparent L0 must still derive an L1 tile");
+			BufferedImage result = ImageIO.read(new ByteArrayInputStream(new MapPyramidStore(root).read(l1, profileHash).orElseThrow().imageBytes()));
+			int partial = result.getRGB(0, 0);
+			int partialAlpha = (partial >>> 24) & 0xFF;
+			require(partialAlpha >= 63 && partialAlpha <= 64, "one opaque source sample out of four must produce quarter alpha, got " + partialAlpha);
+			require(((partial >>> 16) & 0xFF) >= 250 && ((partial >>> 8) & 0xFF) <= 2 && (partial & 0xFF) <= 2, "partial-alpha color must remain red, not premultiplied black");
+			require(((result.getRGB(8, 8) >>> 24) & 0xFF) == 0, "fully transparent source area must stay alpha=0 instead of opaque black");
+			require(((result.getRGB(224, 224) >>> 24) & 0xFF) == 0, "missing child quadrant must stay transparent");
 		} finally {
 			deleteTree(root);
 		}

@@ -83,11 +83,10 @@ public final class MapPyramidStore {
 		return metadata;
 	}
 
-	public void invalidate(MapPyramidTileKey key, String profileHash) {
-		try {
-			Files.deleteIfExists(tileDirectory(key, profileHash).resolve(CURRENT_FILE));
-		} catch (IOException ignored) {
-		}
+	public void invalidate(MapPyramidTileKey key, String profileHash) throws IOException {
+		Objects.requireNonNull(key, "key");
+		Objects.requireNonNull(profileHash, "profileHash");
+		Files.deleteIfExists(tileDirectory(key, profileHash).resolve(CURRENT_FILE));
 	}
 
 	private GenerationFiles currentGenerationFiles(MapPyramidTileKey key, String profileHash) throws IOException {

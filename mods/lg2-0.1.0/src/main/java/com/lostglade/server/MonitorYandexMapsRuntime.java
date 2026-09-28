@@ -58,6 +58,9 @@ public final class MonitorYandexMapsRuntime {
 	private static final long PAN_FRAME_DELAY_MS = 40L;
 	private static final long TILE_READY_RENDER_DEBOUNCE_MS = 35L;
 	private static final ResourceKey<Level> MAP_DIMENSION = Level.OVERWORLD;
+	// Flat monitor/Yandex canvas background. This belongs exclusively to the UI layer;
+	// cached/rendered tiles stay transparent outside real map imagery.
+	private static final int MAP_CANVAS_BACKGROUND_RGB = 0x282828;
 	private static final int MAP_MARKER_ICON_SIZE = 32;
 	private static final int MAP_MARKER_SCREEN_ICON_SIZE = 16;
 	private static final int MARKER_ICON_ALPHA_BOUNDS_THRESHOLD = 1;
@@ -336,6 +339,8 @@ public final class MonitorYandexMapsRuntime {
 			return;
 		}
 		UiRect canvas = mediaCanvasRect(layout);
+		graphics.setColor(new Color(MAP_CANVAS_BACKGROUND_RGB));
+		graphics.fillRect(canvas.x(), canvas.y(), canvas.width(), canvas.height());
 		YandexMapsVisualSnapshot effectiveSnapshot = snapshot;
 		BufferedImage frame = snapshot != null ? snapshot.frame() : null;
 		if (frame == null && snapshot != null && server != null && runtimeKey != null) {
@@ -344,8 +349,8 @@ public final class MonitorYandexMapsRuntime {
 					MAP_DIMENSION,
 					snapshot.centerX(),
 					snapshot.centerZ(),
-					Math.max(1, layout.canvasWidth()),
-					Math.max(1, layout.canvasHeight()),
+					Math.max(1, canvas.width()),
+					Math.max(1, canvas.height()),
 					snapshot.zoomBlocks(),
 					() -> notifyTileReady(server, runtimeKey),
 					runtimeKey
@@ -383,15 +388,25 @@ public final class MonitorYandexMapsRuntime {
 	}
 
 	private static void drawMapFrameNearest(Graphics2D graphics, BufferedImage frame, UiRect canvas) {
-		Object previousInterpolation = graphics.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
+		if (graphics == null || frame == null || canvas == null || canvas.width() <= 0 || canvas.height() <= 0) return;
+		Graphics2D mapGraphics = (Graphics2D) graphics.create();
 		try {
-			graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-			graphics.drawImage(frame, canvas.x(), canvas.y(), canvas.width(), canvas.height(), null);
+			mapGraphics.clipRect(canvas.x(), canvas.y(), canvas.width(), canvas.height());
+			mapGraphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+			if (frame.getWidth() == canvas.width() && frame.getHeight() == canvas.height()) {
+				// Normal contract: map compositor already rendered in final monitor pixels.
+				// A second resize destroys the integral 2x/4x close-zoom texel grid.
+				mapGraphics.drawImage(frame, canvas.x(), canvas.y(), null);
+			} else {
+				// Fail visually safe for a stale/in-flight snapshot produced for another
+				// monitor geometry. Never stretch it: center/crop 1:1 and let the next
+				// render replace it with an exact-size frame.
+				int x = canvas.x() + (canvas.width() - frame.getWidth()) / 2;
+				int y = canvas.y() + (canvas.height() - frame.getHeight()) / 2;
+				mapGraphics.drawImage(frame, x, y, null);
+			}
 		} finally {
-			graphics.setRenderingHint(
-					RenderingHints.KEY_INTERPOLATION,
-					previousInterpolation != null ? previousInterpolation : RenderingHints.VALUE_INTERPOLATION_BILINEAR
-			);
+			mapGraphics.dispose();
 		}
 	}
 

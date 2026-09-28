@@ -228,6 +228,10 @@ public final class MapRenderJobService {
 						failJob(job, "snapshot-failed:" + shortError(throwable));
 						return;
 					}
+					if (!sourceStateStillCurrent(server, job.key, snapshot.manifest().sourceState())) {
+						cancelStaleSource(server, job, "source-changed-during-snapshot");
+						return;
+					}
 					ServerPlayer currentWorker = server.getPlayerList().getPlayer(job.workerUuid);
 					if (currentWorker == null || !isWorkerStillCompatible(job, currentWorker)) {
 						failJob(job, "worker-unavailable-after-snapshot");
@@ -363,6 +367,10 @@ public final class MapRenderJobService {
 			return;
 		}
 		try {
+			if (!sourceStateStillCurrent(server, job.key, job.sourceState)) {
+				cancelStaleSource(server, job, "source-changed-during-render");
+				return;
+			}
 			Path storeRoot = server.getWorldPath(LevelResource.ROOT).resolve("lostglade/yandex_maps/v2");
 			MapTileStore store = new MapTileStore(storeRoot);
 			MapTileMetadata committedMetadata = store.commitBaseTile(
@@ -403,7 +411,11 @@ public final class MapRenderJobService {
 		Lg2.LOGGER.warn("Yandex map v2 worker {} failed job {} tile {}: {}", player.getScoreboardName(), job.jobId, job.key, payload.reason());
 		JOBS.remove(job.jobId, job);
 		MapRenderScheduler.registerFailure(job.key);
-		MapRenderScheduler.registerWorkerFailure(job.workerUuid);
+		if (payload.reason() == null || !payload.reason().startsWith("render-settle-timeout:")) {
+			MapRenderScheduler.registerWorkerFailure(job.workerUuid);
+		} else {
+			Lg2.LOGGER.info("Yandex map v2 settle timeout is tile-local; worker {} health is unchanged", player.getScoreboardName());
+		}
 	}
 
 	private static PendingJob validOwnedJob(ServerPlayer player, UUID jobId) {
@@ -441,6 +453,37 @@ public final class MapRenderJobService {
 			if (job.workerUuid.equals(workerUuid) && JOBS.remove(job.jobId, job)) {
 				Lg2.LOGGER.info("Yandex map v2 cancelled job {}: {}", job.jobId, reason);
 			}
+		}
+	}
+
+	private static boolean sourceStateStillCurrent(MinecraftServer server, MapTileKey key, MapTileSourceState expected) {
+		if (server == null || key == null || expected == null) return false;
+		try {
+			Path worldRoot = server.getWorldPath(LevelResource.ROOT);
+			MapTileSourceState current = MapSnapshotManifest.currentSavedSourceState(
+					worldRoot.resolve("region"),
+					worldRoot.resolve("entities"),
+					key,
+					MapRenderProfile.CURRENT
+			);
+			return current.existingChunkMask() == expected.existingChunkMask()
+					&& current.existingChunkCount() == expected.existingChunkCount()
+					&& current.sourceFingerprint().equals(expected.sourceFingerprint());
+		} catch (Exception exception) {
+			Lg2.LOGGER.warn("Yandex map v2 could not recheck saved source state for tile {}", key, exception);
+			return false;
+		}
+	}
+
+	private static void cancelStaleSource(MinecraftServer server, PendingJob job, String reason) {
+		if (job == null || !JOBS.remove(job.jobId, job)) return;
+		sendCancel(job, reason);
+		Lg2.LOGGER.info("Yandex map v2 discarded stale job {} tile {}: {}", job.jobId, job.key, reason);
+		// Do not full-rescan the world from an individual job. Block only the stale
+		// fingerprint so it cannot be re-offered in a loop; the scheduler's regular
+		// discovery pass observes the new MCA stamp and automatically unblocks it.
+		if (job.sourceState != null) {
+			MapRenderScheduler.registerUnrenderable(job.key, job.sourceState.sourceFingerprint());
 		}
 	}
 

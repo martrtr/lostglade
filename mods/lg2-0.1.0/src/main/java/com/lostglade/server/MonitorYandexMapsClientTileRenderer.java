@@ -18,9 +18,9 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
 
 import javax.imageio.ImageIO;
-import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -45,8 +45,6 @@ final class MonitorYandexMapsClientTileRenderer {
     private static final String STORE_DIRECTORY = "lostglade/yandex_maps/v2";
     private static final int MIN_ZOOM_EXPONENT = -4;
     private static final int MAX_ZOOM_EXPONENT = MapPyramidBuilder.MAX_LEVEL;
-    // Exact placeholder color used by the pre-rewrite Yandex map compositor.
-    private static final int MISSING_RGB = 0x18242B;
     private static final int IMAGE_CACHE_LIMIT = 512;
     private static final Object IMAGE_CACHE_LOCK = new Object();
     private static final Map<String, BufferedImage> IMAGE_CACHE = new LinkedHashMap<>(128, 0.75F, true) {
@@ -102,13 +100,11 @@ final class MonitorYandexMapsClientTileRenderer {
     ) {
         int safeWidth = Math.max(1, width);
         int safeHeight = Math.max(1, height);
+        // The tile layer is intentionally transparent. The Yandex UI owns the flat
+        // background underneath it; baking a placeholder color into this image destroys
+        // alpha from sparse/partial pyramid tiles and makes their rectangular bounds visible.
         BufferedImage canvas = new BufferedImage(safeWidth, safeHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D graphics = canvas.createGraphics();
-        // Match the old renderer exactly: uncovered/not-yet-rendered map pixels are
-        // one flat opaque gray-blue surface. Do not let the monitor's textured
-        // screen_on.png show through transparent LOD quadrants.
-        graphics.setColor(new Color(MISSING_RGB));
-        graphics.fillRect(0, 0, safeWidth, safeHeight);
 
         if (runtimeKey != null) {
             ACTIVE_VIEWS.put(runtimeKey, new ViewRegistration(onTileReady));
@@ -257,8 +253,9 @@ final class MonitorYandexMapsClientTileRenderer {
 
     /**
      * Chooses one profile for the whole visible frame. The elected worker profile wins
-     * ties, but an older compatible v4 cache with actual visible coverage wins over an
-     * empty newly-elected namespace. This keeps the map immediately readable while a
+     * ties, but an older compatible profile hash inside the current render-version
+     * namespace with actual visible coverage wins over an empty newly-elected profile.
+     * This keeps the map immediately readable while a
      * new worker cohort refreshes its own cache in the background.
      */
     static String chooseDisplayProfileHash(
@@ -365,24 +362,30 @@ final class MonitorYandexMapsClientTileRenderer {
             int viewportWidth,
             int viewportHeight
     ) {
-        int x1 = Math.max(tileScreenX, 0);
-        int y1 = Math.max(tileScreenY, 0);
-        int x2 = Math.min(tileScreenX + displayTilePixels, viewportWidth);
-        int y2 = Math.min(tileScreenY + displayTilePixels, viewportHeight);
-        if (x2 <= x1 || y2 <= y1) return;
+        if (image == null || displayTilePixels <= 0 || viewportWidth <= 0 || viewportHeight <= 0) return;
+        if (displayTilePixels % image.getWidth() != 0 || displayTilePixels % image.getHeight() != 0) {
+            throw new IllegalArgumentException("magnified map tile must use an integral source-texel scale");
+        }
+        int scaleX = displayTilePixels / image.getWidth();
+        int scaleY = displayTilePixels / image.getHeight();
+        if (scaleX <= 0 || scaleY <= 0) return;
 
-        double sourcePerScreenX = image.getWidth() / (double) displayTilePixels;
-        double sourcePerScreenY = image.getHeight() / (double) displayTilePixels;
-        int sx1 = Math.clamp((int) Math.floor((x1 - tileScreenX) * sourcePerScreenX), 0, image.getWidth());
-        int sy1 = Math.clamp((int) Math.floor((y1 - tileScreenY) * sourcePerScreenY), 0, image.getHeight());
-        int sx2 = Math.clamp((int) Math.ceil((x2 - tileScreenX) * sourcePerScreenX), 0, image.getWidth());
-        int sy2 = Math.clamp((int) Math.ceil((y2 - tileScreenY) * sourcePerScreenY), 0, image.getHeight());
-        if (sx2 <= sx1 || sy2 <= sy1) return;
-
-        Object previous = graphics.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
-        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        graphics.drawImage(image, x1, y1, x2, y2, sx1, sy1, sx2, sy2, null);
-        if (previous != null) graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, previous);
+        // Do not crop source texels and then rescale the cropped rectangle. A clipped
+        // destination such as 411 px wide can otherwise stretch 206 source texels and
+        // make individual texel rows/columns alternate between N and N-1 pixels.
+        // Instead keep one integral transform for the whole immutable L0 tile and clip
+        // only the destination. Internal source-texel boundaries therefore always stay
+        // exactly scaleX/scaleY screen pixels apart at 32/64/128/256 px per block.
+        Graphics2D tileGraphics = (Graphics2D) graphics.create();
+        try {
+            tileGraphics.clipRect(0, 0, viewportWidth, viewportHeight);
+            tileGraphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            AffineTransform transform = AffineTransform.getTranslateInstance(tileScreenX, tileScreenY);
+            transform.scale(scaleX, scaleY);
+            tileGraphics.drawImage(image, transform, null);
+        } finally {
+            tileGraphics.dispose();
+        }
     }
 
     private static void demandVisible(

@@ -15,6 +15,7 @@ public final class YandexMapRenderPhaseFourTest {
 
 	public static void main(String[] args) throws Exception {
 		orthographicFrustumSeesTerrain();
+		readinessAcceptsSparseSettledEdgeTiles();
 		Path project = Path.of("").toAbsolutePath();
 		String renderer = read(project, "src/client/java/com/lostglade/client/maprender/YandexMapVanillaTopDownRenderer.java");
 		String scene = read(project, "src/client/java/com/lostglade/client/maprender/YandexMapRenderScene.java");
@@ -53,7 +54,8 @@ public final class YandexMapRenderPhaseFourTest {
 		require(scene.contains("new LevelRenderer("), "each map job must own a fresh vanilla LevelRenderer");
 		require(scene.contains("new YandexMapRenderWorld("), "each job must own a fresh map ClientLevel");
 		require(scene.contains("getCompileQueueSize()") && scene.contains("getToUpload()") && scene.contains("hasRenderedAllSections()"), "readiness barrier must observe vanilla compile and upload queues");
-		require(scene.contains("visibleSections > 0 && allSectionsRendered"), "fresh LevelRenderer must not be considered settled before vanilla publishes visible sections");
+		require(scene.contains("MapRenderReadinessPolicy.isSettled("), "scene readiness must use the shared deterministic barrier");
+		require(!scene.contains("visibleSections > 0 &&"), "countRenderedSections must remain diagnostic; sparse edge tiles may validly report zero");
 		require(scene.contains("metadata.id()") && scene.contains("itemDisplayIds.contains"), "entity metadata must be scoped to admitted ItemDisplay IDs");
 		require(!scene.contains("RendererBotShadowWorldManager") && !scene.contains("RendererBotCameraSystem"), "map scene must not register in camera shadow/session systems");
 
@@ -75,6 +77,21 @@ public final class YandexMapRenderPhaseFourTest {
 				&& !validator.toLowerCase().contains("rescale"), "validator must reject bad frames, not repair/recolor them");
 
 		System.out.println("Yandex map renderer Phase 4 architecture checks passed");
+	}
+
+	private static void readinessAcceptsSparseSettledEdgeTiles() {
+		require(MapRenderReadinessPolicy.isSettled(true, 0, 0, false, true, true, 9, 9),
+				"fully settled 9-chunk tile must be ready");
+		require(MapRenderReadinessPolicy.isSettled(true, 0, 0, false, true, true, 6, 6),
+				"sparse edge tile with all six loaded/light-ready chunks must be ready even if visible-section count is zero");
+		require(!MapRenderReadinessPolicy.isSettled(true, 0, 0, false, true, false, 6, 6),
+				"unfinished occlusion graph task must block capture");
+		require(!MapRenderReadinessPolicy.isSettled(true, 0, 0, true, true, true, 6, 6),
+				"pending full graph update must block capture");
+		require(!MapRenderReadinessPolicy.isSettled(true, 1, 0, false, true, true, 6, 6),
+				"compile queue must drain before capture");
+		require(!MapRenderReadinessPolicy.isSettled(true, 0, 0, false, true, true, 6, 5),
+				"every loaded snapshot chunk must have a ready light column");
 	}
 
 	private static void orthographicFrustumSeesTerrain() {

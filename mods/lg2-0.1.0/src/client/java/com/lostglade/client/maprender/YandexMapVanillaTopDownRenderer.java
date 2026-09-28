@@ -165,7 +165,8 @@ public final class YandexMapVanillaTopDownRenderer implements AutoCloseable {
 
 		try {
 			this.scene.runWithWorld(() -> {
-				try (var ignored = YandexMapRenderContext.enterRender(this.scene.level(), this.camera, this.lightTexture, this.projectionMatrix)) {
+				try (var ignored = YandexMapRenderContext.enterRender(this.scene.level(), this.camera, this.lightTexture, this.projectionMatrix);
+					 var animationFreeze = capture ? YandexMapTextureAnimationFreeze.freezeFirstFrames(client) : null) {
 					RenderSystem.backupProjectionMatrix();
 					((MinecraftMainRenderTargetAccessor) client).lg2$setMainRenderTarget(this.renderTarget);
 					entityDispatcher.prepare(this.camera, null);

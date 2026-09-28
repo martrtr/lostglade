@@ -2,6 +2,8 @@ package com.lostglade.server.maprender;
 
 import net.minecraft.world.level.ChunkPos;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.MessageDigest;
@@ -85,6 +87,43 @@ public record MapSnapshotManifest(
 				sourceState.existingChunkCount()
 		);
 		return new MapSnapshotManifest(key, cacheSourceState, snapshotFingerprint, entries);
+	}
+
+	/**
+	 * Re-reads only the SOURCE chunk MCA header entries and reconstructs the exact
+	 * source state used by snapshotFingerprint. This is cheap enough to run after
+	 * snapshot creation and immediately before committing a client framebuffer.
+	 */
+	public static MapTileSourceState currentSavedSourceState(
+			Path regionDirectory,
+			Path entityDirectory,
+			MapTileKey key,
+			MapRenderProfile profile
+	) throws IOException {
+		Objects.requireNonNull(key, "key");
+		Objects.requireNonNull(profile, "profile");
+		if (key.renderProfileVersion() != profile.version()) {
+			throw new IllegalArgumentException("tile render-profile version does not match current source-state profile");
+		}
+		long minChunkXLong = Math.multiplyExact(key.tileX(), (long) profile.tileChunks());
+		long minChunkZLong = Math.multiplyExact(key.tileZ(), (long) profile.tileChunks());
+		int minChunkX = Math.toIntExact(minChunkXLong);
+		int minChunkZ = Math.toIntExact(minChunkZLong);
+		List<ChunkEntry> entries = new ArrayList<>(profile.tileChunks() * profile.tileChunks());
+		long mask = 0L;
+		for (int localZ = 0; localZ < profile.tileChunks(); localZ++) {
+			for (int localX = 0; localX < profile.tileChunks(); localX++) {
+				int chunkX = Math.addExact(minChunkX, localX);
+				int chunkZ = Math.addExact(minChunkZ, localZ);
+				MapChunkExistenceIndex.ChunkStamp terrain = MapChunkExistenceIndex.readChunkStamp(regionDirectory, chunkX, chunkZ).orElse(null);
+				if (terrain == null) continue;
+				MapChunkExistenceIndex.ChunkStamp entity = MapChunkExistenceIndex.readChunkStamp(entityDirectory, chunkX, chunkZ).orElse(null);
+				entries.add(new ChunkEntry(new ChunkPos(chunkX, chunkZ), Role.SOURCE, terrain, entity));
+				int slot = localZ * profile.tileChunks() + localX;
+				mask |= 1L << slot;
+			}
+		}
+		return new MapTileSourceState(key, mask, fingerprint(entries), Long.bitCount(mask));
 	}
 
 	public List<ChunkEntry> sourceChunks() {

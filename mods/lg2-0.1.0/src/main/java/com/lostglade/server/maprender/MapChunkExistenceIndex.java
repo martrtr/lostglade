@@ -86,6 +86,40 @@ public final class MapChunkExistenceIndex {
 		}
 	}
 
+	/**
+	 * Reads exactly one MCA location/timestamp header entry without scanning chunk payloads.
+	 * Used to reject an in-flight render if its saved source changed after snapshot creation.
+	 */
+	public static Optional<ChunkStamp> readChunkStamp(Path regionDirectory, int chunkX, int chunkZ) throws IOException {
+		if (regionDirectory == null || !Files.isDirectory(regionDirectory)) return Optional.empty();
+		int regionX = Math.floorDiv(chunkX, REGION_SIDE_CHUNKS);
+		int regionZ = Math.floorDiv(chunkZ, REGION_SIDE_CHUNKS);
+		int localX = Math.floorMod(chunkX, REGION_SIDE_CHUNKS);
+		int localZ = Math.floorMod(chunkZ, REGION_SIDE_CHUNKS);
+		int slot = localZ * REGION_SIDE_CHUNKS + localX;
+		Path regionFile = regionDirectory.resolve("r." + regionX + "." + regionZ + ".mca");
+		if (!Files.isRegularFile(regionFile) || Files.size(regionFile) < HEADER_BYTES) return Optional.empty();
+		try (FileChannel channel = FileChannel.open(regionFile, StandardOpenOption.READ)) {
+			int locationEntry = readHeaderInt(channel, (long) slot * Integer.BYTES);
+			int sectorOffset = locationEntry >>> 8;
+			int sectorCount = locationEntry & 0xFF;
+			if (sectorOffset < 2 || sectorCount <= 0) return Optional.empty();
+			long timestamp = Integer.toUnsignedLong(readHeaderInt(channel, LOCATION_HEADER_BYTES + (long) slot * Integer.BYTES));
+			return Optional.of(new ChunkStamp(chunkX, chunkZ, regionX, regionZ, locationEntry, timestamp));
+		}
+	}
+
+	private static int readHeaderInt(FileChannel channel, long offset) throws IOException {
+		ByteBuffer buffer = ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.BIG_ENDIAN);
+		channel.position(offset);
+		while (buffer.hasRemaining()) {
+			int read = channel.read(buffer);
+			if (read < 0) throw new IOException("Unexpected EOF while reading MCA header entry");
+		}
+		buffer.flip();
+		return buffer.getInt();
+	}
+
 	public int chunkCount() {
 		return this.chunks.size();
 	}

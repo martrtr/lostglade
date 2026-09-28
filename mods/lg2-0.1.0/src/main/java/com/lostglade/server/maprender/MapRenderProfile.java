@@ -12,7 +12,7 @@ public record MapRenderProfile(
 		int haloChunks
 ) {
 	/** Canonical high-detail source: one 16x16 chunk rendered to 256x256 = 16 px/block. */
-	public static final MapRenderProfile CURRENT = new MapRenderProfile(4, 16, 256, 1);
+	public static final MapRenderProfile CURRENT = new MapRenderProfile(6, 16, 256, 1);
 
 	public MapRenderProfile {
 		if (version <= 0) {

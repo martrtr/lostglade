@@ -459,6 +459,8 @@ profileHash
 
 Disconnect/reject/timeout releases the lease and applies backoff. Never spin immediate retries on the same failing worker.
 
+Before a prepared snapshot is sent and again immediately before a framebuffer is committed, the server performs a targeted MCA header recheck for the tile's SOURCE chunks (terrain + entity storage). If the saved fingerprint differs, the obsolete job is discarded without penalizing its worker and that stale fingerprint is blocked from re-offer until the scheduler’s next normal discovery pass observes the new stamp. This closes both the stale-discovery-before-snapshot and saved-during-GPU-render windows without loading gameplay chunks or triggering a full region rescan from an individual job.
+
 If gameplay changes the tile while an older job is rendering:
 
 - accept a valid result for its assigned snapshot;
@@ -553,11 +555,18 @@ Block entities are **not** part of the entity filter and remain enabled.
 
 ### 11.4 Animated textures
 
-Do not modify the player's global texture atlas in the first implementation merely to freeze animated texture phases. The map's world/time/weather must be deterministic first.
+Animated atlas textures are deterministic for map jobs. Immediately around the **final captured framebuffer render** (not warmup/mesh-settling frames), the client snapshots every atlas animation state, presents the **first configured animation frame** (`frame=0`, `subFrame=0`) through vanilla's own atlas upload path, renders the map frame, then restores the exact previous frame/sub-frame/dirty state and re-uploads it.
 
-If animated water/lava/resource-pack textures cause visible cross-tile phase seams, add a narrowly scoped texture-animation clock in a later hardening step. Do not solve this by globally pausing the player's textures.
+This scope is intentionally inside `YandexMapRenderContext`: it does **not** pause the client's global texture clock between frames and therefore does not freeze or reset normal gameplay rendering on volunteer workers. Water, lava and resource-pack animated atlas sprites consequently use the same phase in every independently rendered L0 tile. Changing this rule requires a new `MapRenderProfile.version`. Because older workers would otherwise still understand the same scene/result packet layout while producing different pixels, a visual-contract change that requires new worker behavior must also bump `YandexMapRenderPayloads.PROTOCOL_VERSION`; profile v5 therefore uses map protocol v6.
+
+### 11.5 Bounded vanilla settling
+
+The normal readiness barrier remains authoritative; a fixed delay is **not** a substitute for compile/upload readiness. However, a sparse/edge snapshot must not monopolize one renderer until the full 120-second server lease expires if vanilla never reaches the settled predicate. After 100 client ticks (about five seconds) continuously in `WAITING_FOR_VANILLA`, the client aborts that job with `render-settle-timeout` and includes the complete readiness/culling diagnostics. The server applies tile backoff but does **not** penalize worker health, because this is evidence about that scene/tile rather than a broken renderer. A later scheduler pass may retry the tile.
 
 ## 12. Readiness barrier — preventing black/grey/white tiles
+
+Readiness is based on vanilla compile/upload queues, occlusion-graph completion, loaded snapshot chunks, and light-ready columns. `LevelRenderer.countRenderedSections()` is diagnostic only: sparse world-edge snapshots can validly report zero there even after their actually loaded sections are compiled and visible to the map frustum. Final framebuffer validation remains the fail-closed guard against an actually blank capture.
+
 
 A received scene is not immediately renderable.
 
@@ -747,6 +756,8 @@ overlay revision
 ```
 
 Panning changes geometry/composition only. Pixel colors of an already committed tile never depend on camera movement. This directly prevents the old “pixels recolor while dragging the map” behaviour.
+
+Close-zoom composition has one additional pixel-grid rule: the monitor compositor renders directly at the final `mediaCanvasRect` pixel dimensions. The resulting terrain frame is blitted 1:1 into the monitor canvas. It must never be rendered at the full map-wall size and then resampled through the monitor safe inset; that would turn integral 2x/4x texel magnification into periodically thinner rows/columns.
 
 ## 18. Failure handling
 

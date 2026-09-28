@@ -182,20 +182,19 @@ public final class MapRenderWorkerRegistry {
 			return previousCanonical == null ? "" : previousCanonical;
 		}
 
-		int largest = cohorts.values().stream().mapToInt(cohort -> cohort.workerCount).max().orElse(0);
-		List<String> largestProfiles = cohorts.entrySet().stream()
+		boolean dedicatedAvailable = cohorts.values().stream().anyMatch(cohort -> cohort.hasDedicated);
+		List<Map.Entry<String, ProfileCohort>> eligibleCohorts = cohorts.entrySet().stream()
+				.filter(entry -> !dedicatedAvailable || entry.getValue().hasDedicated)
+				.toList();
+		int largest = eligibleCohorts.stream().mapToInt(entry -> entry.getValue().workerCount).max().orElse(0);
+		List<String> largestProfiles = eligibleCohorts.stream()
 				.filter(entry -> entry.getValue().workerCount == largest)
 				.map(Map.Entry::getKey)
 				.sorted()
 				.toList();
-		if (previousCanonical != null
-				&& largestProfiles.contains(previousCanonical)
-				&& cohorts.get(previousCanonical).hasDedicated) {
-			return previousCanonical;
-		}
-		for (String profile : largestProfiles) {
-			if (cohorts.get(profile).hasDedicated) return profile;
-		}
+		// A dedicated renderer anchors the visual contract whenever one is online.
+		// Matching volunteers still increase that cohort's throughput; incompatible
+		// volunteer cohorts never outvote the canonical dedicated resource profile.
 		if (previousCanonical != null && largestProfiles.contains(previousCanonical)) {
 			return previousCanonical;
 		}

@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Capability plane plus isolated one-job-at-a-time map render worker. */
 public final class YandexMapRenderClient {
 	private static final int HEARTBEAT_TICKS = 200;
+	private static final long VANILLA_SETTLE_TIMEOUT_TICKS = 100L;
 	private static final ExecutorService PROFILE_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
 		Thread thread = new Thread(runnable, "lg2-yandex-map-profile");
 		thread.setDaemon(true);
@@ -299,6 +300,7 @@ public final class YandexMapRenderClient {
 			return;
 		}
 		job.ready = true;
+		job.readyAtTickSequence = clientTickSequence;
 		RendererClientDiagnostics.mapStage(job.jobId, "scene ready / vanilla warmup");
 	}
 
@@ -333,10 +335,20 @@ public final class YandexMapRenderClient {
 		YandexMapVanillaTopDownRenderer.AdvanceResult result = job.renderer.advance(frame -> handleRenderedFrame(client, job, frame));
 		if (!Objects.equals(job.lastReadiness, result.readiness())) {
 			job.lastReadiness = result.readiness();
-			RendererClientDiagnostics.mapStage(job.jobId, result.state().name().toLowerCase(java.util.Locale.ROOT) + " / " + result.reason());
+			RendererClientDiagnostics.mapStage(job.jobId, result.state().name().toLowerCase(java.util.Locale.ROOT) + " / " + result.reason()
+					+ " / " + readinessSummary(result.readiness()));
 			if (Lg2.LOGGER.isDebugEnabled()) {
 				Lg2.LOGGER.debug("Yandex map v2 job {} readiness: state={}, reason={}, {}, cull={}", job.jobId, result.state(), result.reason(), result.readiness(), job.renderer.cullDiagnostics());
 			}
+		}
+		if (result.state() == YandexMapVanillaTopDownRenderer.State.WAITING_FOR_VANILLA
+				&& job.readyAtTickSequence > 0L
+				&& clientTickSequence - job.readyAtTickSequence >= VANILLA_SETTLE_TIMEOUT_TICKS) {
+			String summary = readinessSummary(result.readiness());
+			Lg2.LOGGER.warn("Yandex map v2 tile {},{} did not settle within {} ticks: {}, cull={}",
+					job.tileX, job.tileZ, VANILLA_SETTLE_TIMEOUT_TICKS, summary, job.renderer.cullDiagnostics());
+			failActiveJob("render-settle-timeout:" + summary);
+			return;
 		}
 		if (result.state() == YandexMapVanillaTopDownRenderer.State.FAILED) {
 			failActiveJob("render-failed:" + result.reason());
@@ -407,6 +419,18 @@ public final class YandexMapRenderClient {
 				try { Files.deleteIfExists(temporary); } catch (Exception ignored) { }
 			}
 		}
+	}
+
+	private static String readinessSummary(YandexMapRenderScene.RenderReadiness readiness) {
+		if (readiness == null) return "readiness=null";
+		return "visible=" + readiness.visibleSections()
+				+ ", all=" + readiness.allSectionsRendered()
+				+ ", compile=" + readiness.compileQueueSize()
+				+ ", upload=" + readiness.uploadQueueSize()
+				+ ", graphNeeds=" + readiness.graphNeedsFullUpdate()
+				+ ", graphTask=" + readiness.graphTaskPresent() + '/' + readiness.graphTaskDone()
+				+ ", chunks=" + readiness.loadedChunks()
+				+ ", light=" + readiness.lightReadyColumns();
 	}
 
 	private static ActiveJob activeOwned(UUID jobId) {
@@ -518,6 +542,7 @@ public final class YandexMapRenderClient {
 		private int receivedChunkPackets;
 		private int receivedEntityPackets;
 		private boolean ready;
+		private long readyAtTickSequence;
 		private boolean resultSubmitted;
 		private YandexMapRenderScene.RenderReadiness lastReadiness;
 		private YandexMapRenderScene scene;

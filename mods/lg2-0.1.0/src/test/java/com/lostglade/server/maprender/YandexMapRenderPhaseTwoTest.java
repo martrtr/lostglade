@@ -15,7 +15,7 @@ public final class YandexMapRenderPhaseTwoTest {
 		capabilityAdmissionIsConservative();
 		profileIdentityIncludesResourcesAndBuild();
 		resourceFingerprintIgnoresUnrelatedClientPacks();
-		largestCompatibleCohortEstablishesCanonicalProfile();
+		dedicatedRendererAnchorsCanonicalProfile();
 		volunteerCanonicalProfileStaysStable();
 		canonicalProfileSurvivesTemporaryWorkerOutage();
 		transportProtocolStaysIndependentFromCameraProtocol();
@@ -33,6 +33,9 @@ public final class YandexMapRenderPhaseTwoTest {
 		require("protocol-mismatch".equals(MapRenderWorkerRegistry.baseEligibilityReason(
 				capability(999, true, "ALWAYS", true, "resources-a", 256, "build-a"), false, true
 		)), "protocol mismatch must reject worker");
+		require("protocol-mismatch".equals(MapRenderWorkerRegistry.baseEligibilityReason(
+				capability(YandexMapRenderPayloads.PROTOCOL_VERSION - 1, true, "ALWAYS", true, "resources-a", 256, "build-a"), false, true
+		)), "immediately previous map protocol must not render into the current visual namespace");
 		require("disabled-by-client".equals(MapRenderWorkerRegistry.baseEligibilityReason(
 				capability(YandexMapRenderPayloads.PROTOCOL_VERSION, false, "OFF", true, "", 256, "build-a"), false, true
 		)), "client OFF must reject worker");
@@ -62,19 +65,22 @@ public final class YandexMapRenderPhaseTwoTest {
 		require(!fingerprint.contains("sourcePackId()"), "resource-pack identity must not matter when resolved visual bytes are identical");
 	}
 
-	private static void largestCompatibleCohortEstablishesCanonicalProfile() {
+	private static void dedicatedRendererAnchorsCanonicalProfile() {
 		MapRenderWorkerRegistry.WorkerState dedicated = worker("00000000-0000-0000-0000-000000000099", true, "profile-dedicated");
 		MapRenderWorkerRegistry.WorkerState volunteerA = worker("00000000-0000-0000-0000-000000000001", false, "profile-players");
 		MapRenderWorkerRegistry.WorkerState volunteerB = worker("00000000-0000-0000-0000-000000000002", false, "profile-players");
-		String selected = MapRenderWorkerRegistry.chooseCanonicalProfile(List.of(dedicated, volunteerA, volunteerB), "profile-dedicated");
-		require("profile-players".equals(selected), "largest compatible worker cohort must beat a lone dedicated renderer");
+		String selected = MapRenderWorkerRegistry.chooseCanonicalProfile(List.of(dedicated, volunteerA, volunteerB), "profile-players");
+		require("profile-dedicated".equals(selected), "online dedicated renderer must anchor canonical profile even when an incompatible volunteer cohort is larger");
 
-		MapRenderWorkerRegistry.WorkerState volunteerTie = worker("00000000-0000-0000-0000-000000000003", false, "profile-volunteer");
-		selected = MapRenderWorkerRegistry.chooseCanonicalProfile(List.of(dedicated, volunteerTie), "missing-profile");
-		require("profile-dedicated".equals(selected), "dedicated renderer should win only as a cohort-size tie-breaker");
+		MapRenderWorkerRegistry.WorkerState matchingVolunteer = worker("00000000-0000-0000-0000-000000000003", false, "profile-dedicated");
+		selected = MapRenderWorkerRegistry.chooseCanonicalProfile(List.of(dedicated, matchingVolunteer, volunteerA, volunteerB), "profile-dedicated");
+		require("profile-dedicated".equals(selected), "matching volunteers must join the dedicated canonical cohort");
 
-		selected = MapRenderWorkerRegistry.chooseCanonicalProfile(List.of(dedicated, volunteerTie), "profile-volunteer");
-		require("profile-dedicated".equals(selected), "dedicated renderer must beat an earlier volunteer canonical profile when cohort sizes tie");
+		MapRenderWorkerRegistry.WorkerState dedicatedB = worker("00000000-0000-0000-0000-000000000098", true, "profile-b");
+		MapRenderWorkerRegistry.WorkerState helperB1 = worker("00000000-0000-0000-0000-000000000004", false, "profile-b");
+		MapRenderWorkerRegistry.WorkerState helperB2 = worker("00000000-0000-0000-0000-000000000005", false, "profile-b");
+		selected = MapRenderWorkerRegistry.chooseCanonicalProfile(List.of(dedicated, dedicatedB, helperB1, helperB2), "profile-dedicated");
+		require("profile-b".equals(selected), "when multiple dedicated profiles exist, the largest dedicated-backed compatible cohort should provide throughput deterministically");
 	}
 
 	private static void volunteerCanonicalProfileStaysStable() {

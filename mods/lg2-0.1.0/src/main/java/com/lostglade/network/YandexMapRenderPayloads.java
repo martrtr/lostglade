@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Dedicated protocol for distributed Yandex map rendering. */
 public final class YandexMapRenderPayloads {
-	public static final int PROTOCOL_VERSION = 5;
+	public static final int PROTOCOL_VERSION = 6;
 	private static final int MAX_SCENE_PACKET_BYTES = 2_097_152;
 	private static final int MAX_RESULT_BYTES = 1_048_576;
 	private static final AtomicBoolean REGISTERED = new AtomicBoolean(false);

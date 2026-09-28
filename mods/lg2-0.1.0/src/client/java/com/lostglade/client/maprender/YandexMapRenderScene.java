@@ -5,6 +5,7 @@ import com.lostglade.mixin.client.MinecraftOffscreenWorldAccessor;
 import com.lostglade.mixin.client.SectionOcclusionGraphAccessor;
 import com.lostglade.network.RendererBotPayloads;
 import com.lostglade.network.RendererBotShadowPacketCodec;
+import com.lostglade.server.maprender.MapRenderReadinessPolicy;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
@@ -206,14 +207,20 @@ public final class YandexMapRenderScene implements AutoCloseable {
 				}
 			}
 		}
+		boolean graphNeedsFullUpdate = graph.lg2$needsFullUpdate();
+		boolean settled = MapRenderReadinessPolicy.isSettled(
+				allSectionsRendered, compileQueue, uploadQueue,
+				graphNeedsFullUpdate, graphTaskPresent, graphTaskDone,
+				loadedChunks, lightReadyColumns
+		);
 		return new RenderReadiness(
-				visibleSections > 0 && allSectionsRendered && compileQueue == 0 && uploadQueue == 0,
+				settled,
 				this.contentRevision,
 				visibleSections,
 				allSectionsRendered,
 				compileQueue,
 				uploadQueue,
-				graph.lg2$needsFullUpdate(),
+				graphNeedsFullUpdate,
 				graphTaskPresent,
 				graphTaskDone,
 				loadedChunks,
@@ -258,22 +265,38 @@ public final class YandexMapRenderScene implements AutoCloseable {
 			return;
 		}
 		this.closed = true;
+		Throwable failure = null;
 		try {
 			this.levelRenderer.setLevel(null);
-		} catch (Throwable ignored) {
+		} catch (Throwable throwable) {
+			failure = throwable;
 		}
 		try {
 			this.levelRenderer.close();
-		} catch (Throwable ignored) {
+		} catch (Throwable throwable) {
+			failure = appendFailure(failure, throwable);
 		}
 		try {
 			this.featureRenderDispatcher.close();
-		} catch (Throwable ignored) {
+		} catch (Throwable throwable) {
+			failure = appendFailure(failure, throwable);
 		}
 		try {
 			this.particleEngine.clearParticles();
-		} catch (Throwable ignored) {
+		} catch (Throwable throwable) {
+			failure = appendFailure(failure, throwable);
 		}
+		if (failure != null) {
+			if (failure instanceof RuntimeException runtime) throw runtime;
+			if (failure instanceof Error error) throw error;
+			throw new IllegalStateException("failed to fully close isolated Yandex map scene", failure);
+		}
+	}
+
+	private static Throwable appendFailure(Throwable first, Throwable next) {
+		if (first == null) return next;
+		if (first != next) first.addSuppressed(next);
+		return first;
 	}
 
 	public record SceneDescriptor(

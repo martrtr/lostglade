@@ -60,7 +60,7 @@ public final class YandexMapRenderPhaseEightTest {
 		String repository = Files.readString(root.resolve("src/main/java/com/lostglade/server/maprender/MapSnapshotRepository.java"));
 		String client = Files.readString(root.resolve("src/client/java/com/lostglade/client/maprender/YandexMapRenderClient.java"));
 
-		require(payloads.contains("PROTOCOL_VERSION = 5"), "distributed detail-tile contract must use map protocol v5");
+		require(payloads.contains("PROTOCOL_VERSION = 6"), "distributed detail-tile contract must use map protocol v6");
 		require(payloads.contains("int tileBlocks") && payloads.contains("buffer.writeVarInt(this.tileBlocks)"), "scene-start wire contract must carry canonical world span");
 		require(payloads.contains("MapRenderJobCancelS2CPayload.TYPE"), "server-to-client job cancel payload must be registered");
 		require(client.contains("handleCancel(payload)") && client.contains("private static void handleCancel"), "client must handle server job cancellation");
