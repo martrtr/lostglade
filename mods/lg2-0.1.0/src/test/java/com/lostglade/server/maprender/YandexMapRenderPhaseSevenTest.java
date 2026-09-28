@@ -251,9 +251,10 @@ public final class YandexMapRenderPhaseSevenTest {
 		String freeze = Files.readString(project.resolve("src/client/java/com/lostglade/client/maprender/YandexMapTextureAnimationFreeze.java"));
 		String atlasAccessor = Files.readString(project.resolve("src/client/java/com/lostglade/mixin/client/TextureAtlasAnimationAccessor.java"));
 		String stateAccessor = Files.readString(project.resolve("src/client/java/com/lostglade/mixin/client/SpriteAnimationStateAccessor.java"));
-		require(MapRenderProfile.CURRENT.version() == 6, "current deterministic rendering + alpha-preserving pyramid must use its own immutable render namespace");
+		require(MapRenderProfile.CURRENT.version() == 8, "first-frame animated textures must use their own immutable render namespace");
 		require(renderer.contains("capture ? YandexMapTextureAnimationFreeze.freezeFirstFrames(client) : null"), "animated-texture freeze must run only for the final captured framebuffer, never warmup frames");
-		require(freeze.contains("lg2$setFrame(0)") && freeze.contains("lg2$setSubFrame(0)"), "map render must always present the first configured animation frame");
+		require(freeze.contains("lg2$setFrame(0)") && freeze.contains("lg2$setSubFrame(0)") && !freeze.contains("state.tick()"),
+				"map render must always present the first configured animation frame");
 		require(freeze.contains("snapshot.frame()") && freeze.contains("snapshot.subFrame()") && freeze.contains("snapshot.dirty()"), "volunteer client animation state must be restored exactly after map rendering");
 		require(countOccurrences(freeze, "lg2$uploadAnimationFrames()") >= 2, "vanilla atlas upload path must be used both to freeze and restore texture state");
 		require(atlasAccessor.contains("@Invoker(\"uploadAnimationFrames\")") && stateAccessor.contains("@Accessor(\"frame\")"), "animation hardening must use narrow vanilla-state access instead of replacing the atlas renderer");

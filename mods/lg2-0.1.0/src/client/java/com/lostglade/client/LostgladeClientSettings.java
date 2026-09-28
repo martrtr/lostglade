@@ -79,10 +79,11 @@ public final class LostgladeClientSettings {
 
 	public static synchronized void setMapRendererMode(MapRendererMode mode) {
 		MapRendererMode safe = mode == null ? MapRendererMode.OFF : mode;
-		if (settings.mapRendererMode == safe) {
+		if (settings.mapRendererMode == safe && Boolean.TRUE.equals(settings.mapRendererModeConfigured)) {
 			return;
 		}
 		settings.mapRendererMode = safe;
+		settings.mapRendererModeConfigured = true;
 		write();
 	}
 
@@ -125,20 +126,27 @@ public final class LostgladeClientSettings {
 	}
 
 	private static boolean sanitize(Settings value) {
+		boolean changed = false;
 		// Keep old configs with the former on/off switch disabled disabled after
 		// migrating to the single 0..N resource limit.
 		if (!value.cameraRendererEnabled && value.maxParallelCaptures > 0) {
 			value.maxParallelCaptures = 0;
-			return true;
+			changed = true;
 		}
-		boolean changed = false;
 		int clamped = Math.clamp(value.maxParallelCaptures, MIN_PARALLEL_CAPTURES, MAX_PARALLEL_CAPTURES);
 		if (clamped != value.maxParallelCaptures) {
 			value.maxParallelCaptures = clamped;
 			changed = true;
 		}
-		if (value.mapRendererMode == null) {
-			value.mapRendererMode = MapRendererMode.OFF;
+		// Map workers used to default to OFF. Migrate that implicit default once so
+		// every updated Lostglade client actually joins the distributed map pool.
+		// Any choice made after this migration is marked explicit and is preserved.
+		if (!Boolean.TRUE.equals(value.mapRendererModeConfigured)) {
+			value.mapRendererMode = MapRendererMode.ALWAYS;
+			value.mapRendererModeConfigured = true;
+			changed = true;
+		} else if (value.mapRendererMode == null) {
+			value.mapRendererMode = MapRendererMode.ALWAYS;
 			changed = true;
 		}
 		int minFps = Math.clamp(value.mapRendererMinFps, MIN_MAP_RENDERER_FPS, MAX_MAP_RENDERER_FPS);
@@ -182,12 +190,15 @@ public final class LostgladeClientSettings {
 	private static final class Settings {
 		private boolean cameraRendererEnabled = true;
 		private int maxParallelCaptures = 1;
-		private MapRendererMode mapRendererMode = MapRendererMode.OFF;
+		private MapRendererMode mapRendererMode = MapRendererMode.ALWAYS;
+		private Boolean mapRendererModeConfigured;
 		private int mapRendererMinFps = 50;
 		private int mapRendererMaxJobsPerMinute = 60;
 
 		private static Settings defaults() {
-			return new Settings();
+			Settings defaults = new Settings();
+			defaults.mapRendererModeConfigured = true;
+			return defaults;
 		}
 	}
 }

@@ -344,10 +344,10 @@ mapRendererMinFps = 50
 mapRendererMaxJobsPerMinute = 6
 ```
 
-Recommended defaults for ordinary players:
+Default for ordinary players (users can still opt out in Lostglade settings):
 
 ```text
-OFF
+ALWAYS
 ```
 
 A dedicated hidden renderer may enable map rendering by dedicated-renderer policy, but it still has to pass compatibility checks.

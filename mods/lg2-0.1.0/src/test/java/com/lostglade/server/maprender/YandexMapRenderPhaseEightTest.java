@@ -119,10 +119,15 @@ public final class YandexMapRenderPhaseEightTest {
 		String jobs = Files.readString(root.resolve("src/main/java/com/lostglade/server/maprender/MapRenderJobService.java"));
 		String client = Files.readString(root.resolve("src/client/java/com/lostglade/client/maprender/YandexMapRenderClient.java"));
 		String config = Files.readString(root.resolve("src/main/java/com/lostglade/config/Lg2Config.java"));
+		String clientSettings = Files.readString(root.resolve("src/client/java/com/lostglade/client/LostgladeClientSettings.java"));
 		require(scheduler.contains("for (MapRenderWorkerRegistry.WorkerState worker : workers)"), "scheduler must fan jobs out across the eligible worker pool");
 		require(scheduler.contains("activeTiles.add(candidate.key())"), "parallel dispatch must reserve each selected tile before choosing the next worker");
 		require(jobs.contains("hasActiveJobForWorker(worker.playerUuid())"), "each GPU client must remain limited to one active map scene");
 		require(config.contains("yandexMapRendererMaxGlobalInFlight = 32"), "default distributed pool must allow many simultaneous clients");
+		require(clientSettings.contains("mapRendererMode = MapRendererMode.ALWAYS"), "ordinary Lostglade clients must join the map worker pool by default");
+		require(clientSettings.contains("value.mapRendererMode = MapRendererMode.ALWAYS")
+				&& clientSettings.contains("mapRendererModeConfigured"),
+				"existing implicit OFF defaults must migrate once while preserving later explicit choices");
 		require(client.contains("mode == LostgladeClientSettings.MapRendererMode.IDLE_ONLY"), "FPS and idle gates must be scoped to IDLE_ONLY mode");
 	}
 
