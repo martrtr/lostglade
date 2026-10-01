@@ -358,6 +358,7 @@ record MaxCallParticipantSnapshot(
 		boolean self,
 		boolean cameraEnabled,
 		boolean microphoneEnabled,
+		boolean savedContact,
 		boolean ringing
 ) {
 }
@@ -710,6 +711,10 @@ enum PlayerUiIcon {
 	VIDEO_CAMERA_OFF("/monitor/ui_icons/video_camera_off.png"),
 	DEVICE_SELECT("/monitor/ui_icons/device_select.png"),
 	CONTACT_ADD("/monitor/ui_icons/contact_add.png"),
+	PHONE_CALL("/monitor/ui_icons/phone_call.png"),
+	USER_ADD("/monitor/ui_icons/user_add.png"),
+	USER_DEFAULT("/monitor/ui_icons/user_default.png"),
+	CONTACTS("/monitor/ui_icons/contacts.png"),
 	FULLSCREEN_EXIT("/monitor/ui_icons/fullscreen_exit.png"),
 	GRID_FILL("/monitor/ui_icons/grid_fill.png"),
 	SIGNAL("/monitor/ui_icons/signal.png"),

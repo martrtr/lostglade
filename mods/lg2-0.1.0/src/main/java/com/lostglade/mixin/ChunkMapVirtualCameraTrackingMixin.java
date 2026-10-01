@@ -1,6 +1,7 @@
 package com.lostglade.mixin;
 
 import com.lostglade.server.DroneSystem;
+import com.lostglade.server.AccountAuthSystem;
 import com.lostglade.server.RendererBotCameraSystem;
 import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerMilkPocketDimensionSystem;
@@ -19,6 +20,24 @@ import java.util.Objects;
 public abstract class ChunkMapVirtualCameraTrackingMixin {
 	@Inject(method = "updateChunkTracking", at = @At("HEAD"), cancellable = true)
 	private void lg2$useVirtualCameraChunkTracking(ServerPlayer player, CallbackInfo ci) {
+		if (AccountAuthSystem.isInLimbo(player)) {
+			ChunkTrackingView desiredView = AccountAuthSystem.createLimboChunkTrackingView(player);
+			if (!Objects.equals(player.getChunkTrackingView(), desiredView)) {
+				((ChunkMapChunkTrackingInvoker) (Object) this).lg2$applyChunkTrackingView(player, desiredView);
+			}
+			ci.cancel();
+			return;
+		}
+
+		if (AccountAuthSystem.shouldBlockPacket(player)) {
+			ChunkTrackingView desiredView = ChunkTrackingView.EMPTY;
+			if (!Objects.equals(player.getChunkTrackingView(), desiredView)) {
+				((ChunkMapChunkTrackingInvoker) (Object) this).lg2$applyChunkTrackingView(player, desiredView);
+			}
+			ci.cancel();
+			return;
+		}
+
 		if (RendererBotPresenceSystem.isRendererBot(player)) {
 			ChunkTrackingView desiredView = RendererBotCameraSystem.createVirtualChunkTrackingView(player);
 			if (Objects.equals(player.getChunkTrackingView(), desiredView)) {

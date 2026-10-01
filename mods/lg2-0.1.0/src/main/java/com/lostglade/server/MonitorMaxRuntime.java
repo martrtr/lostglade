@@ -318,7 +318,8 @@ final class MonitorMaxRuntime {
 			requestRuntimeRender(server, component.runtimeKey());
 			return true;
 		}
-		if (maxProfileCodeRect(layout).contains(touchPoint.x(), touchPoint.y())) {
+		if (maxProfileCodeRect(layout).contains(touchPoint.x(), touchPoint.y())
+				|| maxAppTitleRect(layout).contains(touchPoint.x(), touchPoint.y())) {
 			String accountName;
 			synchronized (state) {
 				accountName = state.accountName;
@@ -362,7 +363,8 @@ final class MonitorMaxRuntime {
 			requestRuntimeRender(server, component.runtimeKey());
 			return true;
 		}
-		List<MaxContactSnapshot> contactSnapshots = captureContactSnapshots(server, state, component.runtimeKey());
+		WindowedSnapshot<MaxContactSnapshot> contactWindow = contactFeedSnapshots(server, state, component.runtimeKey(), layout);
+		List<MaxContactSnapshot> contactSnapshots = contactWindow.items();
 		int contactIndex = maxContactIndexAt(layout, contactSnapshots.size(), touchPoint);
 		if (contactIndex >= 0) {
 			MaxContactSnapshot contact = contactIndex < contactSnapshots.size() ? contactSnapshots.get(contactIndex) : null;
@@ -422,6 +424,9 @@ final class MonitorMaxRuntime {
 		if (handleOverlayHotbarScroll(server, component, state, target.layout(), target.touchPoint(), delta)) {
 			return true;
 		}
+		if (handleContactFeedHotbarScroll(server, component, state, target.layout(), target.touchPoint(), delta)) {
+			return true;
+		}
 		MaxCallSession call = currentCall(component.runtimeKey());
 		if (state == null || call == null || callPhase(call, component.runtimeKey()) != MaxCallPhase.ACTIVE || !callFocused(state) || callMiniParticipantsHidden(state)) {
 			return false;
@@ -448,6 +453,44 @@ final class MonitorMaxRuntime {
 		}
 		ScreenComponent component = target.component();
 		return new ObservedCallUiTarget(component, createUiLayout(component.width(), component.height()), target.touchPoint());
+	}
+
+	private static boolean handleContactFeedHotbarScroll(
+			MinecraftServer server,
+			ScreenComponent component,
+			MaxRuntimeState state,
+			UiLayout layout,
+			UiPoint touchPoint,
+			int delta
+	) {
+		if (server == null || component == null || state == null || layout == null || touchPoint == null || delta == 0
+				|| component.viewMode() != ScreenViewMode.MAX || currentCall(component.runtimeKey()) != null
+				|| !maxContactListRect(layout).contains(touchPoint.x(), touchPoint.y())) {
+			return false;
+		}
+		int previousScroll;
+		int nextScroll;
+		synchronized (state) {
+			if (state.avatarPickerOpen || state.ringtonePickerOpen || state.fileSharePickerOpen || state.notificationsOpen || state.callContactPickerOpen) {
+				return false;
+			}
+			int maxScroll = Math.max(0, state.contacts.size() - maxVisibleContactRows(layout));
+			if (maxScroll <= 0) {
+				state.contactScroll = 0;
+				return false;
+			}
+			previousScroll = clampInt(state.contactScroll, 0, maxScroll);
+			nextScroll = clampInt(previousScroll - delta, 0, maxScroll);
+			state.contactScroll = nextScroll;
+			if (nextScroll != previousScroll) {
+				state.version++;
+			}
+		}
+		if (nextScroll == previousScroll) {
+			return false;
+		}
+		requestRuntimeRender(server, component.runtimeKey());
+		return true;
 	}
 
 	private static boolean handleOverlayHotbarScroll(
@@ -531,6 +574,51 @@ final class MonitorMaxRuntime {
 			}
 		}
 		return false;
+	}
+
+	private static boolean handleCallParticipantAddContactTouch(
+			ServerPlayer player,
+			MinecraftServer server,
+			ScreenComponent component,
+			MaxRuntimeState state,
+			MaxCallSession call,
+			ScreenRuntimeKey participantKey,
+			UiRect participantTile,
+			UiLayout layout,
+			UiPoint touchPoint
+	) {
+		if (player == null || server == null || component == null || state == null || call == null || participantKey == null
+				|| Objects.equals(participantKey, component.runtimeKey()) || participantTile == null || touchPoint == null
+				|| !maxCallParticipantAddContactRect(participantTile, layout).contains(touchPoint.x(), touchPoint.y())) {
+			return false;
+		}
+		String code = normalizeAccountCode(call.participantCode(participantKey));
+		MaxRuntimeState participantState = MAX_STATES.get(participantKey);
+		if (participantState != null) {
+			synchronized (participantState) {
+				if (participantState.accountCode != null && !participantState.accountCode.isBlank()) {
+					code = normalizeAccountCode(participantState.accountCode);
+				}
+			}
+		}
+		if (code.isBlank()) {
+			return true;
+		}
+		boolean added;
+		synchronized (state) {
+			added = !Objects.equals(code, normalizeAccountCode(state.accountCode)) && !state.contacts.contains(code);
+			if (added) {
+				state.contacts.add(code);
+				state.statusText = "Контакт добавлен";
+				state.version++;
+			}
+		}
+		if (added) {
+			persistState(server, component.runtimeKey(), state);
+			requestRuntimeRender(server, component.runtimeKey());
+			player.displayClientMessage(maxContactFeedbackMessage(player, "added"), true);
+		}
+		return true;
 	}
 
 	private static boolean handleCallTouch(ServerPlayer player, ServerLevel level, ScreenComponent component, MaxRuntimeState state, UiLayout layout, UiPoint touchPoint) {
@@ -653,6 +741,10 @@ final class MonitorMaxRuntime {
 					return true;
 				}
 			}
+			ScreenRuntimeKey focusedParticipant = focusedCallParticipantKey(component.runtimeKey(), state, call);
+			if (handleCallParticipantAddContactTouch(player, server, component, state, call, focusedParticipant, maxCallFocusedTileRect(layout), layout, touchPoint)) {
+				return true;
+			}
 			if (maxCallFocusedTileRect(layout).contains(touchPoint.x(), touchPoint.y())) {
 				toggleCallMenu(server, component.runtimeKey());
 				return true;
@@ -663,6 +755,10 @@ final class MonitorMaxRuntime {
 		int participantIndex = maxCallParticipantIndexAt(layout, participants.size(), menuVisible, touchPoint);
 		if (participantIndex >= 0 && participantIndex < participants.size()) {
 			ScreenRuntimeKey selected = participants.get(participantIndex);
+			UiRect selectedTile = maxCallParticipantTileRect(layout, participants.size(), participantIndex, menuVisible);
+			if (handleCallParticipantAddContactTouch(player, server, component, state, call, selected, selectedTile, layout, touchPoint)) {
+				return true;
+			}
 			if (Objects.equals(selected, component.runtimeKey())) {
 				focusCallParticipant(server, component.runtimeKey(), true);
 			} else {
@@ -725,7 +821,6 @@ final class MonitorMaxRuntime {
 		}
 		if (added) {
 			persistState(server, key, state);
-			addReverseContact(server, code, ownCode);
 		}
 		sender.displayClientMessage(maxContactFeedbackMessage(sender, feedbackKey), true);
 		requestRuntimeRender(server, key);
@@ -769,7 +864,6 @@ final class MonitorMaxRuntime {
 		}
 		if (added) {
 			persistState(server, key, state);
-			addReverseContact(server, code, ownCode);
 		}
 		boolean invited = inviteContactToCall(server, key, code);
 		if (invited) {
@@ -831,35 +925,6 @@ final class MonitorMaxRuntime {
 		return false;
 	}
 
-	private static void addReverseContact(MinecraftServer server, String ownerCode, String contactCode) {
-		if (server == null || ownerCode == null || contactCode == null || ownerCode.isBlank() || contactCode.isBlank()) {
-			return;
-		}
-		ScreenRuntimeKey ownerKey = ACCOUNT_INDEX.get(ownerCode);
-		if (ownerKey == null) {
-			return;
-		}
-		ScreenComponent ownerComponent = resolveScreenComponent(server, ownerKey);
-		if (ownerComponent == null) {
-			return;
-		}
-		MaxRuntimeState ownerState = ensureState(server, ownerComponent);
-		if (ownerState == null) {
-			return;
-		}
-		boolean added;
-		synchronized (ownerState) {
-			added = !Objects.equals(contactCode, ownerState.accountCode) && !ownerState.contacts.contains(contactCode);
-			if (added) {
-				ownerState.contacts.add(contactCode);
-				ownerState.version++;
-			}
-		}
-		if (added) {
-			persistState(server, ownerKey, ownerState);
-			requestRuntimeRender(server, ownerKey);
-		}
-	}
 
 	static List<SpeakerAudioSource> findSpeakerAudioSources(MinecraftServer server, Collection<ScreenComponent> components) {
 		if (server == null || components == null || components.isEmpty()) {
@@ -1755,6 +1820,10 @@ final class MonitorMaxRuntime {
 			} else if (Objects.equals(participantKey, videoPeerKey)) {
 				video = remoteFrame;
 			}
+			boolean savedContact;
+			synchronized (selfState) {
+				savedContact = self || selfState.contacts.contains(normalizeAccountCode(code));
+			}
 			participants.add(new MaxCallParticipantSnapshot(
 					code,
 					displayName,
@@ -1765,6 +1834,7 @@ final class MonitorMaxRuntime {
 					self,
 					cameraEnabled && (self || video != null),
 					microphoneEnabled,
+					savedContact,
 					call.isRinging(participantKey)
 			));
 		}
@@ -2212,17 +2282,26 @@ final class MonitorMaxRuntime {
 			incomingProfiles = incomingProfileBySenderLocked(state);
 		}
 		if (contacts.isEmpty()) {
+			synchronized (state) {
+				state.contactScroll = 0;
+			}
 			return WindowedSnapshot.empty();
 		}
-		int visibleCount = Math.min(contacts.size(), maxVisibleContactRows(layout));
-		List<MaxContactSnapshot> snapshots = new ArrayList<>(visibleCount);
-		for (int index = 0; index < visibleCount; index++) {
+		int capacity = maxVisibleContactRows(layout);
+		int startIndex;
+		synchronized (state) {
+			state.contactScroll = clampInt(state.contactScroll, 0, Math.max(0, contacts.size() - capacity));
+			startIndex = state.contactScroll;
+		}
+		int endExclusive = Math.min(contacts.size(), startIndex + capacity);
+		List<MaxContactSnapshot> snapshots = new ArrayList<>(Math.max(0, endExclusive - startIndex));
+		for (int index = startIndex; index < endExclusive; index++) {
 			MaxContactSnapshot snapshot = captureContactSnapshot(server, selfKey, contacts.get(index), notificationCounts, incomingProfiles);
 			if (snapshot != null) {
 				snapshots.add(snapshot);
 			}
 		}
-		return new WindowedSnapshot<>(List.copyOf(snapshots), contacts.size(), 0);
+		return new WindowedSnapshot<>(List.copyOf(snapshots), contacts.size(), startIndex);
 	}
 
 	private static WindowedSnapshot<MaxAvatarCandidateSnapshot> avatarCandidateSnapshots(
@@ -5715,28 +5794,40 @@ final class MonitorMaxRuntime {
 	}
 
 	private static void drawMaxFeedScreen(Graphics2D graphics, UiLayout layout, MonitorApp app, MaxVisualSnapshot state) {
-		UiRect header = maxProfilePanelRect(layout);
-		fillRoundedRect(graphics, header, clampInt(layout.unit() * 2, 14, 28), new Color(6, 10, 14, 172));
-		strokeRoundedRect(graphics, header, clampInt(layout.unit() * 2, 14, 28), 1.0F, new Color(255, 255, 255, 52));
-		drawAvatar(graphics, maxProfileAvatarRect(layout), state.avatarFrame(), layout);
-		drawVerticalText(graphics, "MAX", maxAppTitleRect(layout), new Color(248, 251, 255, 240), Font.BOLD, clampInt(layout.unit() + 2, 13, 22));
-		drawEllipsizedVerticalText(graphics, state.accountName(), maxProfileCodeRect(layout), new Color(214, 232, 244, 232), Font.BOLD, clampInt(layout.unit(), 10, 17));
+		UiRect canvas = mediaCanvasRect(layout);
+		graphics.setColor(new Color(246, 248, 251));
+		graphics.fillRect(canvas.x(), canvas.y(), canvas.width(), canvas.height());
+		UiRect close = mediaCloseRect(layout);
+		fillRoundedRect(graphics, close, close.height(), new Color(235, 238, 242));
+		drawPlayerUiIcon(graphics, mediaChromeIconRect(close, layout), PlayerUiIcon.CLOSE, new Color(92, 101, 114));
+
+		boolean singleTile = maxSingleTileLayout(layout);
+		UiRect title = maxContactsTitleRect(layout);
+		drawVerticalText(graphics, "Контакты", title, new Color(22, 27, 34), Font.BOLD, singleTile ? 9 : clampInt(layout.unit() + 3, 15, 24));
 		drawMaxAddContactButton(graphics, maxAddContactRect(layout), layout);
+
+		UiRect profile = maxProfilePanelRect(layout);
+		int profileArc = singleTile ? 9 : clampInt(layout.unit() * 2, 14, 24);
+		fillRoundedRect(graphics, profile, profileArc, Color.WHITE);
+		strokeRoundedRect(graphics, profile, profileArc, singleTile ? 0.8F : 1.0F, new Color(220, 225, 232));
+		drawMaxAvatar(graphics, maxProfileAvatarRect(layout), state.avatarFrame(), state.accountCode(), layout);
+		drawEllipsizedVerticalText(graphics, state.accountName(), maxAppTitleRect(layout), new Color(22, 27, 34), Font.BOLD, singleTile ? 8 : clampInt(layout.unit(), 10, 17));
+		if (!singleTile) {
+			drawEllipsizedVerticalText(graphics, "Нажми, чтобы изменить профиль", maxProfileCodeRect(layout), new Color(116, 124, 136), Font.PLAIN, clampInt(layout.unit() - 2, 7, 11));
+		}
 		drawMaxRingtoneControls(graphics, layout, state);
 
 		UiRect listRect = maxContactListRect(layout);
 		WindowedSnapshot<MaxContactSnapshot> contactsWindow = state.contacts() != null ? state.contacts() : WindowedSnapshot.empty();
 		List<MaxContactSnapshot> contacts = contactsWindow.items();
 		if (contacts.isEmpty()) {
-			drawMaxEmptyContacts(graphics, layout, listRect);
+			drawMaxFeedEmptyContacts(graphics, layout, listRect);
 		} else {
 			int count = Math.min(contacts.size(), maxVisibleContactRows(layout));
 			for (int index = 0; index < count; index++) {
-				drawMaxContactRow(graphics, layout, maxContactRowRect(layout, index), contacts.get(index), true);
+				drawMaxFeedContactRow(graphics, layout, maxContactRowRect(layout, index), contacts.get(index));
 			}
-		}
-		if (state.statusText() != null && !state.statusText().isBlank()) {
-			drawCenteredTextFitted(graphics, state.statusText(), maxStatusRect(layout), new Color(210, 232, 244, 224), Font.BOLD, clampInt(layout.unit() - 1, 8, 13), 6);
+			drawMaxContactFeedScrollbar(graphics, layout, contactsWindow);
 		}
 	}
 
@@ -5757,7 +5848,7 @@ final class MonitorMaxRuntime {
 		UiRect canvas = mediaCanvasRect(layout);
 		drawAvatarBackdrop(graphics, canvas, call.peerAvatarFrame(), call.peerCode());
 		UiRect avatar = maxIncomingAvatarRect(layout);
-		drawAvatar(graphics, avatar, call.peerAvatarFrame(), layout);
+		drawMaxAvatar(graphics, avatar, call.peerAvatarFrame(), call.peerCode(), layout);
 		drawCenteredTextFitted(graphics, call.peerDisplayName(), maxIncomingCodeRect(layout), new Color(248, 251, 255, 246), Font.BOLD, clampInt(layout.unit() + 4, 16, 28), 8);
 		drawCenteredTextFitted(graphics, "Входящий вызов MAX", maxIncomingSubtitleRect(layout), new Color(221, 235, 244, 224), Font.PLAIN, clampInt(layout.unit(), 10, 15), 6);
 		drawRoundCallButton(graphics, maxIncomingAcceptRect(layout), PlayerUiIcon.CALL_ACCEPT, new Color(74, 214, 142), new Color(8, 18, 13, 238), layout);
@@ -5767,7 +5858,7 @@ final class MonitorMaxRuntime {
 	private static void drawMaxOutgoingCallScreen(Graphics2D graphics, UiLayout layout, MaxCallVisualSnapshot call) {
 		UiRect canvas = mediaCanvasRect(layout);
 		drawAvatarBackdrop(graphics, canvas, call.peerAvatarFrame(), call.peerCode());
-		drawAvatar(graphics, maxIncomingAvatarRect(layout), call.peerAvatarFrame(), layout);
+		drawMaxAvatar(graphics, maxIncomingAvatarRect(layout), call.peerAvatarFrame(), call.peerCode(), layout);
 		drawCenteredTextFitted(graphics, call.peerDisplayName(), maxIncomingCodeRect(layout), new Color(248, 251, 255, 246), Font.BOLD, clampInt(layout.unit() + 4, 16, 28), 8);
 		drawCenteredTextFitted(graphics, "Ожидание ответа", maxIncomingSubtitleRect(layout), new Color(221, 235, 244, 224), Font.PLAIN, clampInt(layout.unit(), 10, 15), 6);
 		drawRoundCallButton(graphics, maxOutgoingCancelRect(layout), PlayerUiIcon.CALL_DECLINE, new Color(240, 88, 96), new Color(255, 248, 248, 246), layout);
@@ -5811,6 +5902,7 @@ final class MonitorMaxRuntime {
 							offsetRect(maxCallMiniParticipantRect(layout, visibleIndex, miniParticipants.size()), 0, yOffset),
 							miniParticipants.get(baseIndex + visibleIndex),
 							false,
+							false,
 							MediaScaleMode.FILL
 					);
 				}
@@ -5851,6 +5943,7 @@ final class MonitorMaxRuntime {
 				true,
 				call.cameraEnabled(),
 				call.microphoneEnabled(),
+				true,
 				false
 		));
 		if (call.peerCode() != null && !call.peerCode().isBlank()) {
@@ -5863,6 +5956,7 @@ final class MonitorMaxRuntime {
 					call.remoteFrame(),
 					false,
 					call.remoteFrame() != null,
+					true,
 					true,
 					false
 			));
@@ -5891,7 +5985,7 @@ final class MonitorMaxRuntime {
 				return participant;
 			}
 		}
-		return new MaxCallParticipantSnapshot(state.accountCode(), state.accountName(), state.avatarFrame(), null, state.animatedAvatars(), call.localPreviewFrame(), true, call.cameraEnabled(), call.microphoneEnabled(), false);
+		return new MaxCallParticipantSnapshot(state.accountCode(), state.accountName(), state.avatarFrame(), null, state.animatedAvatars(), call.localPreviewFrame(), true, call.cameraEnabled(), call.microphoneEnabled(), true, false);
 	}
 
 	private static boolean sameMaxParticipant(MaxCallParticipantSnapshot left, MaxCallParticipantSnapshot right) {
@@ -5909,6 +6003,18 @@ final class MonitorMaxRuntime {
 			boolean focused,
 			MediaScaleMode scaleMode
 	) {
+		drawMaxParticipantTile(graphics, layout, rect, participant, focused, true, scaleMode);
+	}
+
+	private static void drawMaxParticipantTile(
+			Graphics2D graphics,
+			UiLayout layout,
+			UiRect rect,
+			MaxCallParticipantSnapshot participant,
+			boolean focused,
+			boolean allowAddContact,
+			MediaScaleMode scaleMode
+	) {
 		if (participant == null) {
 			return;
 		}
@@ -5916,6 +6022,7 @@ final class MonitorMaxRuntime {
 				graphics,
 				layout,
 				rect,
+				participant.code(),
 				participant.displayName(),
 				participant.avatarFrame(),
 				participant.accentColor(),
@@ -5923,6 +6030,7 @@ final class MonitorMaxRuntime {
 				focused,
 				participant.cameraEnabled(),
 				participant.microphoneEnabled(),
+				allowAddContact && !participant.self() && !participant.savedContact(),
 				scaleMode
 		);
 	}
@@ -5932,12 +6040,14 @@ final class MonitorMaxRuntime {
 			UiLayout layout,
 			UiRect rect,
 			String code,
+			String displayName,
 			BufferedImage avatar,
 			Color accent,
 			BufferedImage video,
 			boolean focused,
 			boolean cameraEnabled,
 			boolean microphoneEnabled,
+			boolean showAddContact,
 			MediaScaleMode scaleMode
 	) {
 		if (rect.width() <= 1 || rect.height() <= 1) {
@@ -5946,24 +6056,34 @@ final class MonitorMaxRuntime {
 		int arc = clampInt(focused ? layout.unit() * 2 : layout.unit() + 8, 12, focused ? 30 : 22);
 		Shape previousClip = graphics.getClip();
 		Shape shape = roundedRectShape(rect, arc, arc, arc, arc);
+		Color accentColor = accent != null ? accent : participantAccent(code, avatar);
+		boolean videoVisible = cameraEnabled && video != null;
 		graphics.setClip(shape);
-		if (cameraEnabled && video != null) {
+		if (videoVisible) {
 			drawScaledImage(graphics, video, rect, scaleMode);
 		} else {
-			Color accentColor = accent != null ? accent : participantAccent(code, avatar);
 			graphics.setColor(accentColor);
 			graphics.fillRect(rect.x(), rect.y(), rect.width(), rect.height());
 			int maxAvatar = Math.max(12, Math.min(rect.width(), rect.height()) - 6);
 			int avatarSize = clampInt(Math.min(rect.width(), rect.height()) / (focused ? 4 : 3), Math.min(18, maxAvatar), Math.min(focused ? 116 : 72, maxAvatar));
 			UiRect avatarRect = new UiRect(rect.x() + (rect.width() - avatarSize) / 2, rect.y() + (rect.height() - avatarSize) / 2, avatarSize, avatarSize);
-			drawAvatar(graphics, avatarRect, avatar, layout);
+			drawMaxAvatar(graphics, avatarRect, avatar, code, layout);
 		}
 		graphics.setClip(previousClip);
-		drawMaxParticipantLabel(graphics, layout, rect, code, focused);
+		drawMaxParticipantLabel(graphics, layout, rect, displayName, focused);
+		if (showAddContact) {
+			drawMaxParticipantAddContactButton(graphics, maxCallParticipantAddContactRect(rect, layout), layout);
+		}
 		if (!microphoneEnabled && rect.width() >= 20 && rect.height() >= 20) {
 			int micSize = clampInt(Math.min(rect.width(), rect.height()) / 5, 12, 30);
 			int inset = Math.max(2, layout.unit() / 2);
-			UiRect micOff = new UiRect(rect.right() - inset - micSize, rect.y() + inset, micSize, micSize);
+			int micY = rect.y() + inset;
+			if (showAddContact) {
+				UiRect addContact = maxCallParticipantAddContactRect(rect, layout);
+				int belowAdd = addContact.bottom() + Math.max(2, inset / 2);
+				micY = belowAdd + micSize <= rect.bottom() - inset ? belowAdd : Math.max(rect.y() + inset, rect.bottom() - inset - micSize);
+			}
+			UiRect micOff = new UiRect(rect.right() - inset - micSize, micY, micSize, micSize);
 			fillRoundedRect(graphics, micOff, micOff.height(), new Color(0, 0, 0, 108));
 			drawPlayerUiIcon(graphics, mediaChromeIconRect(micOff, layout), PlayerUiIcon.MIC_OFF, new Color(248, 251, 255, 230));
 		}
@@ -6028,7 +6148,7 @@ final class MonitorMaxRuntime {
 				layout
 		);
 		drawCallMenuIconButton(graphics, maxCallCameraSelectRect(layout, call), PlayerUiIcon.DEVICE_SELECT, new Color(248, 251, 255, 186), layout);
-		drawCallMenuIconButton(graphics, maxCallInviteRect(layout, call), PlayerUiIcon.CONTACT_ADD, new Color(248, 251, 255, 226), layout);
+		drawCallMenuIconButton(graphics, maxCallInviteRect(layout, call), PlayerUiIcon.USER_ADD, new Color(248, 251, 255, 226), layout);
 		drawCallMenuIconButton(graphics, maxCallLeaveRect(layout, call), PlayerUiIcon.CALL_DECLINE, new Color(240, 88, 96, 246), layout);
 	}
 
@@ -6393,7 +6513,7 @@ final class MonitorMaxRuntime {
 		UiRect panel = maxAvatarPickerPanelRect(layout);
 		fillRoundedRect(graphics, panel, clampInt(layout.unit() * 2, 14, 28), new Color(6, 10, 14, 230));
 		strokeRoundedRect(graphics, panel, clampInt(layout.unit() * 2, 14, 28), 1.0F, new Color(255, 255, 255, 54));
-		drawMaxContactPickerHeaderButton(graphics, maxCallContactPickerAddRect(layout), layout, PlayerUiIcon.CONTACT_ADD);
+		drawMaxContactPickerHeaderButton(graphics, maxCallContactPickerAddRect(layout), layout, PlayerUiIcon.USER_ADD);
 		drawOverlayCloseButton(graphics, maxCallContactPickerCloseRect(layout), layout);
 		drawVerticalText(graphics, "ДОБАВИТЬ В ЗВОНОК", maxCallContactPickerTitleRect(layout), new Color(248, 251, 255, 236), Font.BOLD, clampInt(layout.unit(), 10, 16));
 		Set<String> participantCodes = new HashSet<>();
@@ -6488,7 +6608,7 @@ final class MonitorMaxRuntime {
 		fillRoundedRect(graphics, rect, clampInt(layout.unit() * 2, 12, 24), new Color(8, 12, 16, contact.selected() ? 206 : 174));
 		strokeRoundedRect(graphics, rect, clampInt(layout.unit() * 2, 12, 24), contact.selected() ? 1.4F : 1.0F, contact.selected() ? new Color(255, 255, 255, 112) : contact.online() ? new Color(255, 255, 255, 58) : new Color(255, 255, 255, 24));
 		UiRect avatarRect = new UiRect(rect.x() + layout.unit(), rect.y() + layout.unit() / 2, rect.height() - layout.unit(), rect.height() - layout.unit());
-		drawAvatar(graphics, avatarRect, contact.avatarFrame(), layout);
+		drawMaxAvatar(graphics, avatarRect, contact.avatarFrame(), contact.code(), layout);
 		UiRect checkRect = maxFileShareContactCheckRect(rect, layout);
 		int textRight = checkRect.x();
 		UiRect codeRect = new UiRect(avatarRect.right() + layout.unit(), rect.y() + layout.unit() / 3, Math.max(1, textRight - avatarRect.right() - layout.unit() * 2), rect.height() / 2);
@@ -6539,7 +6659,7 @@ final class MonitorMaxRuntime {
 		int pad = maxNotificationPopupPadding(layout);
 		int avatarSize = clampInt(header.height() - pad * 2, 18, 34);
 		UiRect avatar = new UiRect(header.x() + pad, header.y() + (header.height() - avatarSize) / 2, avatarSize, avatarSize);
-		drawAvatarNoStroke(graphics, avatar, sender != null ? sender.senderAvatarFrame() : null, layout);
+		drawMaxAvatar(graphics, avatar, sender != null ? sender.senderAvatarFrame() : null, sender != null ? sender.senderCode() : "MAX", layout);
 		UiRect name = new UiRect(
 				avatar.right() + Math.max(4, layout.unit() / 2),
 				header.y(),
@@ -6599,6 +6719,27 @@ final class MonitorMaxRuntime {
 		}
 	}
 
+	private static void drawMaxAvatar(Graphics2D graphics, UiRect rect, BufferedImage avatar, String seed, UiLayout layout) {
+		if (avatar != null) {
+			drawAvatar(graphics, rect, avatar, layout);
+			return;
+		}
+		Shape previousClip = graphics.getClip();
+		Ellipse2D.Float circle = new Ellipse2D.Float(rect.x(), rect.y(), rect.width(), rect.height());
+		graphics.setClip(circle);
+		graphics.setColor(maxDefaultAvatarColor(seed));
+		graphics.fillOval(rect.x(), rect.y(), rect.width(), rect.height());
+		int inset = Math.max(2, (int) Math.round(Math.min(rect.width(), rect.height()) * 0.22D));
+		drawPlayerUiIcon(graphics, rect.inset(inset), PlayerUiIcon.USER_DEFAULT, new Color(255, 255, 255, 244));
+		graphics.setClip(previousClip);
+	}
+
+	private static Color maxDefaultAvatarColor(String seed) {
+		int hash = Objects.toString(seed, "MAX").hashCode();
+		float hue = Math.floorMod(hash, 360) / 360.0F;
+		return Color.getHSBColor(hue, 0.58F, 0.90F);
+	}
+
 	private static void drawAvatar(Graphics2D graphics, UiRect rect, BufferedImage avatar, UiLayout layout) {
 		drawAvatar(graphics, rect, avatar, layout, true);
 	}
@@ -6629,26 +6770,130 @@ final class MonitorMaxRuntime {
 	}
 
 	private static void drawMaxAddContactButton(Graphics2D graphics, UiRect rect, UiLayout layout) {
-		Color color = drawMediaHeaderControlBase(graphics, rect, MediaButtonSegment.SINGLE);
-		drawPlayerUiIcon(graphics, mediaChromeIconRect(rect, layout), PlayerUiIcon.CONTACT_ADD, color);
+		fillRoundedRect(graphics, rect, rect.height(), new Color(16, 142, 255));
+		drawPlayerUiIcon(graphics, maxInlineActionIconRect(rect), PlayerUiIcon.USER_ADD, Color.WHITE);
+	}
+
+	private static UiRect maxInlineActionIconRect(UiRect button) {
+		int size = clampInt((int) Math.round(Math.min(button.width(), button.height()) * 0.62D), 10, 24);
+		return new UiRect(button.x() + (button.width() - size) / 2, button.y() + (button.height() - size) / 2, size, size);
+	}
+
+	private static void drawMaxParticipantAddContactButton(Graphics2D graphics, UiRect rect, UiLayout layout) {
+		Color iconColor = drawSmallMediaButtonBase(
+				graphics,
+				rect,
+				MediaButtonSegment.SINGLE,
+				false,
+				mediaChromeStrokeWidth(rect),
+				new Color(255, 255, 255, 0)
+		);
+		drawPlayerUiIcon(graphics, mediaChromeIconRect(rect, layout), PlayerUiIcon.USER_ADD, iconColor);
 	}
 
 	private static void drawMaxRingtoneControls(Graphics2D graphics, UiLayout layout, MaxVisualSnapshot state) {
 		UiRect play = maxRingtonePreviewRect(layout);
 		UiRect picker = maxRingtonePickerOpenRect(layout);
-		Color playColor = drawMediaHeaderControlBase(graphics, play, MediaButtonSegment.SINGLE);
-		drawPlayerUiIcon(graphics, mediaChromeIconRect(play, layout), state.ringtonePreviewPlaying() ? PlayerUiIcon.PAUSE : PlayerUiIcon.PLAY, playColor);
-		Color pickerColor = drawMediaHeaderControlBase(graphics, picker, MediaButtonSegment.SINGLE);
-		UiRect icon = new UiRect(picker.x() + clampInt(layout.unit() / 2, 5, 9), picker.y() + picker.height() / 4, picker.height() / 2, picker.height() / 2);
-		drawPlayerUiIcon(graphics, icon, PlayerUiIcon.FILE_MUSIC, pickerColor);
-		drawVerticalText(graphics, "ВЫБРАТЬ РИНГТОН", new UiRect(icon.right() + layout.unit() / 2, picker.y(), picker.right() - icon.right() - layout.unit(), picker.height()), pickerColor, Font.BOLD, clampInt(layout.unit() - 2, 7, 11));
+		fillRoundedRect(graphics, play, play.height(), new Color(236, 244, 252));
+		drawPlayerUiIcon(graphics, maxInlineActionIconRect(play), state.ringtonePreviewPlaying() ? PlayerUiIcon.PAUSE : PlayerUiIcon.PLAY, new Color(16, 142, 255));
+		fillRoundedRect(graphics, picker, picker.height(), new Color(236, 244, 252));
+		drawPlayerUiIcon(graphics, maxInlineActionIconRect(picker), PlayerUiIcon.FILE_MUSIC, new Color(16, 142, 255));
 	}
+
+	private static void drawMaxPresenceBadge(Graphics2D graphics, UiRect avatarRect, UiLayout layout) {
+		int outer = clampInt((int) Math.round(Math.min(avatarRect.width(), avatarRect.height()) * 0.28D), 8, 13);
+		int overlap = Math.max(1, outer / 4);
+		int x = avatarRect.right() - outer + overlap;
+		int y = avatarRect.bottom() - outer + overlap;
+		graphics.setColor(Color.WHITE);
+		graphics.fillOval(x, y, outer, outer);
+		int ring = clampInt(outer / 5, 2, 3);
+		graphics.setColor(new Color(45, 201, 116));
+		graphics.fillOval(x + ring, y + ring, Math.max(2, outer - ring * 2), Math.max(2, outer - ring * 2));
+	}
+
+	private static void drawMaxFeedContactRow(Graphics2D graphics, UiLayout layout, UiRect rect, MaxContactSnapshot contact) {
+		boolean singleTile = maxSingleTileLayout(layout);
+		fillRoundedRect(graphics, rect, singleTile ? 8 : clampInt(layout.unit() * 2, 12, 22), Color.WHITE);
+		int avatarInset = singleTile ? 3 : layout.unit();
+		int avatarSize = singleTile ? Math.max(18, rect.height() - 6) : rect.height() - layout.unit();
+		UiRect avatarRect = new UiRect(rect.x() + avatarInset, rect.y() + (rect.height() - avatarSize) / 2, avatarSize, avatarSize);
+		drawMaxAvatar(graphics, avatarRect, contact.avatarFrame(), contact.code(), layout);
+		if (contact.online()) {
+			drawMaxPresenceBadge(graphics, avatarRect, layout);
+		}
+
+		UiRect deleteRect = maxContactDeleteRect(rect, layout);
+		UiRect notificationRect = contact.notificationCount() > 0 ? maxContactNotificationRect(rect, layout, contact.notificationCount(), contact.savedContact()) : null;
+		UiRect callRect = maxContactCallGlyphRect(rect, layout, notificationRect, contact.savedContact());
+		int textGap = singleTile ? 2 : Math.max(4, layout.unit() / 2);
+		int textX = avatarRect.right() + (singleTile ? 4 : layout.unit());
+		int textRight = callRect.x() - textGap;
+		UiRect nameRect = new UiRect(textX, rect.y() + (singleTile ? 3 : layout.unit() / 3), Math.max(1, textRight - textX), singleTile ? 12 : rect.height() / 2);
+		drawEllipsizedVerticalText(graphics, contact.displayName(), nameRect, new Color(22, 27, 34), Font.BOLD, singleTile ? 7 : clampInt(layout.unit(), 10, 16));
+		String status = contact.active() ? "в вызове" : contact.ringing() ? "звонит" : contact.online() ? "в сети" : "не в сети";
+		Color statusColor = contact.online() ? new Color(45, 154, 94) : new Color(126, 134, 145);
+		UiRect statusRect = singleTile
+				? new UiRect(nameRect.x(), nameRect.bottom(), nameRect.width(), Math.max(8, rect.bottom() - nameRect.bottom() - 2))
+				: new UiRect(nameRect.x(), nameRect.bottom(), nameRect.width(), rect.height() / 3);
+		drawVerticalText(graphics, status, statusRect, statusColor, Font.PLAIN, singleTile ? 6 : clampInt(layout.unit() - 2, 7, 11));
+		drawPlayerUiIcon(graphics, maxInlineActionIconRect(callRect), PlayerUiIcon.PHONE_CALL, new Color(16, 142, 255));
+		if (notificationRect != null) {
+			fillRoundedRect(graphics, notificationRect, notificationRect.height(), new Color(16, 142, 255));
+			drawCenteredTextFitted(graphics, Integer.toString(Math.max(0, contact.notificationCount())), notificationRect.inset(singleTile ? 2 : Math.max(2, layout.unit() / 5)), Color.WHITE, Font.BOLD, singleTile ? 7 : clampInt(layout.unit() - 1, 8, 13), 6);
+		}
+		if (contact.savedContact()) {
+			drawPlayerUiIcon(graphics, maxInlineActionIconRect(deleteRect), PlayerUiIcon.TRASH, new Color(167, 174, 184));
+		}
+	}
+
+	private static void drawMaxContactFeedScrollbar(Graphics2D graphics, UiLayout layout, WindowedSnapshot<MaxContactSnapshot> contacts) {
+		if (contacts == null || contacts.totalCount() <= contacts.items().size() || contacts.items().isEmpty()) {
+			return;
+		}
+		UiRect list = maxContactListRect(layout);
+		int trackWidth = clampInt(layout.unit() / 3, 2, 5);
+		int inset = Math.max(2, layout.unit() / 4);
+		UiRect track = new UiRect(list.right() - trackWidth, list.y() + inset, trackWidth, Math.max(1, list.height() - inset * 2));
+		fillRoundedRect(graphics, track, trackWidth, new Color(220, 225, 232));
+		int visible = contacts.items().size();
+		int thumbHeight = Math.max(trackWidth * 2, (int) Math.round(track.height() * (visible / (double) contacts.totalCount())));
+		int maxStart = Math.max(1, contacts.totalCount() - visible);
+		int travel = Math.max(0, track.height() - thumbHeight);
+		int thumbY = track.y() + (int) Math.round(travel * (contacts.windowStartIndex() / (double) maxStart));
+		fillRoundedRect(graphics, new UiRect(track.x(), thumbY, track.width(), Math.min(thumbHeight, track.bottom() - thumbY)), trackWidth, new Color(149, 159, 173));
+	}
+
+	private static void drawMaxFeedEmptyContacts(Graphics2D graphics, UiLayout layout, UiRect rect) {
+		if (maxSingleTileLayout(layout)) {
+			int size = clampInt(Math.min(rect.width(), rect.height()) / 2, 24, 30);
+			UiRect icon = new UiRect(rect.x() + (rect.width() - size) / 2, rect.y() + 3, size, size);
+			graphics.setPaint(new GradientPaint(icon.x(), icon.y(), new Color(18, 145, 255), icon.right(), icon.bottom(), new Color(112, 88, 245)));
+			graphics.fillOval(icon.x(), icon.y(), icon.width(), icon.height());
+			drawPlayerUiIcon(graphics, icon.inset(Math.max(5, icon.width() / 5)), PlayerUiIcon.CONTACTS, Color.WHITE);
+			UiRect title = new UiRect(rect.x() + 3, icon.bottom() + 2, rect.width() - 6, 12);
+			drawCenteredTextFitted(graphics, "Нет контактов", title, new Color(22, 27, 34), Font.BOLD, 8, 6);
+			UiRect subtitle = new UiRect(title.x(), title.bottom(), title.width(), Math.max(8, rect.bottom() - title.bottom()));
+			drawCenteredTextFitted(graphics, "+ чтобы добавить", subtitle, new Color(116, 124, 136), Font.PLAIN, 6, 5);
+			return;
+		}
+		int size = clampInt(Math.min(rect.width(), rect.height()) / 3, 44, 106);
+		UiRect icon = new UiRect(rect.x() + (rect.width() - size) / 2, rect.y() + Math.max(layout.unit(), rect.height() / 8), size, size);
+		graphics.setPaint(new GradientPaint(icon.x(), icon.y(), new Color(18, 145, 255), icon.right(), icon.bottom(), new Color(112, 88, 245)));
+		graphics.fillOval(icon.x(), icon.y(), icon.width(), icon.height());
+		drawPlayerUiIcon(graphics, icon.inset(Math.max(8, icon.width() / 5)), PlayerUiIcon.CONTACTS, Color.WHITE);
+		UiRect title = new UiRect(rect.x() + layout.unit(), icon.bottom() + layout.unit(), rect.width() - layout.unit() * 2, clampInt(layout.unit() * 3, 26, 44));
+		drawCenteredTextFitted(graphics, "Здесь пока нет контактов", title, new Color(22, 27, 34), Font.BOLD, clampInt(layout.unit() + 1, 11, 18), 8);
+		UiRect subtitle = new UiRect(title.x(), title.bottom(), title.width(), clampInt(layout.unit() * 4, 34, 58));
+		drawCenteredTextFitted(graphics, "Нажми +, добавь пользователя по MAX id или нику и начни звонок", subtitle, new Color(116, 124, 136), Font.PLAIN, clampInt(layout.unit() - 1, 8, 13), 6);
+	}
+
 
 	private static void drawMaxContactRow(Graphics2D graphics, UiLayout layout, UiRect rect, MaxContactSnapshot contact, boolean deleteVisible) {
 		fillRoundedRect(graphics, rect, clampInt(layout.unit() * 2, 12, 24), new Color(8, 12, 16, 174));
 		strokeRoundedRect(graphics, rect, clampInt(layout.unit() * 2, 12, 24), 1.0F, contact.online() ? new Color(255, 255, 255, 58) : new Color(255, 255, 255, 24));
 		UiRect avatarRect = new UiRect(rect.x() + layout.unit(), rect.y() + layout.unit() / 2, rect.height() - layout.unit(), rect.height() - layout.unit());
-		drawAvatar(graphics, avatarRect, contact.avatarFrame(), layout);
+		drawMaxAvatar(graphics, avatarRect, contact.avatarFrame(), contact.code(), layout);
 		UiRect deleteRect = maxContactDeleteRect(rect, layout);
 		boolean showDelete = deleteVisible && contact.savedContact();
 		UiRect notificationRect = deleteVisible && contact.notificationCount() > 0 ? maxContactNotificationRect(rect, layout, contact.notificationCount(), showDelete) : null;
@@ -6677,12 +6922,6 @@ final class MonitorMaxRuntime {
 		drawCenteredTextFitted(graphics, Integer.toString(Math.max(0, count)), rect.inset(Math.max(1, layout.unit() / 6)), color, Font.BOLD, clampInt(layout.unit(), 9, 14), 6);
 	}
 
-	private static void drawMaxEmptyContacts(Graphics2D graphics, UiLayout layout, UiRect rect) {
-		fillRoundedRect(graphics, rect, clampInt(layout.unit() * 2, 14, 28), new Color(8, 12, 16, 148));
-		strokeRoundedRect(graphics, rect, clampInt(layout.unit() * 2, 14, 28), 1.0F, new Color(255, 255, 255, 34));
-		drawCenteredText(graphics, "Контактов пока нет", new UiRect(rect.x(), rect.y() + rect.height() / 4, rect.width(), rect.height() / 4), new Color(248, 251, 255, 232), Font.BOLD, clampInt(layout.unit() + 1, 11, 18));
-		drawCenteredText(graphics, "Добавь экран по MAX id или нику и начни видеозвонок", new UiRect(rect.x() + layout.unit(), rect.y() + rect.height() / 2, rect.width() - layout.unit() * 2, rect.height() / 4), new Color(180, 202, 218, 220), Font.PLAIN, clampInt(layout.unit() - 1, 8, 13));
-	}
 
 	private static void drawMaxCallPillButton(Graphics2D graphics, UiRect rect, String label, Color fill, Color text, UiLayout layout, boolean accept) {
 		fillRoundedRect(graphics, rect, rect.height(), fill != null ? fill : new Color(255, 255, 255, 0));
@@ -6706,64 +6945,88 @@ final class MonitorMaxRuntime {
 		drawVerticalText(graphics, label, new UiRect(rect.x() + rect.height(), rect.y(), rect.width() - rect.height() - layout.unit() / 2, rect.height()), color, Font.BOLD, clampInt(layout.unit() - 2, 7, 11));
 	}
 
-	private static void drawPhoneGlyph(Graphics2D graphics, UiRect rect, Color color, float strokeWidth) {
-		Stroke previous = graphics.getStroke();
-		graphics.setStroke(new BasicStroke(Math.max(1.4F, strokeWidth), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-		graphics.setColor(color);
-		int x1 = rect.x() + rect.width() / 4;
-		int y1 = rect.y() + rect.height() / 3;
-		int x2 = rect.right() - rect.width() / 4;
-		int y2 = rect.bottom() - rect.height() / 3;
-		graphics.drawArc(rect.x(), rect.y(), rect.width(), rect.height(), 205, 130);
-		graphics.drawLine(x1, y1, x1 + rect.width() / 8, y1 + rect.height() / 8);
-		graphics.drawLine(x2, y2, x2 - rect.width() / 8, y2 - rect.height() / 8);
-		graphics.setStroke(previous);
+
+	private static boolean maxSingleTileLayout(UiLayout layout) {
+		return layout != null && layout.canvasWidth() <= MAP_SIZE && layout.canvasHeight() <= MAP_SIZE;
 	}
 
-	private static void drawPlusGlyph(Graphics2D graphics, UiRect rect, Color color, float strokeWidth) {
-		Stroke previous = graphics.getStroke();
-		graphics.setStroke(new BasicStroke(Math.max(1.4F, strokeWidth), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-		graphics.setColor(color);
-		graphics.drawLine(rect.x() + rect.width() / 2, rect.y(), rect.x() + rect.width() / 2, rect.bottom());
-		graphics.drawLine(rect.x(), rect.y() + rect.height() / 2, rect.right(), rect.y() + rect.height() / 2);
-		graphics.setStroke(previous);
+	private static UiRect maxContactsTitleRect(UiLayout layout) {
+		UiRect canvas = mediaCanvasRect(layout);
+		UiRect close = mediaCloseRect(layout);
+		UiRect add = maxAddContactRect(layout);
+		if (maxSingleTileLayout(layout)) {
+			int top = canvas.y() + 2;
+			int left = close.right() + 4;
+			return new UiRect(left, top, Math.max(1, add.x() - left - 3), 16);
+		}
+		int top = canvas.y() + Math.max(3, layout.unit() / 2);
+		int height = clampInt(layout.unit() * 3, 30, 46);
+		int left = close.right() + Math.max(6, layout.unit());
+		return new UiRect(left, top, Math.max(1, add.x() - left - layout.unit()), height);
 	}
 
 	private static UiRect maxProfilePanelRect(UiLayout layout) {
 		UiRect canvas = mediaCanvasRect(layout);
-		int top = canvas.y() + clampInt(layout.unit() * 3, 24, 48);
-		return new UiRect(canvas.x() + layout.unit(), top, canvas.width() - layout.unit() * 2, clampInt(layout.unit() * 6, 58, 88));
+		UiRect title = maxContactsTitleRect(layout);
+		if (maxSingleTileLayout(layout)) {
+			int top = title.bottom() + 2;
+			return new UiRect(canvas.x() + 2, top, Math.max(1, canvas.width() - 4), 28);
+		}
+		int top = title.bottom() + Math.max(4, layout.unit() / 2);
+		return new UiRect(canvas.x() + layout.unit(), top, canvas.width() - layout.unit() * 2, clampInt(layout.unit() * 6, 56, 82));
 	}
 
 	private static UiRect maxProfileAvatarRect(UiLayout layout) {
 		UiRect panel = maxProfilePanelRect(layout);
-		int size = panel.height() - layout.unit() * 2;
-		return new UiRect(panel.x() + layout.unit(), panel.y() + layout.unit(), size, size);
+		int inset = maxSingleTileLayout(layout) ? 3 : Math.max(5, layout.unit() / 2);
+		int size = panel.height() - inset * 2;
+		return new UiRect(panel.x() + inset, panel.y() + inset, size, size);
 	}
 
 	private static UiRect maxAppTitleRect(UiLayout layout) {
 		UiRect avatar = maxProfileAvatarRect(layout);
 		UiRect panel = maxProfilePanelRect(layout);
-		return new UiRect(avatar.right() + layout.unit(), panel.y() + layout.unit() / 2, panel.width() / 3, panel.height() / 2);
+		UiRect controls = maxRingtoneControlsRect(layout);
+		if (maxSingleTileLayout(layout)) {
+			int x = avatar.right() + 4;
+			return new UiRect(x, panel.y() + 3, Math.max(1, controls.x() - x - 3), panel.height() - 6);
+		}
+		int x = avatar.right() + layout.unit();
+		return new UiRect(x, panel.y() + layout.unit() / 2, Math.max(1, controls.x() - x - layout.unit()), panel.height() / 2);
 	}
 
 	private static UiRect maxProfileCodeRect(UiLayout layout) {
+		if (maxSingleTileLayout(layout)) {
+			return emptyRect();
+		}
 		UiRect title = maxAppTitleRect(layout);
 		UiRect panel = maxProfilePanelRect(layout);
-		return new UiRect(title.x(), title.bottom() - layout.unit() / 4, title.width() + layout.unit() * 3, panel.height() / 3);
+		return new UiRect(title.x(), title.bottom() - Math.max(1, layout.unit() / 5), title.width(), panel.height() / 3);
 	}
 
 	private static UiRect maxAddContactRect(UiLayout layout) {
-		UiRect panel = maxProfilePanelRect(layout);
-		int height = clampInt(layout.unit() * 2 + 4, 24, 34);
-		return new UiRect(panel.right() - height - layout.unit(), panel.y() + (panel.height() - height) / 2, height, height);
+		UiRect canvas = mediaCanvasRect(layout);
+		if (maxSingleTileLayout(layout)) {
+			int size = 18;
+			return new UiRect(canvas.right() - size - 2, canvas.y() + 1, size, size);
+		}
+		int size = clampInt(layout.unit() * 2 + 4, 24, 34);
+		int top = canvas.y() + Math.max(4, layout.unit() / 2) + Math.max(0, (clampInt(layout.unit() * 3, 30, 46) - size) / 2);
+		return new UiRect(canvas.right() - size - layout.unit(), top, size, size);
 	}
 
 	private static UiRect maxRingtoneControlsRect(UiLayout layout) {
-		UiRect header = maxProfilePanelRect(layout);
-		int height = clampInt(layout.unit() * 2 + 4, 24, 34);
-		int y = header.bottom() + Math.max(4, layout.unit() / 2);
-		return new UiRect(header.x(), y, header.width(), height);
+		UiRect panel = maxProfilePanelRect(layout);
+		if (maxSingleTileLayout(layout)) {
+			int size = 18;
+			int gap = 2;
+			int width = size * 2 + gap;
+			return new UiRect(panel.right() - width - 3, panel.y() + (panel.height() - size) / 2, width, size);
+		}
+		int size = clampInt(layout.unit() * 2 + 4, 24, 34);
+		int gap = Math.max(4, layout.unit() / 2);
+		int width = size * 2 + gap;
+		return new UiRect(panel.right() - width - layout.unit(), panel.y() + (panel.height() - size) / 2, width, size);
 	}
 
 	private static UiRect maxRingtonePreviewRect(UiLayout layout) {
@@ -6773,17 +7036,19 @@ final class MonitorMaxRuntime {
 
 	private static UiRect maxRingtonePickerOpenRect(UiLayout layout) {
 		UiRect controls = maxRingtoneControlsRect(layout);
-		int gap = Math.max(4, layout.unit() / 2);
-		UiRect preview = maxRingtonePreviewRect(layout);
-		int width = clampInt(layout.unit() * 14, 112, Math.max(112, controls.width() - preview.width() - gap));
-		return new UiRect(preview.right() + gap, controls.y(), Math.min(width, controls.right() - preview.right() - gap), controls.height());
+		int gap = maxSingleTileLayout(layout) ? 2 : Math.max(4, layout.unit() / 2);
+		return new UiRect(controls.x() + controls.height() + gap, controls.y(), controls.height(), controls.height());
 	}
 
 	private static UiRect maxContactListRect(UiLayout layout) {
 		UiRect canvas = mediaCanvasRect(layout);
-		UiRect controls = maxRingtoneControlsRect(layout);
-		int y = controls.bottom() + layout.unit();
-		return new UiRect(canvas.x() + layout.unit(), y, canvas.width() - layout.unit() * 2, canvas.bottom() - y - layout.unit());
+		UiRect profile = maxProfilePanelRect(layout);
+		if (maxSingleTileLayout(layout)) {
+			int y = profile.bottom() + 2;
+			return new UiRect(canvas.x() + 2, y, Math.max(1, canvas.width() - 4), Math.max(1, canvas.bottom() - y - 2));
+		}
+		int y = profile.bottom() + Math.max(4, layout.unit() / 2);
+		return new UiRect(canvas.x() + layout.unit(), y, canvas.width() - layout.unit() * 2, Math.max(1, canvas.bottom() - y - layout.unit()));
 	}
 
 	private static int maxVisibleContactRows(UiLayout layout) {
@@ -6793,12 +7058,12 @@ final class MonitorMaxRuntime {
 	}
 
 	private static int maxContactRowHeight(UiLayout layout) {
-		return clampInt(layout.unit() * 5, 46, 70);
+		return maxSingleTileLayout(layout) ? 30 : clampInt(layout.unit() * 5, 46, 70);
 	}
 
 	private static UiRect maxContactRowRect(UiLayout layout, int index) {
 		UiRect list = maxContactListRect(layout);
-		int gap = Math.max(4, layout.unit() / 2);
+		int gap = maxSingleTileLayout(layout) ? 2 : Math.max(4, layout.unit() / 2);
 		int height = maxContactRowHeight(layout);
 		return new UiRect(list.x(), list.y() + index * (height + gap), list.width(), height);
 	}
@@ -6808,17 +7073,34 @@ final class MonitorMaxRuntime {
 	}
 
 	private static UiRect maxContactDeleteRect(UiRect row, UiLayout layout) {
-		int size = clampInt(layout.unit() * 2 + 4, 24, 34);
-		return new UiRect(row.right() - size - layout.unit(), row.y() + (row.height() - size) / 2, size, size);
+		int size = maxSingleTileLayout(layout) ? 14 : clampInt(layout.unit() * 2 + 4, 24, 34);
+		int inset = maxSingleTileLayout(layout) ? 2 : layout.unit();
+		return new UiRect(row.right() - size - inset, row.y() + (row.height() - size) / 2, size, size);
 	}
 
 	private static UiRect maxContactNotificationRect(UiRect row, UiLayout layout, int count, boolean deleteVisible) {
-		int size = clampInt(layout.unit() * 2 + 4, 24, 34);
+		boolean singleTile = maxSingleTileLayout(layout);
+		int size = singleTile ? 16 : clampInt(layout.unit() * 2 + 4, 24, 34);
 		int digits = Integer.toString(Math.max(0, count)).length();
-		int width = size + Math.max(0, digits - 2) * Math.max(4, layout.unit() / 2);
-		int gap = Math.max(4, layout.unit() / 2);
-		int right = deleteVisible ? maxContactDeleteRect(row, layout).x() - gap : row.right() - layout.unit();
+		int width = size + Math.max(0, digits - 2) * (singleTile ? 3 : Math.max(4, layout.unit() / 2));
+		int gap = singleTile ? 2 : Math.max(4, layout.unit() / 2);
+		int right = deleteVisible ? maxContactDeleteRect(row, layout).x() - gap : row.right() - (singleTile ? 2 : layout.unit());
 		return new UiRect(right - width, row.y() + (row.height() - size) / 2, width, size);
+	}
+
+	private static UiRect maxContactCallGlyphRect(UiRect row, UiLayout layout, UiRect notificationRect, boolean deleteVisible) {
+		boolean singleTile = maxSingleTileLayout(layout);
+		int size = singleTile ? 16 : clampInt(layout.unit() * 2 + 4, 24, 34);
+		int gap = singleTile ? 2 : Math.max(4, layout.unit() / 2);
+		int right;
+		if (notificationRect != null) {
+			right = notificationRect.x() - gap;
+		} else if (deleteVisible) {
+			right = maxContactDeleteRect(row, layout).x() - gap;
+		} else {
+			right = row.right() - (singleTile ? 2 : layout.unit());
+		}
+		return new UiRect(right - size, row.y() + (row.height() - size) / 2, size, size);
 	}
 
 	private static int maxContactIndexAt(UiLayout layout, int contactCount, UiPoint point) {
@@ -6831,10 +7113,6 @@ final class MonitorMaxRuntime {
 		return -1;
 	}
 
-	private static UiRect maxStatusRect(UiLayout layout) {
-		UiRect canvas = mediaCanvasRect(layout);
-		return new UiRect(canvas.x() + layout.unit(), canvas.bottom() - clampInt(layout.unit() * 2, 18, 30), canvas.width() - layout.unit() * 2, clampInt(layout.unit() * 2, 18, 30));
-	}
 
 	private static UiRect maxIncomingAvatarRect(UiLayout layout) {
 		UiRect canvas = mediaCanvasRect(layout);
@@ -6876,6 +7154,15 @@ final class MonitorMaxRuntime {
 		UiRect canvas = mediaCanvasRect(layout);
 		int inset = clampInt(layout.unit() / 2, 1, 6);
 		return new UiRect(canvas.x() + inset, canvas.y() + inset, canvas.width() - inset * 2, canvas.height() - inset * 2);
+	}
+
+	private static UiRect maxCallParticipantAddContactRect(UiRect tile, UiLayout layout) {
+		if (tile == null || tile.width() <= 0 || tile.height() <= 0) {
+			return emptyRect();
+		}
+		int inset = clampInt(layout.unit() / 2, 2, 8);
+		int size = maxCallMenuButtonSize(layout);
+		return new UiRect(tile.right() - inset - size, tile.y() + inset, size, size);
 	}
 
 	private static UiRect maxCallParticipantsAreaRect(UiLayout layout, boolean menuOpen) {
@@ -7800,6 +8087,7 @@ final class MonitorMaxRuntime {
 		private long avatarAnimationStartedAtMillis;
 		private boolean avatarRenderScheduled;
 		private final List<String> contacts = new ArrayList<>();
+		private int contactScroll;
 		private String selectedCameraUrl = "";
 		private String selectedMicrophoneKey = "";
 		private int selectedMicrophoneIndex = -1;

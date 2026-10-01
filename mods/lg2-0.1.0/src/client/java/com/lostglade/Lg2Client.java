@@ -10,6 +10,8 @@ import com.lostglade.client.LostgladeClientSettings;
 import com.lostglade.client.maprender.YandexMapRenderClient;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.client.MilkPocketVoidFadeClient;
+import com.lostglade.client.AccountAuthClient;
+import com.lostglade.network.Lg2Payloads;
 import com.lostglade.network.RendererBotPayloads;
 import com.lostglade.network.YandexMapRenderPayloads;
 import com.lostglade.server.CameraMediaCache;
@@ -25,6 +27,8 @@ public class Lg2Client implements ClientModInitializer {
 		CameraMediaCache.initialize(FabricLoader.getInstance().getGameDir());
 		RendererBotPayloads.registerPayloadTypes();
 		YandexMapRenderPayloads.registerPayloadTypes();
+		Lg2Payloads.registerClientPayloadTypes();
+		AccountAuthClient.register();
 		MilkPocketVoidFadeClient.register();
 		RendererBotClientMode.register();
 		RendererBotVolunteerClient.register();

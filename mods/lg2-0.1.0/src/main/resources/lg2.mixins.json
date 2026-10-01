@@ -131,6 +131,8 @@
 		"ServerGamePacketListenerLittleDictatorLagMixin",
 		"ServerGamePacketListenerOrthodoxAfkMixin",
 		"ServerGamePacketListenerMonitorTimelineMixin",
+		"ServerGamePacketListenerAccountAuthMixin",
+		"ServerLoginPremiumAuthenticationMixin",
 		"ServerChunkCacheRendererBotShadowDirtyMixin",
 		"ServerChunkCacheOrthodoxLightMixin",
 		"ServerLevelAbsoluteInvisibilityMixin",

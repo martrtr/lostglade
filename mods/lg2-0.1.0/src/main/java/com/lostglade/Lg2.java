@@ -70,6 +70,7 @@ import com.lostglade.server.ServerUpgradeUiSystem;
 import com.lostglade.server.ServerVoicechatIntegration;
 import com.lostglade.server.ServerWebcamIntegration;
 import com.lostglade.server.YandexMapMarkerStore;
+import com.lostglade.server.AccountAuthSystem;
 import com.lostglade.worldgen.ModWorldGen;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
@@ -104,6 +105,7 @@ public class Lg2 implements ModInitializer {
 		RendererBotPayloads.registerPayloadTypes();
 		YandexMapRenderPayloads.registerPayloadTypes();
 		Lg2Payloads.registerPayloadTypes();
+		AccountAuthSystem.register();
 
 		ModRecipeSerializers.register();
 		ModItems.register();

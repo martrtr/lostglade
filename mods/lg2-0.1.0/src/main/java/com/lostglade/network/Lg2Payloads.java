@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class Lg2Payloads {
 	private static final AtomicBoolean REGISTERED = new AtomicBoolean(false);
+	private static final AtomicBoolean CLIENT_AUTH_REGISTERED = new AtomicBoolean(false);
 
 	private Lg2Payloads() {
 	}
@@ -24,6 +25,18 @@ public final class Lg2Payloads {
 		PayloadTypeRegistry.playS2C().register(RaceAbilityStateS2CPayload.TYPE, RaceAbilityStateS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RaceAbilityC2SPayload.TYPE, RaceAbilityC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RaceAbilityStateRequestC2SPayload.TYPE, RaceAbilityStateRequestC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().register(AuthTokenC2SPayload.TYPE, AuthTokenC2SPayload.STREAM_CODEC);
+	}
+
+	/**
+	 * The distributable client registers its race payloads from the dedicated
+	 * race-client entrypoint.  Register only the new auth payload here, so the
+	 * two wire-compatible race registrations are not duplicated client-side.
+	 */
+	public static void registerClientPayloadTypes() {
+		if (CLIENT_AUTH_REGISTERED.compareAndSet(false, true)) {
+			PayloadTypeRegistry.playC2S().register(AuthTokenC2SPayload.TYPE, AuthTokenC2SPayload.STREAM_CODEC);
+		}
 	}
 
 	/** A request from the optional LG2 client UI to activate one of the four race actions. */
@@ -93,6 +106,29 @@ public final class Lg2Payloads {
 
 		@Override
 		public Type<MilkPocketVoidFadeS2CPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * A per-installation secret held only by the optional LG2 client.  The
+	 * server stores a SHA-256 digest, never this value itself.
+	 */
+	public record AuthTokenC2SPayload(String token) implements CustomPacketPayload {
+		public static final Type<AuthTokenC2SPayload> TYPE = new Type<>(id("auth_token"));
+		public static final StreamCodec<FriendlyByteBuf, AuthTokenC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(AuthTokenC2SPayload::write, AuthTokenC2SPayload::new);
+
+		public AuthTokenC2SPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUtf(128));
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUtf(this.token, 128);
+		}
+
+		@Override
+		public Type<AuthTokenC2SPayload> type() {
 			return TYPE;
 		}
 	}
