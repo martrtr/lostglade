@@ -219,13 +219,12 @@ public final class AncientUkrCreditSystem {
 
     static ActionResolution applyAiAction(MinecraftServer server, UUID ownerId, String actionType,
                                           Integer creditNumber, List<Integer> creditNumbers,
-                                          Integer amount, String modelReply) {
+                                          Integer amount, Double rate, String modelReply) {
         String type = actionType == null ? "none" : actionType.trim().toLowerCase(Locale.ROOT);
         return switch (type) {
             case "", "none" -> new ActionResolution(modelReply, false);
-            case "open_credit" -> openCredit(server, ownerId, amount);
+            case "open_credit" -> openCredit(server, ownerId, amount, rate);
             case "start_repayment" -> startRepayment(server, ownerId, creditNumber, creditNumbers);
-            case "continue_repayment" -> continueRepayment(server, ownerId);
             case "stop_repayment" -> stopRepayment(ownerId);
             case "finish" -> finishConversation(ownerId);
             default -> result("action_rejected; reason=unknown_action" );
@@ -418,10 +417,14 @@ public final class AncientUkrCreditSystem {
         return ownerId != null && REPAYMENTS.containsKey(ownerId);
     }
 
-    private static ActionResolution openCredit(MinecraftServer server, UUID ownerId, Integer amount) {
+    private static ActionResolution openCredit(MinecraftServer server, UUID ownerId, Integer amount, Double rate) {
         CreditTerms terms = terms();
         if (!validPrincipal(amount, terms.maxPrincipal())) {
             return result("credit_not_issued; reason=invalid_amount; maximum=" + terms.maxPrincipal());
+        }
+        double currentRate = currentRatePercent();
+        if (rate == null || !Double.isFinite(rate) || Math.abs(rate - currentRate) >= 0.0001D) {
+            return result("credit_not_issued; reason=rate_changed; currentRate=" + formatPercent(currentRate));
         }
         ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
         if (owner == null || ServerRaceSystem.getActiveAncientUkrCreditorId(ownerId) == null) {
@@ -435,7 +438,6 @@ public final class AncientUkrCreditSystem {
         if (number <= 0 || !queueLoanBitcoinPayout(owner, amount)) {
             return result("credit_not_issued; reason=payout_unavailable");
         }
-        double rate = currentRatePercent();
         borrower.credits.add(new Credit(number, amount, BigDecimal.valueOf(amount), rate));
         save(server);
         syncScoreboard(owner);
@@ -472,22 +474,16 @@ public final class AncientUkrCreditSystem {
         return result("reception_started; credits=" + numbers + "; accepted=0; awaiting_physical_bitcoins=true");
     }
 
-    private static ActionResolution continueRepayment(MinecraftServer server, UUID ownerId) {
-        RepaymentSession session = REPAYMENTS.get(ownerId);
-        return session == null ? result("reception_inactive")
-                : result("reception_continues; credits=" + session.creditNumbers + "; accepted=" + session.totalPaid);
-    }
-
     private static ActionResolution stopRepayment(UUID ownerId) {
         RepaymentSession session = REPAYMENTS.remove(ownerId);
-        if (session == null) return result("reception_already_inactive; debts_unchanged=true");
+        if (session == null) return result("action_rejected; requested=stop_repayment; reason=no_active_reception; no_state_changed=true");
         return result("reception_stopped; credits=" + session.creditNumbers + "; accepted=" + session.totalPaid
                 + "; remaining_debts_in_FACTS=true; no_debt_forgiven=true");
     }
 
     private static ActionResolution finishConversation(UUID ownerId) {
-        ActionResolution reception = stopRepayment(ownerId);
-        return new ActionResolution("conversation_finished; " + reception.event(), true);
+        REPAYMENTS.remove(ownerId);
+        return new ActionResolution("conversation_finished; farewell_only=true", true);
     }
     private static void tickRepayments(MinecraftServer server) {
         if (REPAYMENTS.isEmpty()) return;
@@ -521,7 +517,7 @@ public final class AncientUkrCreditSystem {
                 iterator.remove();
                 AncientUkrCreditorChatSystem.narrateEvent(server, ownerId,
                         "selected_credits_fully_repaid; credits=" + session.creditNumbers
-                                + "; accepted=" + session.totalPaid + "; reception_stopped=true");
+                                + "; accepted=" + session.totalPaid + "; all_selected_debts_closed=true");
                 continue;
             }
 
@@ -995,6 +991,14 @@ public final class AncientUkrCreditSystem {
         double multiplier = config == null || config.ancientUkrCreditMaxDebtMultiplier <= 0.0D ? DEFAULT_MAX_DEBT_MULTIPLIER : config.ancientUkrCreditMaxDebtMultiplier;
         return new CreditTerms(maxActive, maxPrincipal, Math.min(minRate, maxRate), Math.max(minRate, maxRate), multiplier);
     }
+    static double currentCreditRatePercent() {
+        return currentRatePercent();
+    }
+
+    static long currentCreditRateHour() {
+        return currentEpochHour();
+    }
+
     private static double currentRatePercent() {
         return rateForHour(currentEpochHour());
     }

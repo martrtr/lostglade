@@ -1,0 +1,17 @@
+{
+    "providers":  [
+                      {
+                          "ascent":  23,
+                          "height":  66,
+                          "file":  "lg2:font/necromancer_mana_bar.png",
+                          "type":  "bitmap",
+                          "chars":  [
+                                        ""
+                                    ]
+                      },
+                      {
+                          "id":  "minecraft:default",
+                          "type":  "reference"
+                      }
+                  ]
+}

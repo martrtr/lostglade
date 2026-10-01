@@ -4,6 +4,7 @@ import com.lostglade.server.CartelSecretRecipeBookSystem;
 import com.lostglade.server.CopperManGogglesSystem;
 import com.lostglade.server.ItRecipeBookSystem;
 import com.lostglade.server.MarkShieldRecipeSystem;
+import com.lostglade.server.NecromancerStockSystem;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.crafting.Recipe;
@@ -23,7 +24,8 @@ public abstract class ServerPlayerCartelRecipeBookMixin {
 		recipes = CartelSecretRecipeBookSystem.filterAwardedRecipes(player, recipes);
 		recipes = CopperManGogglesSystem.filterAwardedRecipes(player, recipes);
 		recipes = MarkShieldRecipeSystem.filterAwardedRecipes(player, recipes);
-		return ItRecipeBookSystem.filterAwardedRecipes(player, recipes);
+		recipes = ItRecipeBookSystem.filterAwardedRecipes(player, recipes);
+		return NecromancerStockSystem.filterAwardedRecipes(player, recipes);
 	}
 
 	@ModifyVariable(method = "awardRecipesByKey", at = @At("HEAD"), argsOnly = true)
@@ -32,6 +34,7 @@ public abstract class ServerPlayerCartelRecipeBookMixin {
 		recipeKeys = CartelSecretRecipeBookSystem.filterAwardedRecipeKeys(player, recipeKeys);
 		recipeKeys = CopperManGogglesSystem.filterAwardedRecipeKeys(player, recipeKeys);
 		recipeKeys = MarkShieldRecipeSystem.filterAwardedRecipeKeys(player, recipeKeys);
-		return ItRecipeBookSystem.filterAwardedRecipeKeys(player, recipeKeys);
+		recipeKeys = ItRecipeBookSystem.filterAwardedRecipeKeys(player, recipeKeys);
+		return NecromancerStockSystem.filterAwardedRecipeKeys(player, recipeKeys);
 	}
 }

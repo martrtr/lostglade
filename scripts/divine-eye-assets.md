@@ -1,56 +1,53 @@
 # Divine Gaze Assets
 
-Only the Orthodox attack visuals are replaced. Defense wings, gaze duration,
-punishment, targeting, sounds, terrain-relative height and visibility rules are
-unchanged.
+The composition contains the central eye, 64 rays and six volumetric seraph wings.
+Only Orthodox attack visuals are changed; defense wings and attack mechanics are
+independent.
 
-`build_divine_eye_assets.ps1` imports `center_eye.json/png` and `beams.json/png`
-from the supplied directory and generates eight solid wing variants.
-Run it from PowerShell; `-InputDirectory` overrides the import directory.
-The checked-in outputs do not require the original Downloads files at runtime.
+`import_divine_eye_composition.ps1` imports replacement assets without touching the
+central eye. Parameters override these default inputs:
 
-Outputs are under `mods/lg2-0.1.0/src/main/resources/assets/lg2/`:
+- `-BeamModel`: `Downloads/Telegram Desktop/beams (4).json`.
+- `-BeamTexture`: `Downloads/Telegram Desktop/beams (2).png`.
+- `-WingModel`: `Downloads/orthodox_seraph_wings_v2_optimized.bbmodel`.
+- `-WingTexture`: `Downloads/orthodox_seraph_wings_v2.png`.
 
-- `models/item/orthodox_divine_eye.json`: supplied center, recentered at 8,8,8.
-- `models/item/orthodox_eye_beam_0.json` through `_15.json`: individual ray groups.
-- Wing assets remain staged for later work, but are not part of the active composition.
+`build_divine_eye_assets.ps1` imports `center_eye.json/png` from `-InputDirectory`,
+then delegates ray/wing import to this script. Checked-in assets do not need the
+Downloads files at runtime.
+
+Outputs under `mods/lg2-0.1.0/src/main/resources/assets/lg2/`:
+
+- `models/item/orthodox_divine_eye.json`: center, pivot at 8,8,8.
+- `models/item/orthodox_eye_beam_0.json` through `_15.json`: ray length variants.
+- `models/item/orthodox_eye_wing_0.json` through `_7.json`: the eight root folders.
 - Matching `items/` definitions and `textures/item/` images.
 
-Ray model coordinates are halved at export to stay inside vanilla model bounds.
-The runtime uses scale 8/16/8, restoring the export normalization and doubling
-the author's local Y length relative to X/Z. Each ray's pivot is its bottom
-center. Composition selection is seeded once per gaze, not once per viewer.
+Ray coordinates are halved at export to fit vanilla model bounds. Runtime scales
+16/32/16 restore export normalization and the author's half-height. Roots are
+fixed on the radius-14 circle; axis-weighted random length selection is unchanged.
 
-The new wing atlas is
-`textures/item/orthodox_eye_wing_atlas.png`, generated using the built-in
-image generation tool. No image-generation service is used by the server.
+Wing coordinates and pivots are divided by four and recentered at 8,8,8. Runtime
+scale 40 gives each authored unit 0.625 blocks. Native Minecraft 1.21.11 XYZ cube
+rotations preserve layered feathers, using Z-Y-X rotation composition. UVs are
+converted from the supplied 64x64 pixel atlas without resampling the texture.
+Hidden editor groups are exported, not discarded.
 
-Generation prompt:
-
-> Create one square opaque Minecraft pixel-art texture atlas for a volumetric
-> angel wing 3D model. Strict 2 by 2 equal quadrants with no borders and no text.
-> Top left quadrant: ivory-white feather surface, delicate parallel pale cream
-> barbs flowing vertically and central fine golden shaft, fills entire quadrant.
-> Top right quadrant: darker warm champagne/gold feather underside, parallel
-> barbs vertically, fills entire quadrant. Bottom left quadrant: one luminous
-> amber angel eye seen straight on, almond-shaped creamy sclera, detailed
-> concentric amber iris and small black round pupil, pale ivory background,
-> eye centered and fills quadrant with small margin. Bottom right quadrant:
-> one different icy pale blue angel eye straight on, silver ivory sclera blue
-> iris small dark pupil, pale ivory background. Crisp pixel-art texels, no 3D
-> rendering, no cast shadows, no scene, no labels, no wing silhouette, full
-> bleed texture tiles only. This is a UV material atlas, not illustration.
-> 1024x1024.
+Each gaze chooses six different wings, roughly evenly spaced with slight angular
+jitter. Roots sit 0.6 blocks beyond the longest nearby ray tip. Each wing has a
+50/50 local length-axis flip; both authored eye faces are retained. Uniform growth
+is around the root; closing reverses that animation. Choices are seeded once per
+gaze and shared by viewers. Existing full-bright lighting and per-viewer eye
+position/visibility rules apply to all parts.
 
 From the mod directory:
 
 ```powershell
-.\gradlew.bat runOrthodoxEyeCompositionTest prepareDevResourcePack --no-daemon
+.\gradlew.bat runOrthodoxEyeCompositionTest prepareDevResourcePack
 ```
 
-The standalone test checks 100 seeded layouts, model/texture references, legal
-element bounds, 32 displayed rays from two complete shuffled model sets, doubled
-ray length, radius-14 circular root pivots, downward orientation
-and animation matrices. It also renders diagnostic orthographic
-previews to `build/reports/divine-eye/`. These are asset previews, not screenshots
-from Minecraft; in-game interpolation and appearance still need client testing.
+Tests check seeded layouts, ray length probabilities, root pivots, wing direction,
+spacing, flips, animation, all 25 assets and texture/UV references. A diagnostic
+orthographic render is written to `build/reports/divine-eye/composition.png`.
+This is an asset preview, not a Minecraft screenshot; client interpolation and
+appearance still need in-game testing.

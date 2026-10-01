@@ -106,7 +106,6 @@ public final class OrthodoxAttackSystem {
 				Math.max(0.0D, remainingHealthHearts) * 2.0D,
 				Math.max(1L, blindnessTicks),
 				target.position(),
-				calculateEyeY(target),
 				caster.level().getServer().overworld().getGameTime() + ACTIVATION_OVERLAY_TICKS
 		);
 		session.soundOpen = true;
@@ -201,7 +200,6 @@ public final class OrthodoxAttackSystem {
 			if (!session.terminating && activeWorld) {
 				session.remainingTicks--;
 				session.lastTargetPosition = target.position();
-				session.lastEyeY = calculateEyeY(target);
 				if (session.remainingTicks <= 0L) session.terminating = true;
 			}
 			float desiredOpen = !session.terminating && activeWorld ? 1.0F : 0.0F;
@@ -260,9 +258,10 @@ public final class OrthodoxAttackSystem {
 	private static EyeView spawnView(ServerPlayer viewer, ServerPlayer target, DivineGazeSession session) {
 		if (viewer == null || target == null || viewer.connection == null) return null;
 		List<Display.ItemDisplay> displays = new ArrayList<>(OrthodoxEyeComposition.PART_COUNT);
+		double viewerEyeY = calculateEyeY(viewer);
 		for (int part = 0; part < OrthodoxEyeComposition.PART_COUNT; part++) {
 			Display.ItemDisplay display = createDisplay(target.level(), session.composition.model(part));
-			display.setPos(target.getX(), session.lastEyeY, target.getZ());
+			display.setPos(target.getX(), viewerEyeY, target.getZ());
 			display.setTransformation(session.composition.transformation(part, 1.0F, 0.0F));
 			sendSpawn(viewer, display);
 			display.getEntityData().packDirty();
@@ -299,10 +298,11 @@ public final class OrthodoxAttackSystem {
 		float renderedOpen = Math.min(session.openProgress, view.openProgress);
 		boolean transformChanged = view.lastRenderedOpen != renderedOpen;
 		view.lastRenderedOpen = renderedOpen;
+		double viewerEyeY = calculateEyeY(viewer);
 		for (int part = 0; part < view.displays.size(); part++) {
 			Display.ItemDisplay display = view.displays.get(part);
-			boolean moved = display.getX() != targetPosition.x || display.getY() != session.lastEyeY || display.getZ() != targetPosition.z;
-			if (moved) display.setPos(targetPosition.x, session.lastEyeY, targetPosition.z);
+			boolean moved = display.getX() != targetPosition.x || display.getY() != viewerEyeY || display.getZ() != targetPosition.z;
+			if (moved) display.setPos(targetPosition.x, viewerEyeY, targetPosition.z);
 			if (transformChanged) {
 				display.setTransformation(session.composition.transformation(part, 1.0F, renderedOpen));
 				display.setTransformationInterpolationDelay(0);
@@ -311,11 +311,15 @@ public final class OrthodoxAttackSystem {
 		}
 	}
 
-	private static double calculateEyeY(ServerPlayer target) {
-		int blockX = Mth.floor(target.getX());
-		int blockZ = Mth.floor(target.getZ());
-		int surfaceY = target.level().getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
-		double anchorY = target.getY() >= surfaceY - 0.01D ? target.getY() : surfaceY;
+	private static double calculateEyeY(ServerPlayer observer) {
+		int blockX = Mth.floor(observer.getX());
+		int blockZ = Mth.floor(observer.getZ());
+		int surfaceY = observer.level().getHeight(Heightmap.Types.WORLD_SURFACE, blockX, blockZ);
+		return calculateEyeY(observer.getY(), surfaceY);
+	}
+
+	static double calculateEyeY(double observerY, int surfaceY) {
+		double anchorY = observerY >= surfaceY - 0.01D ? observerY : surfaceY;
 		return anchorY + EYE_HEIGHT_OFFSET_BLOCKS;
 	}
 
@@ -433,7 +437,6 @@ public final class OrthodoxAttackSystem {
 		private final Map<UUID, EyeView> views = new HashMap<>();
 		private final OrthodoxEyeComposition composition;
 		private Vec3 lastTargetPosition;
-		private double lastEyeY;
 		private final long activationOverlayRestoreTick;
 		private float openProgress;
 		private int closedTicks;
@@ -442,7 +445,7 @@ public final class OrthodoxAttackSystem {
 		private boolean activationOverlayRestored;
 
 		private DivineGazeSession(UUID casterId, UUID targetId, long remainingTicks, double visibilityRadius,
-				double remainingHealthPoints, long blindnessTicks, Vec3 lastTargetPosition, double lastEyeY,
+				double remainingHealthPoints, long blindnessTicks, Vec3 lastTargetPosition,
 				long activationOverlayRestoreTick) {
 			this.casterId = casterId;
 			this.targetId = targetId;
@@ -452,7 +455,6 @@ public final class OrthodoxAttackSystem {
 			this.remainingHealthPoints = remainingHealthPoints;
 			this.blindnessTicks = blindnessTicks;
 			this.lastTargetPosition = lastTargetPosition;
-			this.lastEyeY = lastEyeY;
 			this.activationOverlayRestoreTick = activationOverlayRestoreTick;
 		}
 	}

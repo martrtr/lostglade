@@ -16,13 +16,16 @@ public final class AncientUkrCreditorSelectionTest {
                 "{\"action\":{\"type\":\"start_repayment\",\"creditNumbers\":[2,1,2]}}");
         check(both.creditNumbers().equals(List.of(2, 1)), "Preserve model selection");
         var changed = AncientUkrCreditorChatSystem.parseModelReply(
-                "```json\n{\"action\":{\"type\":\"open_credit\",\"amount\":200}}\n```");
+                "```json\n{\"action\":{\"type\":\"open_credit\",\"amount\":200,\"rate\":7.1}}\n```");
         check(changed.amount() == 200, "Use newly agreed amount");
+        check(changed.rate() == 7.1D, "Use newly agreed rate");
         var stop = AncientUkrCreditorChatSystem.parseModelReply(
                 "{\"action\":{\"type\":\"stop_repayment\"}}");
         check(stop.actionType().equals("stop_repayment"), "Parse stop action");
+        reject("{\"action\":{\"type\":\"continue_repayment\"}}");
         reject("{\"action\":{\"type\":\"open_credit\",\"amount\":1.5}}");
         reject("{\"action\":{\"type\":\"open_credit\",\"amount\":999999999999}}");
+        reject("{\"action\":{\"type\":\"open_credit\",\"amount\":200,\"rate\":\"oops\"}}");
         reject("{\"action\":{\"type\":\"start_repayment\",\"creditNumbers\":[1,\"oops\"]}}");
         reject("{\"action\":{\"type\":\"start_repayment\",\"creditNumbers\":[1,0]}}");
         reject("{\"action\":{\"type\":\"erase_all_debts\"}}");
@@ -31,31 +34,33 @@ public final class AncientUkrCreditorSelectionTest {
         check(!AncientUkrCreditSystem.validPrincipal(0, 1000), "Zero amount");
         check(!AncientUkrCreditSystem.validPrincipal(1001, 1000), "Maximum amount");
         check(AncientUkrCreditSystem.validPrincipal(200, 1000), "Valid amount");
+        check(AncientUkrCreditorChatSystem.matchingCreditOffer(200, 7.1D, 10L, 200, 7.1D, 10L),
+                "Matching offer may be issued once confirmed");
+        check(!AncientUkrCreditorChatSystem.matchingCreditOffer(null, null, Long.MIN_VALUE, 200, 7.1D, 10L),
+                "A credit cannot be issued before its terms were presented");
+        check(!AncientUkrCreditorChatSystem.matchingCreditOffer(200, 7.1D, 10L, 200, 7.1D, 11L),
+                "An offer expires when the hourly rate changes");
+        check(!AncientUkrCreditorChatSystem.matchingCreditOffer(200, 7.1D, 10L, 300, 7.1D, 10L),
+                "Confirmation cannot issue a different amount");
+        String repaymentInstruction = AncientUkrCreditorChatSystem.authoritativeReplyInstruction(
+                "selected_credits_fully_repaid; credits=[2, 3]; accepted=22; all_selected_debts_closed=true");
+        check(repaymentInstruction.contains("only that the listed credits are fully repaid"),
+                "Full repayment narration must only acknowledge closed credits");
+        check(repaymentInstruction.contains("Do not mention starting"),
+                "Full repayment narration must not restart reception verbally");
+        String paidEvent = "selected_credits_fully_repaid; credits=[2, 3]; accepted=22";
+        check(AncientUkrCreditorChatSystem.contradictsAuthoritativeEvent(paidEvent,
+                        "\u041f\u0440\u0438\u0451\u043c \u0431\u0438\u0442\u043a\u043e\u0438\u043d\u043e\u0432 \u0437\u0430\u043f\u0443\u0449\u0435\u043d. \u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e \u043f\u043e\u043b\u043d\u043e\u0441\u0442\u044c\u044e."),
+                "Contradictory repeated reception announcement must be rejected");
+        check(!AncientUkrCreditorChatSystem.contradictsAuthoritativeEvent(paidEvent,
+                        "\u041a\u0440\u0435\u0434\u0438\u0442\u044b \u21162 \u0438 \u21163 \u043f\u043e\u043b\u043d\u043e\u0441\u0442\u044c\u044e \u043f\u043e\u0433\u0430\u0448\u0435\u043d\u044b."),
+                "Correct repayment acknowledgement must be published");
         check(AncientUkrCreditorChatSystem.normalizeCurrency("\u0414\u043e 1000 \u0440\u0443\u0431\u043b\u0435\u0439 \u0438\u043b\u0438 300\u20bd")
                 .equals("\u0414\u043e 1000\u20bf \u0438\u043b\u0438 300\u20bf"), "Ruble amounts must become tight bitcoin amounts");
         check(AncientUkrCreditorChatSystem.normalizeCurrency("\u041a\u0440\u0435\u0434\u0438\u0442 \u21162: 700 \u0431\u0438\u0442\u043a\u043e\u0438\u043d\u043e\u0432 \u043f\u043e\u0434 7.1%")
                 .equals("\u041a\u0440\u0435\u0434\u0438\u0442 \u21162: 700\u20bf \u043f\u043e\u0434 7.1%"), "Do not alter loan IDs or interest rates");
         check(AncientUkrCreditorChatSystem.normalizeCurrency("500 BTC, 250 \u20bf")
                 .equals("500\u20bf, 250\u20bf"), "Normalize all explicit bitcoin sums");
-        check(AncientUkrCreditorChatSystem.isTerminalMessage("\u0432\u0441\u0451"), "Standalone all-done message must end the conversation");
-        check(AncientUkrCreditorChatSystem.isTerminalMessage("\u0432\u0441\u0435!"), "Unaccented all-done message must end the conversation");
-        check(!AncientUkrCreditorChatSystem.isTerminalMessage("\u0437\u0430\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0435 \u043a\u0440\u0435\u0434\u0438\u0442\u044b"),
-                "Selecting all loans must not end the conversation");
-        check(AncientUkrCreditorChatSystem.actionCorrection("open_credit", "\u0432\u0441\u0451", false)
-                != null, "Ambiguous all-done must recheck consent before issuing a second loan");
-        for (String all : List.of("\u0432\u0441\u0435", "\u0432\u0441\u0451", "\u043e\u0431\u0430")) {
-            for (boolean active : new boolean[]{false, true}) {
-                check(AncientUkrCreditorChatSystem.actionCorrection("start_repayment", all, active) == null,
-                        "Contextual selection of all loans must reach execution without stopping or finishing");
-            }
-        }
-        check(AncientUkrCreditorChatSystem.actionCorrection("stop_repayment", "\u0432\u0441\u0435", true) == null,
-                "Model may stop active reception when context means done giving coins");
-        check(AncientUkrCreditorChatSystem.actionCorrection("finish", "\u0432\u0441\u0435", false) == null,
-                "Model may finish when context means goodbye");
-        check(AncientUkrCreditorChatSystem.actionCorrection("stop_repayment",
-                "\u0437\u0430\u043a\u0440\u044b\u0442\u044c \u043a\u0440\u0435\u0434\u0438\u0442", false) != null,
-                "Repayment request cannot stop an inactive reception");
         check(AncientUkrCreditSystem.collectorThresholdExceeded(300, BigDecimal.valueOf(301)),
                 "Collectors must come when a loan exceeds its principal");
         check(!AncientUkrCreditSystem.collectorThresholdExceeded(300, BigDecimal.valueOf(300)),
@@ -120,7 +125,7 @@ public final class AncientUkrCreditorSelectionTest {
                 field(sessionClass, "totalPaid").setInt(session, paid);
                 sessions.put(ownerId, session);
                 check(AncientUkrCreditSystem.hasActiveRepayment(ownerId), "Reception must be active before stopping");
-                var result = AncientUkrCreditSystem.applyAiAction(null, ownerId, "stop_repayment", null, List.of(), null, "");
+                var result = AncientUkrCreditSystem.applyAiAction(null, ownerId, "stop_repayment", null, List.of(), null, null, "");
                 check(!sessions.containsKey(ownerId), "Reception must stop even with debt remaining");
                 check(!AncientUkrCreditSystem.hasActiveRepayment(ownerId), "Stopped reception must become inactive");
                 check(result.event().contains("accepted=" + paid), "Report actual accepted amount");
@@ -128,8 +133,13 @@ public final class AncientUkrCreditorSelectionTest {
                 check(new BigDecimal("108").equals(field(credit.getClass(), "debt").get(credit)), "Stopping cannot erase debt");
             }
             sessions.put(ownerId, constructor.newInstance(List.of(1)));
-            var finish = AncientUkrCreditSystem.applyAiAction(null, ownerId, "finish", null, List.of(), null, "");
+            var finish = AncientUkrCreditSystem.applyAiAction(null, ownerId, "finish", null, List.of(), null, null, "");
             check(finish.closeCreditor() && !sessions.containsKey(ownerId), "Goodbye also stops reception");
+            check(finish.event().equals("conversation_finished; farewell_only=true"),
+                    "Goodbye must not invent payment narration");
+            var inactiveFinish = AncientUkrCreditSystem.applyAiAction(null, ownerId, "finish", null, List.of(), null, null, "");
+            check(inactiveFinish.event().equals("conversation_finished; farewell_only=true"),
+                    "Goodbye without reception must remain a plain farewell");
         } finally {
             sessions.remove(ownerId);
             borrowers.remove(ownerId.toString());

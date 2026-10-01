@@ -330,6 +330,24 @@ public final class RaceConfig {
 		changed |= normalizeNonNegative(ability.orthodoxHolinessNetherMinutes, value -> ability.orthodoxHolinessNetherMinutes = value);
 		changed |= normalizeNonNegative(ability.orthodoxHolinessRepentanceMinecraftDays, value -> ability.orthodoxHolinessRepentanceMinecraftDays = value);
 		changed |= normalizeNonNegative(ability.orthodoxHolinessRecoveryMinutes, value -> ability.orthodoxHolinessRecoveryMinutes = value);
+		changed |= normalizeNonNegative(ability.necromancerManaBaseMax, value -> ability.necromancerManaBaseMax = value);
+		changed |= normalizeNonNegative(ability.necromancerManaPerLevel, value -> ability.necromancerManaPerLevel = value);
+		changed |= normalizeNonNegative(ability.necromancerManaRegenPerSecond, value -> ability.necromancerManaRegenPerSecond = value);
+		changed |= normalizeNonNegative(ability.necromancerManaActionCostPerSecond, value -> ability.necromancerManaActionCostPerSecond = value);
+		changed |= normalizeNonNegative(ability.necromancerReachBlocks, value -> ability.necromancerReachBlocks = value);
+		changed |= normalizeNonNegative(ability.necromancerMaxHealthHearts, value -> ability.necromancerMaxHealthHearts = value);
+		changed |= normalizeNonNegative(ability.necromancerAttackDamageHearts, value -> ability.necromancerAttackDamageHearts = value);
+		changed |= normalizeNonNegative(ability.necromancerAttackManaCost, value -> ability.necromancerAttackManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerDefenseRadiusBlocks, value -> ability.necromancerDefenseRadiusBlocks = value);
+		changed |= normalizeNonNegative(ability.necromancerDefenseKnockbackDistanceBlocks, value -> ability.necromancerDefenseKnockbackDistanceBlocks = value);
+		changed |= normalizeNonNegative(ability.necromancerDefenseManaCost, value -> ability.necromancerDefenseManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerUniqueSummonManaCost, value -> ability.necromancerUniqueSummonManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerUniqueToggleManaCost, value -> ability.necromancerUniqueToggleManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerShnyagaTierOneManaCost, value -> ability.necromancerShnyagaTierOneManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerShnyagaTierTwoManaCost, value -> ability.necromancerShnyagaTierTwoManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerShnyagaTierThreeManaCost, value -> ability.necromancerShnyagaTierThreeManaCost = value);
+		changed |= normalizeNonNegative(ability.necromancerShnyagaMaxAbsorptionHearts, value -> ability.necromancerShnyagaMaxAbsorptionHearts = value);
+		changed |= normalizeNonNegative(ability.necromancerShnyagaEffectDurationSeconds, value -> ability.necromancerShnyagaEffectDurationSeconds = value);
 		changed |= normalizeChance(ability.chance, value -> ability.chance = value);
 		if (ability.womanUniqueDropMaxSeconds < ability.womanUniqueDropMinSeconds) {
 			ability.womanUniqueDropMaxSeconds = ability.womanUniqueDropMinSeconds;
@@ -612,6 +630,24 @@ public final class RaceConfig {
 		addDoubleIfNonZero(json, "orthodoxHolinessNetherMinutes", ability.orthodoxHolinessNetherMinutes);
 		addDoubleIfNonZero(json, "orthodoxHolinessRepentanceMinecraftDays", ability.orthodoxHolinessRepentanceMinecraftDays);
 		addDoubleIfNonZero(json, "orthodoxHolinessRecoveryMinutes", ability.orthodoxHolinessRecoveryMinutes);
+		addDoubleIfNonZero(json, "necromancerManaBaseMax", ability.necromancerManaBaseMax);
+		addDoubleIfNonZero(json, "necromancerManaPerLevel", ability.necromancerManaPerLevel);
+		addDoubleIfNonZero(json, "necromancerManaRegenPerSecond", ability.necromancerManaRegenPerSecond);
+		addDoubleIfNonZero(json, "necromancerManaActionCostPerSecond", ability.necromancerManaActionCostPerSecond);
+		addDoubleIfNonZero(json, "necromancerReachBlocks", ability.necromancerReachBlocks);
+		addDoubleIfNonZero(json, "necromancerMaxHealthHearts", ability.necromancerMaxHealthHearts);
+		addDoubleIfNonZero(json, "necromancerAttackDamageHearts", ability.necromancerAttackDamageHearts);
+		addDoubleIfNonZero(json, "necromancerAttackManaCost", ability.necromancerAttackManaCost);
+		addDoubleIfNonZero(json, "necromancerDefenseRadiusBlocks", ability.necromancerDefenseRadiusBlocks);
+		addDoubleIfNonZero(json, "necromancerDefenseKnockbackDistanceBlocks", ability.necromancerDefenseKnockbackDistanceBlocks);
+		addDoubleIfNonZero(json, "necromancerDefenseManaCost", ability.necromancerDefenseManaCost);
+		addDoubleIfNonZero(json, "necromancerUniqueSummonManaCost", ability.necromancerUniqueSummonManaCost);
+		addDoubleIfNonZero(json, "necromancerUniqueToggleManaCost", ability.necromancerUniqueToggleManaCost);
+		addDoubleIfNonZero(json, "necromancerShnyagaTierOneManaCost", ability.necromancerShnyagaTierOneManaCost);
+		addDoubleIfNonZero(json, "necromancerShnyagaTierTwoManaCost", ability.necromancerShnyagaTierTwoManaCost);
+		addDoubleIfNonZero(json, "necromancerShnyagaTierThreeManaCost", ability.necromancerShnyagaTierThreeManaCost);
+		addDoubleIfNonZero(json, "necromancerShnyagaMaxAbsorptionHearts", ability.necromancerShnyagaMaxAbsorptionHearts);
+		addDoubleIfNonZero(json, "necromancerShnyagaEffectDurationSeconds", ability.necromancerShnyagaEffectDurationSeconds);
 			addDoubleIfNonZero(json, "chance", ability.chance);
 			return json;
 		}
@@ -872,6 +908,24 @@ public final class RaceConfig {
 		public double orthodoxHolinessNetherMinutes = 0.0D;
 		public double orthodoxHolinessRepentanceMinecraftDays = 0.0D;
 		public double orthodoxHolinessRecoveryMinutes = 0.0D;
+		public double necromancerManaBaseMax = 0.0D;
+		public double necromancerManaPerLevel = 0.0D;
+		public double necromancerManaRegenPerSecond = 0.0D;
+		public double necromancerManaActionCostPerSecond = 0.0D;
+		public double necromancerReachBlocks = 0.0D;
+		public double necromancerMaxHealthHearts = 0.0D;
+		public double necromancerAttackDamageHearts = 0.0D;
+		public double necromancerAttackManaCost = 0.0D;
+		public double necromancerDefenseRadiusBlocks = 0.0D;
+		public double necromancerDefenseKnockbackDistanceBlocks = 0.0D;
+		public double necromancerDefenseManaCost = 0.0D;
+		public double necromancerUniqueSummonManaCost = 0.0D;
+		public double necromancerUniqueToggleManaCost = 0.0D;
+		public double necromancerShnyagaTierOneManaCost = 0.0D;
+		public double necromancerShnyagaTierTwoManaCost = 0.0D;
+		public double necromancerShnyagaTierThreeManaCost = 0.0D;
+		public double necromancerShnyagaMaxAbsorptionHearts = 0.0D;
+		public double necromancerShnyagaEffectDurationSeconds = 0.0D;
 		public double chance = 0.0D;
 
 		private RaceAbilityConfig() {

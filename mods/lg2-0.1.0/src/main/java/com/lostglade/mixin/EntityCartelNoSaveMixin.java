@@ -17,6 +17,7 @@ public abstract class EntityCartelNoSaveMixin {
 	private static final String ORTHODOX_ANGEL_WINGS_TAG = "lg2.orthodox_angel_wings";
 	private static final String ORTHODOX_DIVINE_LIGHT_WAVE_TAG = "lg2.orthodox_divine_light_wave";
 	private static final String ANCIENT_UKR_COLLECTOR_TAG = "lg2.ancient_ukr_collector";
+	private static final String NECROMANCER_SPIRIT_TAG = "lg2.necromancer_spirit";
 
 	@Inject(method = "shouldBeSaved", at = @At("HEAD"), cancellable = true)
 	private void lg2$preventSavingCartelTemporaryEntities(CallbackInfoReturnable<Boolean> cir) {
@@ -28,7 +29,8 @@ public abstract class EntityCartelNoSaveMixin {
 				|| self.getTags().contains(KILKA_SHNYAGA_BEACON_DISPLAY_TAG)
 				|| self.getTags().contains(ORTHODOX_ANGEL_WINGS_TAG)
 				|| self.getTags().contains(ORTHODOX_DIVINE_LIGHT_WAVE_TAG)
-				|| self.getTags().contains(ANCIENT_UKR_COLLECTOR_TAG)) {
+				|| self.getTags().contains(ANCIENT_UKR_COLLECTOR_TAG)
+				|| self.getTags().contains(NECROMANCER_SPIRIT_TAG)) {
 			cir.setReturnValue(false);
 		}
 	}

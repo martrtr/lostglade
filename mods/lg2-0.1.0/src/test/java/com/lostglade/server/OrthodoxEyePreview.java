@@ -3,6 +3,7 @@ package com.lostglade.server;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.joml.Matrix4fc;
+import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
@@ -30,9 +31,10 @@ final class OrthodoxEyePreview {
         OrthodoxEyeComposition c = new OrthodoxEyeComposition(42);
         List<Face> faces = new ArrayList<>();
         for (int part = 0; part < OrthodoxEyeComposition.PART_COUNT; part++) {
-            collect(faces, OrthodoxEyeCompositionTest.model(c.model(part)), c.transformation(part, 1, 1).getMatrix());
+            collect(faces, OrthodoxEyeCompositionTest.model(c.model(part)),
+                    new Matrix4f(c.transformation(part, 1, 1).getMatrix()).rotateY((float) Math.PI));
         }
-        draw(faces, Path.of("build/reports/divine-eye/composition.png"), 18);
+        draw(faces, Path.of("build/reports/divine-eye/composition.png"), 8);
     }
 
     private static void collect(List<Face> output, JsonObject model, Matrix4fc transform) throws Exception {
@@ -51,12 +53,18 @@ final class OrthodoxEyePreview {
                 if (e.has("rotation")) {
                     JsonObject r = e.getAsJsonObject("rotation");
                     Vector3f origin = new Vector3f(floats(r.getAsJsonArray("origin")));
-                    float angle = (float) Math.toRadians(r.get("angle").getAsFloat());
                     Quaternionf rotation = new Quaternionf();
-                    switch (r.get("axis").getAsString()) {
-                        case "x" -> rotation.rotateX(angle);
-                        case "y" -> rotation.rotateY(angle);
-                        case "z" -> rotation.rotateZ(angle);
+                    if (r.has("axis")) {
+                        float angle = (float) Math.toRadians(r.get("angle").getAsFloat());
+                        switch (r.get("axis").getAsString()) {
+                            case "x" -> rotation.rotateX(angle);
+                            case "y" -> rotation.rotateY(angle);
+                            case "z" -> rotation.rotateZ(angle);
+                        }
+                    } else {
+                        rotation.rotationZYX((float) Math.toRadians(r.get("z").getAsFloat()),
+                                (float) Math.toRadians(r.get("y").getAsFloat()),
+                                (float) Math.toRadians(r.get("x").getAsFloat()));
                     }
                     v.sub(origin).rotate(rotation).add(origin);
                 }

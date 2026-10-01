@@ -257,6 +257,7 @@ public abstract class ServerCommonPacketListenerAbsoluteInvisibilityMixin {
 
 		ServerPlayer receiver = gameListener.player;
 		Packet<?> deliveredPacket = ServerBossBarVisibilitySystem.filterDeliveredPacket(receiver, packet);
+		deliveredPacket = com.lostglade.server.CartelGasMaskVisualSystem.rewrite(receiver, deliveredPacket);
 		if (deliveredPacket != null) {
 			connection.send(deliveredPacket, listener, flush);
 		}
