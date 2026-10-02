@@ -1,0 +1,34 @@
+package com.lostglade.mixin;
+
+import com.lostglade.server.AccountAuthSystem;
+import net.minecraft.network.Connection;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.server.players.PlayerList;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+@Mixin(PlayerList.class)
+public abstract class PlayerListAccountAuthMixin {
+	@Inject(method = "placeNewPlayer", at = @At("HEAD"))
+	private void lg2$placeInAuthenticationWorldBeforePlayPackets(
+			Connection connection,
+			ServerPlayer player,
+			CommonListenerCookie cookie,
+			CallbackInfo ci
+	) {
+		AccountAuthSystem.preparePlayerPlacement(player, connection);
+	}
+	@Inject(method = "getPlayerNamesArray", at = @At("RETURN"), cancellable = true)
+	private void lg2$hideUnauthenticatedNamesFromSuggestions(CallbackInfoReturnable<String[]> cir) {
+		PlayerList self = (PlayerList) (Object) this;
+		cir.setReturnValue(self.getPlayers().stream()
+				.filter(AccountAuthSystem::isPresenceVisible)
+				.map(ServerPlayer::getScoreboardName)
+				.toArray(String[]::new));
+	}
+
+}

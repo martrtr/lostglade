@@ -191,7 +191,7 @@ public final class ServerBackroomsSystem {
 		}
 
 		int count = 0;
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null || !player.isAlive() || player.isSpectator() || isInBackrooms(player)) {
 				continue;
 			}
@@ -411,7 +411,7 @@ public final class ServerBackroomsSystem {
 
 	private static void tickUpperLadderCrawl(MinecraftServer server) {
 		long nowTick = server.overworld().getGameTime();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID uuid = player.getUUID();
 			boolean inBackrooms = isInBackrooms(player);
 			boolean shouldStart = inBackrooms
@@ -543,7 +543,7 @@ public final class ServerBackroomsSystem {
 	private static void tickBackroomsAmbientLoop(MinecraftServer server) {
 		long gameTime = server.overworld().getGameTime();
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID uuid = player.getUUID();
 			boolean shouldPlay = isInBackrooms(player) && PolymerResourcePackUtils.hasMainPack(player);
 			AmbientLoopState state = AMBIENT_LOOP_STATES.get(uuid);
@@ -748,7 +748,7 @@ public final class ServerBackroomsSystem {
 	}
 
 	private static boolean hasActiveBackroomsPlayers(MinecraftServer server) {
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player != null && player.isAlive() && !player.isSpectator() && player.level().dimension().equals(BACKROOMS_LEVEL)) {
 				return true;
 			}

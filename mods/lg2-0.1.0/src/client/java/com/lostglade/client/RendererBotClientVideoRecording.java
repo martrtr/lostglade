@@ -80,6 +80,10 @@ public final class RendererBotClientVideoRecording {
 	}
 
 	private static void beginRecording(RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload payload, Minecraft client) {
+		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
+			sendFailure(payload.requestId(), "Volunteer renderer disabled by client");
+			return;
+		}
 		try {
 			String sourceKey = payload.requestId().toString();
 			CameraMediaCache.ensureVideoParent(sourceKey);
@@ -516,6 +520,11 @@ public final class RendererBotClientVideoRecording {
 				recording.firstPreviewFrame, recording.firstFullFrame
 		));
 		RendererClientDiagnostics.cameraVideoCompleted(recording.payload().requestId());
+	}
+
+	public static void onVolunteerPreferenceChanged(boolean enabled) {
+		if (enabled || RendererBotClientMode.isEnabled()) return;
+		abortAll("Volunteer renderer disabled by client");
 	}
 
 	private static void abortAll(String message) {

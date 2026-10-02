@@ -505,7 +505,7 @@ public final class SeasonStartVoiceSystem {
 			return player == null || RendererBotPresenceSystem.isRendererBot(player) ? List.of() : List.of(player);
 		}
 		List<ServerPlayer> recipients = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null || RendererBotPresenceSystem.isRendererBot(player)) {
 				continue;
 			}

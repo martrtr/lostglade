@@ -72,6 +72,7 @@ public final class ServerTabPacketSystem {
 	}
 
 	private static boolean shouldHideEntry(MinecraftServer server, ServerPlayer receiver, ClientboundPlayerInfoUpdatePacket.Entry entry) {
+		if (!AccountAuthSystem.isAuthenticated(receiver)) return true;
 		ServerPlayer onlinePlayer = server.getPlayerList().getPlayer(entry.profileId());
 		if (onlinePlayer != null) {
 			return RendererBotPresenceSystem.shouldHideFromPlayerList(onlinePlayer)

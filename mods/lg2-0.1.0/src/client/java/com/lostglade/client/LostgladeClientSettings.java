@@ -19,7 +19,7 @@ import java.nio.file.Path;
 
 /** Local-only preferences for a player who contributes GPU time to cameras. */
 public final class LostgladeClientSettings {
-	private static final int MIN_PARALLEL_CAPTURES = 0;
+	private static final int MIN_PARALLEL_CAPTURES = 1;
 	private static final int MAX_PARALLEL_CAPTURES = 4;
 	private static final int MIN_MAP_RENDERER_FPS = 20;
 	private static final int MAX_MAP_RENDERER_FPS = 240;
@@ -52,11 +52,16 @@ public final class LostgladeClientSettings {
 	}
 
 	public static boolean isCameraRendererEnabled() {
-		return settings.maxParallelCaptures > 0;
+		return settings.cameraRendererEnabled;
 	}
 
 	public static synchronized void setCameraRendererEnabled(boolean enabled) {
-		setMaxParallelCaptures(enabled ? Math.max(1, settings.maxParallelCaptures) : 0);
+		if (settings.cameraRendererEnabled == enabled && Boolean.TRUE.equals(settings.cameraRendererToggleConfigured)) {
+			return;
+		}
+		settings.cameraRendererEnabled = enabled;
+		settings.cameraRendererToggleConfigured = true;
+		write();
 	}
 
 	public static int maxParallelCaptures() {
@@ -69,7 +74,6 @@ public final class LostgladeClientSettings {
 			return;
 		}
 		settings.maxParallelCaptures = clamped;
-		settings.cameraRendererEnabled = clamped > 0;
 		write();
 	}
 
@@ -113,6 +117,37 @@ public final class LostgladeClientSettings {
 		write();
 	}
 
+	public static boolean isRaceMenuEnabled() {
+		return settings.raceMenuEnabled;
+	}
+
+	public static synchronized void setRaceMenuEnabled(boolean enabled) {
+		if (settings.raceMenuEnabled == enabled) return;
+		settings.raceMenuEnabled = enabled;
+		write();
+	}
+
+	public static boolean isDroneTiltEnabled() {
+		return settings.droneTiltEnabled;
+	}
+
+	public static synchronized void setDroneTiltEnabled(boolean enabled) {
+		if (settings.droneTiltEnabled == enabled) return;
+		settings.droneTiltEnabled = enabled;
+		write();
+	}
+
+	public static float droneTiltStrength() {
+		return settings.droneTiltStrength;
+	}
+
+	public static synchronized void setDroneTiltStrength(float strength) {
+		float clamped = Math.clamp(Float.isFinite(strength) ? strength : 1.0F, 0.0F, 1.0F);
+		if (Float.compare(settings.droneTiltStrength, clamped) == 0) return;
+		settings.droneTiltStrength = clamped;
+		write();
+	}
+
 	public static void registerOptionsScreen() {
 		ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
 			if (!(screen instanceof OptionsScreen)) {
@@ -127,10 +162,19 @@ public final class LostgladeClientSettings {
 
 	private static boolean sanitize(Settings value) {
 		boolean changed = false;
-		// Keep old configs with the former on/off switch disabled disabled after
-		// migrating to the single 0..N resource limit.
-		if (!value.cameraRendererEnabled && value.maxParallelCaptures > 0) {
-			value.maxParallelCaptures = 0;
+		// The previous client had no explicit settings-page opt-in and defaulted the
+		// volunteer camera renderer to ON. Migrate that legacy implicit state once.
+		if (!Boolean.TRUE.equals(value.cameraRendererToggleConfigured)) {
+			value.cameraRendererEnabled = false;
+			value.cameraRendererToggleConfigured = true;
+			changed = true;
+		}
+		// Older configs used maxParallelCaptures=0 as the disabled state. Keep them
+		// disabled, but migrate the stored limit to a valid 1..4 value so the new
+		// explicit toggle can be enabled without losing the preferred capacity.
+		if (value.maxParallelCaptures <= 0) {
+			value.cameraRendererEnabled = false;
+			value.maxParallelCaptures = 1;
 			changed = true;
 		}
 		int clamped = Math.clamp(value.maxParallelCaptures, MIN_PARALLEL_CAPTURES, MAX_PARALLEL_CAPTURES);
@@ -157,6 +201,11 @@ public final class LostgladeClientSettings {
 		int jobs = Math.clamp(value.mapRendererMaxJobsPerMinute, MIN_MAP_RENDERER_JOBS_PER_MINUTE, MAX_MAP_RENDERER_JOBS_PER_MINUTE);
 		if (jobs != value.mapRendererMaxJobsPerMinute) {
 			value.mapRendererMaxJobsPerMinute = jobs;
+			changed = true;
+		}
+		float tiltStrength = Math.clamp(Float.isFinite(value.droneTiltStrength) ? value.droneTiltStrength : 1.0F, 0.0F, 1.0F);
+		if (Float.compare(tiltStrength, value.droneTiltStrength) != 0) {
+			value.droneTiltStrength = tiltStrength;
 			changed = true;
 		}
 		return changed;
@@ -188,15 +237,20 @@ public final class LostgladeClientSettings {
 	}
 
 	private static final class Settings {
-		private boolean cameraRendererEnabled = true;
+		private boolean cameraRendererEnabled = false;
+		private Boolean cameraRendererToggleConfigured;
 		private int maxParallelCaptures = 1;
 		private MapRendererMode mapRendererMode = MapRendererMode.ALWAYS;
 		private Boolean mapRendererModeConfigured;
 		private int mapRendererMinFps = 50;
 		private int mapRendererMaxJobsPerMinute = 60;
+		private boolean raceMenuEnabled = true;
+		private boolean droneTiltEnabled = true;
+		private float droneTiltStrength = 1.0F;
 
 		private static Settings defaults() {
 			Settings defaults = new Settings();
+			defaults.cameraRendererToggleConfigured = true;
 			defaults.mapRendererModeConfigured = true;
 			return defaults;
 		}

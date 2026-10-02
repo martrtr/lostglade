@@ -27,6 +27,7 @@ final class MonitorScreenChatLinkController {
 	}
 
 	static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
+		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
 		if (sender == null || message == null) {
 			return true;
 		}

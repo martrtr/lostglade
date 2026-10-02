@@ -1,5 +1,6 @@
 package com.lostglade.mixin;
 
+import com.lostglade.server.AccountAuthSystem;
 import com.lostglade.server.RendererBotCameraSystem;
 import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerWebcamIntegration;
@@ -55,7 +56,7 @@ public abstract class WebcamNearbyPlayersRendererBotMixin {
 		} catch (Exception ignored) {
 		}
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!RendererBotPresenceSystem.isRendererBot(player)) {
 				continue;
 			}

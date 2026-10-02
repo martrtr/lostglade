@@ -106,7 +106,7 @@ public final class AncientUkrCreditorChatSystem {
 
     private static void broadcastCreditorMessage(MinecraftServer server, String reply) {
         if (server == null || reply == null || reply.isBlank()) return;
-        for (ServerPlayer recipient : server.getPlayerList().getPlayers()) {
+        for (ServerPlayer recipient : AccountAuthSystem.authenticatedPlayers(server)) {
             Component message = Component.translatable("chat.type.text", Component.literal(CREDITOR_NAME),
                     Component.literal(reply));
             recipient.sendSystemMessage(message);

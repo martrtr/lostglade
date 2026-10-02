@@ -630,7 +630,7 @@ public final class BluetoothLinkSystem {
 		}
 		long gameTime = server.overworld() == null ? 0L : server.overworld().getGameTime();
 		Set<UUID> onlineSelectedPlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID playerId = player.getUUID();
 			Endpoint endpoint = SELECTED_ENDPOINTS.get(playerId);
 			if (endpoint == null) {

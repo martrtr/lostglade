@@ -796,7 +796,8 @@ public final class SeasonStartSystem {
 		ServerTickEvents.START_SERVER_TICK.register(SeasonStartSystem::preTickServer);
 		ServerTickEvents.END_SERVER_TICK.register(SeasonStartSystem::tickServer);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				server.execute(() -> onPlayerJoined(server, (ServerPlayer) handler.player)));
+				AccountAuthSystem.runWhenAuthenticated(handler.player,
+						() -> server.execute(() -> onPlayerJoined(server, (ServerPlayer) handler.player))));
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> onPlayerJoined(newPlayer.level().getServer(), newPlayer));
 		ServerMessageEvents.ALLOW_CHAT_MESSAGE.register(SeasonStartSystem::onAllowChatMessage);
 
@@ -1603,7 +1604,7 @@ public final class SeasonStartSystem {
 					return;
 				}
 				clearSceneMobs(overworld);
-				for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+				for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 					if (!isSeasonStartEligiblePlayer(player)) {
 						continue;
 					}
@@ -1709,6 +1710,7 @@ public final class SeasonStartSystem {
 	}
 
 	private static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
+		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
 		if (!active || message == null || sender == null || params == null) {
 			return true;
 		}
@@ -2074,7 +2076,7 @@ public final class SeasonStartSystem {
 			WORLD_REVEAL_PLAYER_PHYSICS_POSITIONS.clear();
 			worldRevealPlanReady = false;
 			WORLD_REVEAL_SAFE_TARGETS.clear();
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				if (isSeasonStartEligiblePlayer(player)) {
 					applyFreeState(player);
 				}
@@ -3877,7 +3879,7 @@ public final class SeasonStartSystem {
 		menuExplanationActive = true;
 		pendingMenuExplanationTick = Long.MIN_VALUE;
 		long nowTick = overworld.getGameTime();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isSeasonStartEligiblePlayer(player)) {
 				continue;
 			}
@@ -3919,7 +3921,7 @@ public final class SeasonStartSystem {
 		if (active && serverAnchor != null) {
 			BoxGeometry box = computeOuterBoxGeometry(resolveServerAnchor(level));
 			List<ChunkPos> chunks = chunkPositions(collectStartupChunkKeys(box, STARTUP_CHUNK_TRACKING_GUARD_RING));
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				if (!shouldUseStartupChunkTracking(player)) {
 					continue;
 				}
@@ -3934,7 +3936,7 @@ public final class SeasonStartSystem {
 
 		if (worldRevealActive) {
 			int stage = resolveStartupBiomeRevealStage(nowTick);
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				StartupBiomeOverride state = STARTUP_BIOME_OVERRIDES.get(player.getUUID());
 				if (state != null && level.dimension().equals(state.dimension)) {
 					tickStartupBiomeOverride(player, level, state, stage, nowTick);
@@ -5377,7 +5379,7 @@ public final class SeasonStartSystem {
 		if (worldRevealDarknessClearTick != Long.MIN_VALUE && nowTick >= worldRevealDarknessClearTick) {
 			// This is the zero crossing of the vanilla curve, so clearing here cannot
 			// flash a black frame or start the following pulse.
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				if (isSeasonStartEligiblePlayer(player) && player.level() == level) {
 					player.removeEffect(MobEffects.DARKNESS);
 				}
@@ -5391,7 +5393,7 @@ public final class SeasonStartSystem {
 		if (server == null || level == null || worldRevealDarknessPulseCount != 0) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (isSeasonStartEligiblePlayer(player) && player.level() == level) {
 				// No icon or particles: this is a visual beat, not a gameplay debuff.
 				player.addEffect(new MobEffectInstance(
@@ -5785,7 +5787,7 @@ public final class SeasonStartSystem {
 			return;
 		}
 		BoxGeometry outerGeometry = computeOuterBoxGeometry(resolveServerAnchor(level));
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isSeasonStartEligiblePlayer(player) || player.level() != level || !isInsideFootprint(outerGeometry, player.blockPosition())) {
 				continue;
 			}
@@ -6026,7 +6028,7 @@ public final class SeasonStartSystem {
 		clearStartupWorldgenDisplay(level);
 		restorePostStartMorning(level);
 		restorePristineWorldFreeze(server, level);
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isSeasonStartEligiblePlayer(player)) {
 				continue;
 			}
@@ -6682,7 +6684,7 @@ public final class SeasonStartSystem {
 			}
 		}
 		ServerRaceSystem.beginSeasonStartRaces(server, get().startupRaceId);
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (isSeasonStartEligiblePlayer(player)) {
 				assignOrRestorePlayer(server, player, true);
 			}
@@ -7481,7 +7483,7 @@ public final class SeasonStartSystem {
 			return;
 		}
 		sharedLaunchRaceControlsTriggered = true;
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isInSharedPhase(player)) {
 				continue;
 			}
@@ -8325,7 +8327,7 @@ public final class SeasonStartSystem {
 		if (server == null) {
 			return;
 		}
-		List<ServerPlayer> players = server.getPlayerList().getPlayers();
+		List<ServerPlayer> players = AccountAuthSystem.authenticatedPlayers(server);
 		Set<UUID> onlineIds = new HashSet<>();
 		for (ServerPlayer player : players) {
 			if (isSeasonStartEligiblePlayer(player)) {
@@ -8363,7 +8365,7 @@ public final class SeasonStartSystem {
 		if (server == null || serverAnchor == null) {
 			return;
 		}
-		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isSeasonStartEligiblePlayer(viewer) || !isInPrivateIntroPhase(viewer)
 					|| viewer.connection == null || !(viewer.level() instanceof ServerLevel level)) {
 				continue;
@@ -8404,7 +8406,7 @@ public final class SeasonStartSystem {
 		if (server == null) {
 			return;
 		}
-		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isSeasonStartEligiblePlayer(viewer) || !isInSharedPhase(viewer) || !(viewer.level() instanceof ServerLevel level)) {
 				continue;
 			}

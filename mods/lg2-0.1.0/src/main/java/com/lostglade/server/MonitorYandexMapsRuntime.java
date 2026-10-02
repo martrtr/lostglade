@@ -575,7 +575,7 @@ public final class MonitorYandexMapsRuntime {
 		if (nextObservedByScreen.isEmpty()) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			ObservedYandexMapUiTarget target = findObservedYandexMapUiTarget(player);
 			if (target == null || target.component() == null || target.touchPoint() == null) {
 				continue;

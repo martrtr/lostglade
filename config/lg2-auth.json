@@ -4,6 +4,17 @@
       "trustedIps": [],
       "createdAt": "2026-09-30T07:48:27.441351937Z",
       "premiumUuid": "9009332d-532e-4492-9a3d-7f21f3639f17",
+      "premiumVerified": true,
+      "offlinePasswordAllowed": false
+    },
+    "dfs": {
+      "passwordSalt": "lfecGOOcwxCy+Z9V/9Mv+g\u003d\u003d",
+      "passwordHash": "bIp2BJRrpb2HVZzbrDg8kaZFZgoe/fNUBXsBP+16jgM\u003d",
+      "trustedIps": [
+        "UIzA/iYYXXE0OwqqmaeoyKRTkvJ41fFrN/rvm/EUzFg\u003d"
+      ],
+      "createdAt": "2026-10-01T23:26:12.161196554Z",
+      "premiumVerified": false,
       "offlinePasswordAllowed": false
     },
     "rajas_yt": {

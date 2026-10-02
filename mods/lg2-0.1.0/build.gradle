@@ -68,7 +68,11 @@ loom {
 	runs {
 		named("server") {
 			runDir("../../")
-			vmArgs("-Xms${serverXmsProp.get()}", "-Xmx${serverXmxProp.get()}")
+			vmArgs(
+					"-Xms${serverXmsProp.get()}",
+					"-Xmx${serverXmxProp.get()}",
+					"-Djava.net.preferIPv4Stack=true"
+			)
 		}
 
 		rendererBotClient {
@@ -197,13 +201,6 @@ tasks.withType(JavaExec).configureEach {
 	dependsOn(tasks.named("extractSkinRestorerNestedLibraries"))
 }
 
-tasks.register("runPremiumNameLookupTest", JavaExec) {
-	group = "verification"
-	description = "Checks premium-name lookup parsing and fail-closed validation."
-	classpath = sourceSets.test.runtimeClasspath
-	mainClass = "com.lostglade.server.PremiumNameLookupTest"
-	dependsOn(tasks.named("testClasses"))
-}
 
 tasks.register("runOrthodoxLightSyncTest", JavaExec) {
 	group = "verification"

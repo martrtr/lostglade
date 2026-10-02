@@ -1797,7 +1797,7 @@ public final class ServerRaceSystem {
 			longPassiveEffectsNextSaveTick = Long.MIN_VALUE;
 		});
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				server.execute(() -> {
+				AccountAuthSystem.runWhenAuthenticated(handler.player, () -> server.execute(() -> {
 					getRace(handler.player).ifPresent(race ->
 							Lg2.LOGGER.info("Assigned personal race '{}' to {}", race.id, handler.player.getGameProfile().name())
 					);
@@ -1814,7 +1814,7 @@ public final class ServerRaceSystem {
 					queueKilkaSalmonFormRestore(server, handler.player);
 					refreshKilkaSalmonFormsForJoiningViewer(server, handler.player);
 					server.getCommands().sendCommands(handler.player);
-				})
+				}))
 		);
 		EntityTrackingEvents.START_TRACKING.register((entity, viewer) -> {
 			if (entity instanceof ServerPlayer owner && isKilkaSalmonForm(owner)) {
@@ -1960,7 +1960,7 @@ public final class ServerRaceSystem {
 		ServerTickEvents.START_SERVER_TICK.register(ServerRaceSystem::tickKilkaDefenseProjectileDeflection);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			long nowTick = server.overworld().getGameTime();
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				if ((nowTick + player.getId()) % MISTER_CARTEL_STACK_CHECK_INTERVAL_TICKS == 0L) {
 					enforceMrCartel49StackLimit(player);
 				}
@@ -2089,7 +2089,7 @@ public final class ServerRaceSystem {
 	private static int reloadFromCommand(CommandContext<CommandSourceStack> context) {
 		reload();
 		syncGeneratedDialogs(context.getSource().getServer(), true);
-		for (ServerPlayer onlinePlayer : context.getSource().getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer onlinePlayer : AccountAuthSystem.authenticatedPlayers(context.getSource().getServer())) {
 			context.getSource().getServer().getCommands().sendCommands(onlinePlayer);
 		}
 		context.getSource().sendSuccess(() -> Component.literal("Race config and race dialogs reloaded"), true);
@@ -2412,6 +2412,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 	}
 
 	private static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
+		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
 		return !handlePendingWomanShnyagaChatMessage(message, sender);
 	}
 
@@ -2825,7 +2826,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		if (server == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			assignSeasonStartRace(player, raceId);
 		}
 	}
@@ -3429,7 +3430,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 
 		long nowTick = server.overworld().getGameTime();
 		Set<UUID> onlinePlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null) {
 				continue;
 			}
@@ -4095,7 +4096,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 			return;
 		}
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			sanitizeCopperIngots(player);
 			syncCopperManAppearanceVisual(server, player);
 		}
@@ -4122,7 +4123,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		}
 
 		Set<UUID> activeNow = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			RaceAbilityConfig stock = getGennadiyStockAbility(player);
 			if (!isGennadiyRageActive(player, stock)) {
 				continue;
@@ -4189,7 +4190,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 			return;
 		}
 		long nowTick = server.overworld().getGameTime();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			GennadiyReportTracker.observePlayer(player);
 			tickGennadiyReportPlayerInventory(player, nowTick);
 		}
@@ -4272,7 +4273,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		}
 
 		boolean changedPlayerInventory;
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			changedPlayerInventory = clearGennadiyReportCooldownsInPlayer(player);
 			player.getCooldowns().removeCooldown(GENNADIY_REPORT_COOLDOWN_GROUP_ID);
 			if (changedPlayerInventory) {
@@ -4395,7 +4396,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		COPPER_GOLEM_FOLLOWERS.entrySet().removeIf(entry -> !updateTrackedCopperGolemFollower(server, entry.getKey(), entry.getValue()));
 
 		List<ServerPlayer> copperPlayers = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (isCopperManStockEnabled(player) && player.isAlive() && !player.isSpectator()) {
 				copperPlayers.add(player);
 			}
@@ -6710,7 +6711,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			saveLittleDictatorTaxChests(server);
 		}
 		long nowTick = server.overworld().getGameTime();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			tickLittleDictatorSanctions(player);
 			tickLittleDictatorTaxes(server, player);
 			tickLittleDictatorPropaganda(player);
@@ -9656,7 +9657,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		}
 
 		List<ServerPlayer> candidates = new ArrayList<>();
-		for (ServerPlayer player : owner.level().getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(owner.level().getServer())) {
 			if (player == null || player == owner || !player.isAlive() || player.isSpectator()) {
 				continue;
 			}
@@ -10454,7 +10455,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		cleanupLittleDictatorNeutralFlee(server);
 
 		List<ServerPlayer> dictatorPlayers = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.isAlive() && !player.isSpectator() && getLittleDictatorStockAbility(player) != null) {
 				dictatorPlayers.add(player);
 			}
@@ -10912,7 +10913,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		}
 
 		List<ServerPlayer> candidates = new ArrayList<>();
-		for (ServerPlayer player : caster.level().getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(caster.level().getServer())) {
 			if (player == null || player == caster || !player.isAlive() || player.isSpectator()) {
 				continue;
 			}
@@ -11425,7 +11426,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			return;
 		}
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			LinkedHashMap<UUID, WomanShnyagaLink> womanLinks = WOMAN_SHNYAGA_LINKS_BY_WOMAN.get(player.getUUID());
 			WomanShnyagaLink boyfriendLink = WOMAN_SHNYAGA_LINKS_BY_BOYFRIEND.get(player.getUUID());
 			double womanHealthBonus = 0.0D;
@@ -12116,7 +12117,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		if (server == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			removeLittleDictatorSanctionsFatigue(player);
 			if (LITTLE_DICTATOR_PROPAGANDA.containsKey(player.getUUID())) {
 				finishLittleDictatorPropaganda(player, false);
@@ -14225,7 +14226,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		}
 
 		Set<UUID> online = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID playerId = player.getUUID();
 			online.add(playerId);
 
@@ -14338,7 +14339,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 
 	private static void clearAllMarkRage(MinecraftServer server) {
 		if (server != null) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				clearMarkRageEffects(player);
 				syncMarkRageOverlay(player, false);
 				stopMarkRageMusic(player);
@@ -14719,7 +14720,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			return;
 		}
 		Set<UUID> activePlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			RaceAbilityConfig stock = getMarkStockAbility(player);
 			if (stock == null || !player.isAlive() || player.isSpectator()) {
 				removeMarkStockSpeedPenalty(player);
@@ -14736,7 +14737,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			return;
 		}
 		Set<UUID> activePlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID playerId = player.getUUID();
 			RaceAbilityConfig stock = getMarkStockAbility(player);
 			if (stock == null || !player.isAlive() || player.isSpectator()) {
@@ -14775,7 +14776,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			return;
 		}
 		Set<UUID> onlinePlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			onlinePlayers.add(player.getUUID());
 			updateKilkaStockMiningModifiers(player);
 			if (player.isAlive() && !player.isSpectator() && getKilkaStockAbility(player) != null && isKilkaHeadUnderwater(player)) {
@@ -14931,7 +14932,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 
 	private static void clearAllKilkaStockNightVision(MinecraftServer server) {
 		if (server != null) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				clearKilkaStockNightVision(player);
 			}
 		}
@@ -17262,7 +17263,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		if (server == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			Optional<PlayerRaceConfig> raceOptional = getRace(player);
 			if (raceOptional.isEmpty() || !PURO_SAN_RACE_ID.equals(sanitizePath(raceOptional.get().id))) {
 				clearPuroSanOverdrive(player);
@@ -18262,7 +18263,7 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 			return;
 		}
 		String translationKey = joined ? "multiplayer.player.joined" : "multiplayer.player.left";
-		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 			Component creditorName = Component.literal(localizeAncientUkrCreditorName(viewer));
 			viewer.sendSystemMessage(Component.translatable(translationKey, creditorName).withStyle(ChatFormatting.YELLOW));
 		}
@@ -19510,7 +19511,7 @@ Vec3 offset = target.position().subtract(origin);
 			return;
 		}
 		long seed = level.getRandom().nextLong();
-		for (ServerPlayer viewer : level.getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(level.getServer())) {
 			if (viewer == null || viewer.connection == null || viewer.level() != level || !PolymerResourcePackUtils.hasMainPack(viewer)) {
 				continue;
 			}
@@ -19529,7 +19530,7 @@ Vec3 offset = target.position().subtract(origin);
 		if (server == null || session == null) {
 			return;
 		}
-		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (viewer != null && viewer.connection != null) {
 				viewer.connection.send(new ClientboundStopSoundPacket(KILKA_DEFENSE_WATER_SPHERE_ID, SoundSource.PLAYERS));
 			}
@@ -19921,7 +19922,7 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 		cleanupMilkStockRetaliation(server);
 
 		List<ServerPlayer> milkPlayers = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.isAlive() && !player.isSpectator() && getMilkStockAbility(player) != null) {
 				milkPlayers.add(player);
 			}
@@ -21952,7 +21953,7 @@ private static InteractionHand selectGennadiyReportHand(ServerPlayer player) {
 	}
 
 	private static boolean hasActiveGennadiyReport(MinecraftServer server) {
-		return GennadiyReportTracker.hasActive(server);
+		return server != null && GennadiyReportTracker.hasActive(server);
 	}
 
 	private static long getGennadiyReportCooldownTicks() {
@@ -25606,7 +25607,7 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		}
 
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : caster.level().getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(caster.level().getServer())) {
 			if (player == null || player == caster || !player.isAlive() || player.isSpectator()) {
 				continue;
 			}
@@ -25759,7 +25760,7 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 			return;
 		}
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			prewarmCopperManDefenseTint(server, player);
 			prewarmKilkaAttackTints(server, player);
 		}

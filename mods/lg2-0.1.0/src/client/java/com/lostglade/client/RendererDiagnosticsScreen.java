@@ -5,6 +5,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -14,12 +15,13 @@ import java.util.List;
 /** Live local diagnostics for camera and Yandex-map volunteer render work. */
 final class RendererDiagnosticsScreen extends Screen {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
-    private static final int EVENTS_PER_PAGE = 11;
+    private static final int LINE_HEIGHT = 11;
+    private static final int SCROLL_STEP = 33;
 
     private final Screen parent;
-    private int eventOffset;
-    private Button newerButton;
-    private Button olderButton;
+    private int scrollOffset;
+    private int lastContentHeight;
+    private boolean openedLogged;
 
     RendererDiagnosticsScreen(Screen parent) {
         super(Component.literal("Lostglade — renderer diagnostics"));
@@ -30,41 +32,26 @@ final class RendererDiagnosticsScreen extends Screen {
     protected void init() {
         int bottom = this.height - 28;
         int center = this.width / 2;
-        this.newerButton = this.addRenderableWidget(Button.builder(Component.literal("Новее"), button -> {
-            this.eventOffset = Math.max(0, this.eventOffset - EVENTS_PER_PAGE);
-            refreshButtons();
-        }).bounds(center - 154, bottom, 72, 20).build());
-        this.olderButton = this.addRenderableWidget(Button.builder(Component.literal("Старше"), button -> {
-            RendererClientDiagnostics.Snapshot snapshot = RendererClientDiagnostics.snapshot();
-            int maxOffset = Math.max(0, snapshot.eventCount() - 1);
-            this.eventOffset = Math.min(maxOffset, this.eventOffset + EVENTS_PER_PAGE);
-            refreshButtons();
-        }).bounds(center - 78, bottom, 72, 20).build());
-        this.addRenderableWidget(Button.builder(Component.literal("Очистить"), button -> {
+        this.addRenderableWidget(Button.builder(Component.literal("Очистить журнал"), button -> {
             RendererClientDiagnostics.clearEvents();
-            this.eventOffset = 0;
-            refreshButtons();
-        }).bounds(center - 2, bottom, 72, 20).build());
+            this.scrollOffset = 0;
+        }).bounds(center - 154, bottom, 150, 20).build());
         this.addRenderableWidget(Button.builder(Component.translatable("gui.done"), button -> this.onClose())
-                .bounds(center + 74, bottom, 80, 20).build());
-        refreshButtons();
-    }
-
-    @Override
-    public void tick() {
-        if (this.eventOffset == 0) refreshButtons();
+                .bounds(center + 4, bottom, 150, 20).build());
+        if (!this.openedLogged) {
+            this.openedLogged = true;
+            RendererClientDiagnostics.event("UI", "Открыта страница диагностики");
+        }
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Do not call Screen.renderBackground() here. On 1.21.11 another screen/mod
-        // may already have consumed the single blur pass for this frame, which makes
-        // a second blur throw "Can only blur once per frame".
         graphics.fill(0, 0, this.width, this.height, 0xE0181818);
         RendererClientDiagnostics.Snapshot snapshot = RendererClientDiagnostics.snapshot();
         int center = this.width / 2;
-        int left = Math.max(12, center - 210);
-        int y = 14;
+        int left = Math.max(12, center - 240);
+        int right = Math.min(this.width - 12, center + 240);
+        int y = 12;
 
         graphics.drawCenteredString(this.font, this.title, center, y, 0xFFFFFF);
         y += 18;
@@ -77,7 +64,7 @@ final class RendererDiagnosticsScreen extends Screen {
         y += 12;
         graphics.drawString(this.font, "  принято " + snapshot.cameraAccepted() + " | готово " + snapshot.cameraCompleted()
                 + " | ошибок " + snapshot.cameraFailed(), left, y, 0xAFAFAF);
-        y += 16;
+        y += 15;
 
         String mapMode = switch (LostgladeClientSettings.mapRendererMode()) {
             case OFF -> "OFF";
@@ -96,37 +83,79 @@ final class RendererDiagnosticsScreen extends Screen {
                 ? "нет"
                 : snapshot.activeMapJob() + " tile " + snapshot.activeMapTile() + " / " + snapshot.activeMapStage();
         graphics.drawString(this.font, "  текущий map job: " + active, left, y, 0xAFAFAF);
-        y += 17;
 
-        graphics.drawString(this.font, "Последние события (новые сверху):", left, y, 0xFFFFFF);
-        y += 13;
-        List<RendererClientDiagnostics.Event> events = RendererClientDiagnostics.events(this.eventOffset, EVENTS_PER_PAGE);
+        int logTop = logTop();
+        int logBottom = logBottom();
+        graphics.drawString(this.font, "Журнал событий — новые сверху, прокрутка колёсиком", left, logTop - 14, 0xFFFFFF);
+        graphics.fill(left - 3, logTop - 3, right + 3, logBottom + 3, 0x70101010);
+
+        List<RendererClientDiagnostics.Event> events = RendererClientDiagnostics.events(0, Integer.MAX_VALUE);
+        int contentWidth = Math.max(80, right - left - 14);
+        int contentHeight = 0;
         for (RendererClientDiagnostics.Event event : events) {
             String line = "[" + TIME.format(Instant.ofEpochMilli(event.timestampMs())) + "] [" + event.source() + "] " + event.message();
-            graphics.drawString(this.font, trimToWidth(line, Math.max(80, this.width - left - 12)), left, y, 0xBDBDBD);
-            y += 11;
+            contentHeight += Math.max(1, this.font.split(Component.literal(line), contentWidth).size()) * LINE_HEIGHT + 2;
         }
+        if (events.isEmpty()) contentHeight = LINE_HEIGHT;
+        this.lastContentHeight = contentHeight;
+        this.scrollOffset = Math.clamp(this.scrollOffset, 0, maxScroll());
+
+        graphics.enableScissor(left, logTop, right, logBottom);
+        int drawY = logTop - this.scrollOffset;
         if (events.isEmpty()) {
-            graphics.drawString(this.font, "Журнал пока пуст.", left, y, 0x777777);
+            graphics.drawString(this.font, "Журнал пока пуст.", left, drawY, 0x777777);
+        } else {
+            for (RendererClientDiagnostics.Event event : events) {
+                String line = "[" + TIME.format(Instant.ofEpochMilli(event.timestampMs())) + "] [" + event.source() + "] " + event.message();
+                List<FormattedCharSequence> wrapped = this.font.split(Component.literal(line), contentWidth);
+                for (FormattedCharSequence part : wrapped) {
+                    graphics.drawString(this.font, part, left, drawY, 0xBDBDBD);
+                    drawY += LINE_HEIGHT;
+                }
+                drawY += 2;
+            }
         }
+        graphics.disableScissor();
+        renderScrollbar(graphics, right - 5, logTop, logBottom);
 
         super.render(graphics, mouseX, mouseY, partialTick);
     }
 
-    private String trimToWidth(String value, int width) {
-        if (this.font.width(value) <= width) return value;
-        String suffix = "…";
-        int suffixWidth = this.font.width(suffix);
-        int length = value.length();
-        while (length > 0 && this.font.width(value.substring(0, length)) + suffixWidth > width) length--;
-        return value.substring(0, Math.max(0, length)) + suffix;
+    private void renderScrollbar(GuiGraphics graphics, int x, int top, int bottom) {
+        int viewport = Math.max(1, bottom - top);
+        int max = maxScroll();
+        if (max <= 0) return;
+        graphics.fill(x, top, x + 3, bottom, 0x70444444);
+        int thumbHeight = Math.max(16, viewport * viewport / Math.max(viewport, this.lastContentHeight));
+        int travel = Math.max(1, viewport - thumbHeight);
+        int thumbTop = top + (int) Math.round((double) this.scrollOffset / max * travel);
+        graphics.fill(x, thumbTop, x + 3, thumbTop + thumbHeight, 0xFFD0D0D0);
     }
 
-    private void refreshButtons() {
-        if (this.newerButton == null || this.olderButton == null) return;
-        RendererClientDiagnostics.Snapshot snapshot = RendererClientDiagnostics.snapshot();
-        this.newerButton.active = this.eventOffset > 0;
-        this.olderButton.active = this.eventOffset + EVENTS_PER_PAGE < snapshot.eventCount();
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        int left = Math.max(12, this.width / 2 - 240);
+        int right = Math.min(this.width - 12, this.width / 2 + 240);
+        if (mouseX >= left && mouseX <= right && mouseY >= logTop() && mouseY <= logBottom()) {
+            int delta = (int) Math.round(verticalAmount * SCROLL_STEP);
+            if (delta != 0) {
+                this.scrollOffset = Math.clamp(this.scrollOffset - delta, 0, maxScroll());
+                return true;
+            }
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
+    private int logTop() {
+        return Math.min(112, Math.max(94, this.height / 2 - 18));
+    }
+
+    private int logBottom() {
+        return Math.max(logTop() + 24, this.height - 38);
+    }
+
+    private int maxScroll() {
+        return Math.max(0, this.lastContentHeight - Math.max(1, logBottom() - logTop()));
     }
 
     @Override

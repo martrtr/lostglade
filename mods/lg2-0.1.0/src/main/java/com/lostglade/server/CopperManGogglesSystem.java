@@ -173,10 +173,10 @@ public final class CopperManGogglesSystem {
 			return onUseItem(serverPlayer, hand);
 		});
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				server.execute(() -> {
+				AccountAuthSystem.runWhenAuthenticated(handler.player, () -> server.execute(() -> {
 					syncViewer(handler.player);
 					refreshVisual(handler.player);
-				})
+				}))
 		);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			UUID playerId = handler.player.getUUID();
@@ -194,7 +194,7 @@ public final class CopperManGogglesSystem {
 			ACTIVE_TRACKING_HIGHLIGHTS.remove(playerId);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				clearManagedNightVision(player);
 			}
 		});
@@ -772,7 +772,7 @@ public final class CopperManGogglesSystem {
 
 		long gameTime = server.overworld().getGameTime();
 		Set<UUID> online = ConcurrentHashMap.newKeySet();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			online.add(player.getUUID());
 			boolean shouldSpoof = shouldSpoofVisual(player);
 			Boolean previous = LAST_VISUAL_STATES.put(player.getUUID(), shouldSpoof);
@@ -1557,7 +1557,7 @@ public final class CopperManGogglesSystem {
 			return;
 		}
 
-		for (ServerPlayer wearer : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer wearer : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (wearer == null) {
 				continue;
 			}
@@ -1571,7 +1571,7 @@ public final class CopperManGogglesSystem {
 			return;
 		}
 
-		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 			syncWearerToViewer(wearer, viewer, spoofVisual);
 		}
 	}

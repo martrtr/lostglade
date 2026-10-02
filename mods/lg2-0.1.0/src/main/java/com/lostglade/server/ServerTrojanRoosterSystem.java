@@ -750,7 +750,7 @@ public final class ServerTrojanRoosterSystem {
 
 		ServerPlayer best = null;
 		double bestDistance = Double.MAX_VALUE;
-		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(level.getServer())) {
 			if (!isEligiblePlayer(player)) {
 				continue;
 			}
@@ -768,7 +768,7 @@ public final class ServerTrojanRoosterSystem {
 			return best;
 		}
 
-		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(level.getServer())) {
 			if (isEligiblePlayer(player)) {
 				return player;
 			}
@@ -782,7 +782,7 @@ public final class ServerTrojanRoosterSystem {
 		}
 
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(level.getServer())) {
 			if (isEligiblePlayer(player) && !isTargetClaimedByAnotherRooster(player.getUUID(), sourceChicken)) {
 				players.add(player);
 			}

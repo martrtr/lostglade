@@ -1,5 +1,7 @@
 package com.lostglade.server.glitch;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.google.gson.JsonObject;
 import com.lostglade.config.GlitchConfig;
 import com.lostglade.server.ServerBackroomsSystem;
@@ -245,7 +247,7 @@ public final class BlackoutGlitch implements ServerGlitchHandler {
 
 	private static List<ServerPlayer> collectTargets(MinecraftServer server) {
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.isSpectator() || !player.isAlive() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}

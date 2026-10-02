@@ -83,7 +83,8 @@ public final class OrthodoxHolinessSystem {
 		ServerLifecycleEvents.SERVER_STARTED.register(OrthodoxHolinessSystem::load);
 		ServerLifecycleEvents.SERVER_STOPPING.register(OrthodoxHolinessSystem::shutdown);
 		ServerTickEvents.END_SERVER_TICK.register(OrthodoxHolinessSystem::tick);
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> resetAfkTracker(handler.player));
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+				AccountAuthSystem.runWhenAuthenticated(handler.player, () -> resetAfkTracker(handler.player)));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			hideBar(handler.player);
 			AFK_TRACKERS.remove(handler.player.getUUID());
@@ -223,7 +224,7 @@ public final class OrthodoxHolinessSystem {
 		if (++secondTicker < 20) return;
 		secondTicker = 0;
 		long now = System.currentTimeMillis();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!isOrthodox(player)) {
 				hideBar(player);
 				AFK_TRACKERS.remove(player.getUUID());

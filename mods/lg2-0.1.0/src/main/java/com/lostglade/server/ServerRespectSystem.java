@@ -81,7 +81,8 @@ public final class ServerRespectSystem {
 			NEXT_RESPECT_AT_MILLIS.clear();
 			RECENT_RESPECT_INTERACTIONS.clear();
 		});
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> refreshTabSuffix((ServerPlayer) handler.player));
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+				AccountAuthSystem.runWhenAuthenticated(handler.player, () -> refreshTabSuffix((ServerPlayer) handler.player)));
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> refreshTabSuffix(newPlayer));
 		ServerTabIntegration.registerPlayerLoadHandler(ServerRespectSystem::refreshTabSuffix);
 
@@ -123,7 +124,7 @@ public final class ServerRespectSystem {
 	}
 
 	private static void refreshAllTabSuffixes(MinecraftServer server) {
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			refreshTabSuffix(player);
 		}
 	}
@@ -162,7 +163,7 @@ public final class ServerRespectSystem {
 		if (server == null) {
 			return orderedPlayers;
 		}
-		return new ArrayList<>(server.getPlayerList().getPlayers());
+		return new ArrayList<>(AccountAuthSystem.authenticatedPlayers(server));
 	}
 
 	private static int addRespect(ServerPlayer target) {

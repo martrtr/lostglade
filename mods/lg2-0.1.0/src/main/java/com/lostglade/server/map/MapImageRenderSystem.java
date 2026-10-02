@@ -1,5 +1,7 @@
 package com.lostglade.server.map;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.lostglade.Lg2;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.item.PhotoPrintData;
@@ -73,7 +75,8 @@ public final class MapImageRenderSystem {
 	public static void register() {
 		ensureExecutor();
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				server.execute(() -> schedulePhotoPreviewReprime((ServerPlayer) handler.player, server))
+				AccountAuthSystem.runWhenAuthenticated(handler.player,
+						() -> server.execute(() -> schedulePhotoPreviewReprime((ServerPlayer) handler.player, server)))
 		);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
 				server.execute(() -> clearPhotoPreviewReprime(handler.player.getUUID()))
@@ -452,7 +455,7 @@ public final class MapImageRenderSystem {
 			if (mapData == null || mapData.colors == null || mapData.colors.length < MAP_SIZE * MAP_SIZE) {
 				continue;
 			}
-			for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 				sendPhotoMap(viewer, mapId, mapData);
 			}
 		}
@@ -564,7 +567,7 @@ public final class MapImageRenderSystem {
 		if (server == null || photoData == null || name == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			boolean changed = false;
 			for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
 				ItemStack stack = player.getInventory().getItem(slot);

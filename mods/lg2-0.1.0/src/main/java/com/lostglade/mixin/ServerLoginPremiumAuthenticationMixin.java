@@ -2,8 +2,10 @@ package com.lostglade.mixin;
 
 import com.lostglade.Lg2;
 import com.lostglade.server.AccountAuthSystem;
-import com.lostglade.server.PremiumNameLookup;
+import com.lostglade.server.PremiumLoginProbe;
+import com.lostglade.server.RendererBotPresenceSystem;
 import com.mojang.authlib.GameProfile;
+import io.netty.channel.Channel;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
@@ -21,8 +23,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.io.IOException;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
@@ -35,22 +37,40 @@ import java.util.WeakHashMap;
 @Mixin(ServerLoginPacketListenerImpl.class)
 public abstract class ServerLoginPremiumAuthenticationMixin {
 	@Unique
-	private static final Set<ServerLoginPacketListenerImpl> LG2_PREMIUM_PROBES = Collections.newSetFromMap(
+	private static final Map<ServerLoginPacketListenerImpl, PremiumLoginProbe> LG2_PREMIUM_PROBES = Collections.synchronizedMap(new WeakHashMap<>());
+	@Unique
+	private static final Set<ServerLoginPacketListenerImpl> LG2_OFFLINE_REPLAYS = Collections.newSetFromMap(
 			Collections.synchronizedMap(new WeakHashMap<>())
 	);
-
 	@Shadow @Final private MinecraftServer server;
 	@Shadow @Final private Connection connection;
 	@Shadow String requestedUsername;
 
-	@Invoker("startClientVerification")
-	abstract void lg2$startClientVerification(GameProfile profile);
+	@Invoker("handleHello")
+	abstract void lg2$replayHello(ServerboundHelloPacket packet);
 
 	@Inject(method = "handleHello", at = @At("HEAD"))
-	private void lg2$beginPremiumProbe(ServerboundHelloPacket packet, CallbackInfo ci) {
-		if (!this.server.usesAuthentication() && !this.connection.isMemoryConnection()) {
-			LG2_PREMIUM_PROBES.add((ServerLoginPacketListenerImpl) (Object) this);
+	private void lg2$routePremiumHandshake(ServerboundHelloPacket packet, CallbackInfo ci) {
+		ServerLoginPacketListenerImpl listener = (ServerLoginPacketListenerImpl) (Object) this;
+		if (LG2_OFFLINE_REPLAYS.contains(listener)) return;
+		if (this.server.usesAuthentication() || this.connection.isMemoryConnection()
+				|| RendererBotPresenceSystem.isRendererBotConnection(packet.name(), this.connection)) return;
+
+		UUID knownPremiumId = AccountAuthSystem.knownPremiumUuid(packet.name());
+		boolean requestPremiumSession;
+		if (knownPremiumId != null) {
+			// Once a premium owner has really authenticated here, only that official UUID is
+			// routed into Mojang auth. Offline UUIDs go to the admin-password fallback.
+			requestPremiumSession = knownPremiumId.equals(packet.profileId());
+		} else {
+			// For names never premium-verified on this server, existence in Mojang's public
+			// profile database is irrelevant. Vanilla offline clients use this deterministic
+			// UUID and may register immediately. Any other UUID merely asks us to attempt the
+			// real Mojang session exchange; it is never accepted as proof by itself.
+			requestPremiumSession = !UUIDUtil.createOfflinePlayerUUID(packet.name()).equals(packet.profileId());
 		}
+
+		if (requestPremiumSession) LG2_PREMIUM_PROBES.put(listener, new PremiumLoginProbe(packet));
 	}
 
 	/** Makes vanilla send its encryption request while keeping server.properties online-mode=false. */
@@ -59,12 +79,28 @@ public abstract class ServerLoginPremiumAuthenticationMixin {
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;usesAuthentication()Z")
 	)
 	private boolean lg2$requireSessionHandshake(MinecraftServer server) {
-		return server.usesAuthentication() || !this.connection.isMemoryConnection();
+		ServerLoginPacketListenerImpl listener = (ServerLoginPacketListenerImpl) (Object) this;
+		if (LG2_OFFLINE_REPLAYS.remove(listener)
+				|| RendererBotPresenceSystem.isRendererBotConnection(this.requestedUsername, this.connection)) {
+			return server.usesAuthentication();
+		}
+		return server.usesAuthentication() || LG2_PREMIUM_PROBES.containsKey(listener);
+	}
+
+	/** Allows the one intentional replay while the listener is still in KEY state. */
+	@Redirect(
+			method = "handleHello",
+			at = @At(value = "INVOKE", target = "Lorg/apache/commons/lang3/Validate;validState(ZLjava/lang/String;[Ljava/lang/Object;)V", ordinal = 0)
+	)
+	private void lg2$allowOfflineReplay(boolean valid, String message, Object[] parameters) {
+		ServerLoginPacketListenerImpl listener = (ServerLoginPacketListenerImpl) (Object) this;
+		if (LG2_OFFLINE_REPLAYS.contains(listener) && "Unexpected hello packet".equals(message)) return;
+		org.apache.commons.lang3.Validate.validState(valid, message, parameters);
 	}
 
 	@Inject(method = "startClientVerification", at = @At("HEAD"))
 	private void lg2$recordVerifiedPremiumProfile(GameProfile profile, CallbackInfo ci) {
-		if (!LG2_PREMIUM_PROBES.remove((ServerLoginPacketListenerImpl) (Object) this) || profile == null) return;
+		if (LG2_PREMIUM_PROBES.remove((ServerLoginPacketListenerImpl) (Object) this) == null || profile == null) return;
 		String name = this.requestedUsername;
 		if (name != null && !profile.id().equals(UUIDUtil.createOfflinePlayerUUID(name))) {
 			AccountAuthSystem.noteVerifiedPremiumSession(profile.name(), profile.id());
@@ -74,30 +110,39 @@ public abstract class ServerLoginPremiumAuthenticationMixin {
 	@Inject(method = "disconnect", at = @At("HEAD"), cancellable = true)
 	private void lg2$fallBackToOfflineAfterInvalidSession(Component reason, CallbackInfo ci) {
 		ServerLoginPacketListenerImpl listener = (ServerLoginPacketListenerImpl) (Object) this;
-		if (!LG2_PREMIUM_PROBES.remove(listener) || this.server.usesAuthentication() || !isSessionFailure(reason)) return;
-		String name = this.requestedUsername;
-		if (name == null || !name.matches("[A-Za-z0-9_]{3,16}")) return;
-
+		PremiumLoginProbe probe = LG2_PREMIUM_PROBES.remove(listener);
+		if (probe == null || this.server.usesAuthentication() || !lg2$isSessionFailure(reason)) return;
 		ci.cancel();
-		Thread.ofVirtual().name("lg2-premium-name-check").start(() -> {
-			try {
-				UUID officialId = PremiumNameLookup.lookup(name);
-				if (officialId != null) AccountAuthSystem.reservePremiumName(name, officialId);
-				else AccountAuthSystem.notePremiumNameLookupSucceeded(name);
-			} catch (IOException exception) {
-				// Fail closed only for new registrations; existing password accounts remain usable.
-				AccountAuthSystem.notePremiumNameLookupUnavailable(name);
-				Lg2.LOGGER.warn("Could not reserve premium name '{}' after an invalid Mojang session", name);
-			}
-			this.lg2$startClientVerification(UUIDUtil.createOfflineProfile(name));
-		});
+		this.lg2$fallBackToOffline(listener, probe.hello(), "unverified Mojang session");
 	}
 
+	/**
+	 * The regular offline login branch must be replayed, rather than merely
+	 * calling startClientVerification: a vanilla client is still waiting for the
+	 * login transition after the optional encryption request.
+	 */
 	@Unique
-	private static boolean isSessionFailure(Component reason) {
+	private static boolean lg2$isSessionFailure(Component reason) {
 		if (reason == null || !(reason.getContents() instanceof TranslatableContents contents)) return false;
 		String key = contents.getKey();
 		return "multiplayer.disconnect.unverified_username".equals(key)
 				|| "multiplayer.disconnect.authservers_down".equals(key);
 	}
+
+	@Unique
+	private void lg2$fallBackToOffline(ServerLoginPacketListenerImpl listener, ServerboundHelloPacket hello, String reason) {
+		Runnable replay = () -> {
+			try {
+				LG2_OFFLINE_REPLAYS.add(listener);
+				this.lg2$replayHello(hello);
+				Lg2.LOGGER.debug("Premium probe for '{}' fell back to offline login ({})", hello.name(), reason);
+			} catch (RuntimeException exception) {
+				Lg2.LOGGER.error("Could not return '{}' to the offline login flow", hello.name(), exception);
+				listener.disconnect(Component.literal("Login verification failed. Please reconnect."));
+			}
+		};
+		Channel channel = ((ConnectionChannelAccessor) this.connection).lg2$getChannel();
+		if (channel != null && channel.isOpen()) channel.eventLoop().execute(replay);
+	}
+
 }

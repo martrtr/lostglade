@@ -1,5 +1,6 @@
 package com.lostglade.mixin;
 
+import com.lostglade.server.AccountAuthSystem;
 import com.lostglade.server.ServerAbsoluteInvisibilitySystem;
 import com.lostglade.server.ServerBossBarVisibilitySystem;
 import com.lostglade.server.ServerTabPacketSystem;
@@ -51,6 +52,20 @@ public abstract class ServerCommonPacketListenerAbsoluteInvisibilityMixin {
 			return;
 		}
 		if (LG2_ABSOLUTE_INVISIBILITY_BYPASS.get()) {
+			return;
+		}
+
+		Packet<?> authFilteredPacket = AccountAuthSystem.filterUnauthenticatedOutgoingPacket(receiver, packet);
+		if (authFilteredPacket != packet) {
+			ci.cancel();
+			if (authFilteredPacket == null) return;
+			LG2_ABSOLUTE_INVISIBILITY_BYPASS.set(true);
+			try {
+				if (listener == null) gameListener.send(authFilteredPacket);
+				else gameListener.send(authFilteredPacket, listener);
+			} finally {
+				LG2_ABSOLUTE_INVISIBILITY_BYPASS.remove();
+			}
 			return;
 		}
 

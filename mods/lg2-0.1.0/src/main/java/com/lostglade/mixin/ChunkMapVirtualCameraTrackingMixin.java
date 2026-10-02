@@ -20,6 +20,10 @@ import java.util.Objects;
 public abstract class ChunkMapVirtualCameraTrackingMixin {
 	@Inject(method = "updateChunkTracking", at = @At("HEAD"), cancellable = true)
 	private void lg2$useVirtualCameraChunkTracking(ServerPlayer player, CallbackInfo ci) {
+		if (AccountAuthSystem.isAuthTransitioning(player)) {
+			return;
+		}
+
 		if (AccountAuthSystem.isInLimbo(player)) {
 			ChunkTrackingView desiredView = AccountAuthSystem.createLimboChunkTrackingView(player);
 			if (!Objects.equals(player.getChunkTrackingView(), desiredView)) {

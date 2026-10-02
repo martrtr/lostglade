@@ -1852,7 +1852,7 @@ public final class DroneSystem {
 		if (server == null || server.getPlayerList() == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null || ACTIVE_SESSIONS.containsKey(player.getUUID())) {
 				continue;
 			}
