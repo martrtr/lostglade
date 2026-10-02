@@ -189,6 +189,7 @@ public final class ServerBossBarVisibilitySystem {
 
 		boolean reservedHud = ServerStabilitySystem.isHudBossBar(receiver, update.id)
 				|| ServerRaceSystem.isMarkRageBossBar(receiver, update.id)
+				|| NecromancerStockSystem.isManaBossBar(receiver, update.id)
 				|| DroneSystem.isHudBossBar(receiver, update.id)
 				|| ServerRaceSystem.isPuroSanOverdriveBossBar(receiver, update.id)
 				|| OrthodoxHolinessSystem.isBossBar(receiver, update.id);

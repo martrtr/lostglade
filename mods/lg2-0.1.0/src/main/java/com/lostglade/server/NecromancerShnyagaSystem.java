@@ -4,6 +4,7 @@ import com.lostglade.Lg2;
 import com.lostglade.config.RaceConfig.PlayerRaceConfig;
 import com.lostglade.config.RaceConfig.RaceAbilityConfig;
 import com.lostglade.config.RaceConfig.RaceAbilitySlot;
+import eu.pb4.polymer.core.api.item.PolymerItemUtils;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.ChatFormatting;
@@ -13,6 +14,8 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.FontDescription;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -24,20 +27,26 @@ import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 
 import java.util.Optional;
+import java.util.List;
+
+import xyz.nucleoid.packettweaker.PacketContext;
 
 public final class NecromancerShnyagaSystem {
 	private static final String RACE_ID = "necromancer";
@@ -240,7 +249,11 @@ public final class NecromancerShnyagaSystem {
 		int tier = affordableTier(player, ability);
 		String title = tier > 0 ? mode.title + " " + romanTier(tier) : mode.title;
 		stack.set(DataComponents.CUSTOM_NAME, Component.literal(title)
-				.withStyle(style -> style.withColor(mode.color).withItalic(false).withBold(true)));
+				.withStyle(style -> style
+						.withColor(mode.color)
+						.withItalic(false)
+						.withBold(true)
+						.withStrikethrough(tier <= 0)));
 		if (!hasPack) stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
 		return stack;
 	}
@@ -265,6 +278,60 @@ public final class NecromancerShnyagaSystem {
 
 	private static double positiveOrDefault(double value, double fallback) {
 		return Double.isFinite(value) && value > 0.0D ? value : fallback;
+	}
+
+	private static void hideInventoryVisuals(ServerPlayer player, AbstractContainerMenu menu) {
+		sendInventoryVisuals(player, menu, true);
+		syncHeldEquipmentVisuals(player, true);
+	}
+
+	private static void restoreInventoryVisuals(ServerPlayer player, AbstractContainerMenu menu) {
+		if (player != null) {
+			AbstractContainerMenu targetMenu = player.containerMenu;
+			if (targetMenu == null || targetMenu == menu) targetMenu = player.inventoryMenu;
+			if (targetMenu != null) sendInventoryVisuals(player, targetMenu, false);
+		}
+		syncHeldEquipmentVisuals(player, false);
+	}
+
+	private static void sendInventoryVisuals(ServerPlayer player, AbstractContainerMenu menu, boolean hide) {
+		if (player == null || menu == null) return;
+		Inventory inventory = player.getInventory();
+		PacketContext.NotNullWithPlayer context = PacketContext.create(player);
+		int stateId = menu.incrementStateId();
+		for (int menuSlot = 0; menuSlot < menu.slots.size(); menuSlot++) {
+			Slot slot = menu.getSlot(menuSlot);
+			if (slot.container != inventory) continue;
+			ItemStack visual = hide
+					? ItemStack.EMPTY
+					: toClientVisualStack(inventory.getItem(slot.getContainerSlot()).copy(), context);
+			player.connection.send(new ClientboundContainerSetSlotPacket(
+					menu.containerId,
+					stateId,
+					menuSlot,
+					visual
+			));
+		}
+	}
+
+	private static void syncHeldEquipmentVisuals(ServerPlayer player, boolean hide) {
+		if (player == null) return;
+		PacketContext.NotNullWithPlayer context = PacketContext.create(player);
+		ItemStack mainHand = hide ? ItemStack.EMPTY : toClientVisualStack(player.getMainHandItem().copy(), context);
+		ItemStack offHand = hide ? ItemStack.EMPTY : toClientVisualStack(player.getOffhandItem().copy(), context);
+		player.connection.send(new ClientboundSetEquipmentPacket(
+				player.getId(),
+				List.of(
+						com.mojang.datafixers.util.Pair.of(EquipmentSlot.MAINHAND, mainHand),
+						com.mojang.datafixers.util.Pair.of(EquipmentSlot.OFFHAND, offHand)
+				)
+		));
+	}
+
+	private static ItemStack toClientVisualStack(ItemStack stack, PacketContext.NotNullWithPlayer context) {
+		if (stack == null || stack.isEmpty()) return ItemStack.EMPTY;
+		ItemStack clientStack = PolymerItemUtils.getClientItemStack(stack, context);
+		return clientStack.isEmpty() ? stack.copy() : clientStack.copy();
 	}
 
 	private enum TransMode {
@@ -349,6 +416,24 @@ public final class NecromancerShnyagaSystem {
 		@Override
 		public boolean stillValid(Player player) {
 			return player == this.viewer && player.isAlive() && isEligible(this.viewer);
+		}
+
+		@Override
+		public void broadcastChanges() {
+			super.broadcastChanges();
+			hideInventoryVisuals(this.viewer, this);
+		}
+
+		@Override
+		public void broadcastFullState() {
+			super.broadcastFullState();
+			hideInventoryVisuals(this.viewer, this);
+		}
+
+		@Override
+		public void removed(Player player) {
+			super.removed(player);
+			restoreInventoryVisuals(this.viewer, this);
 		}
 	}
 }
