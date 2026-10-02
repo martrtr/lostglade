@@ -1,6 +1,7 @@
 package com.lostglade.client.maprender;
 
 import com.lostglade.Lg2;
+import com.lostglade.client.RendererBotRenderEnvironmentGuard;
 import com.lostglade.client.LostgladeClientSettings;
 import com.lostglade.client.RendererBotClientCapture;
 import com.lostglade.client.RendererBotClientMode;
@@ -99,18 +100,18 @@ public final class YandexMapRenderClient {
 		// locally before accepting and advancing a map job.
 		String mode = "ALWAYS";
 		boolean enabled = dedicated || LostgladeClientSettings.isRenderContributionEnabled();
-		YandexMapShaderGuard.Compatibility shader = YandexMapShaderGuard.inspect();
-		lastShaderCompatible = shader.compatible();
+		RendererBotRenderEnvironmentGuard.Compatibility environment = RendererBotRenderEnvironmentGuard.inspect(client);
+		lastShaderCompatible = environment.compatible();
 		if (!enabled) {
 			localStatusReason = "disabled-by-client";
 			send(new YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload(
-				YandexMapRenderPayloads.PROTOCOL_VERSION, false, mode, shader.compatible(), "",
+				YandexMapRenderPayloads.PROTOCOL_VERSION, false, mode, environment.compatible(), "",
 					MapRenderProfile.CURRENT.tilePixels(), YandexMapResourceProfileFingerprint.clientBuildFingerprint()
 			));
 			return;
 		}
-		if (!shader.compatible()) {
-			localStatusReason = shader.reason();
+		if (!environment.compatible()) {
+			localStatusReason = environment.reason();
 			send(new YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload(
 				YandexMapRenderPayloads.PROTOCOL_VERSION, true, mode, false, "",
 					MapRenderProfile.CURRENT.tilePixels(), YandexMapResourceProfileFingerprint.clientBuildFingerprint()
@@ -198,7 +199,8 @@ public final class YandexMapRenderClient {
 		if (activeJob != null) return "worker-busy";
 		if (!status.eligible()) return "worker-not-eligible:" + status.reason();
 		if (!Objects.equals(status.canonicalProfileHash(), payload.profileHash())) return "canonical-profile-mismatch";
-		if (!YandexMapShaderGuard.inspect().compatible()) return "shader-pack-active";
+		RendererBotRenderEnvironmentGuard.Compatibility environment = RendererBotRenderEnvironmentGuard.inspect(client);
+		if (!environment.compatible()) return environment.reason();
 		YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload capabilities = lastCapabilities;
 		if (capabilities == null || capabilities.mapProtocolVersion() != YandexMapRenderPayloads.PROTOCOL_VERSION) return "capability-not-ready";
 		if (!RendererBotClientMode.isEnabled()) {
@@ -308,10 +310,10 @@ public final class YandexMapRenderClient {
 			return;
 		}
 		heartbeatTicks++;
-		boolean shaderCompatible = YandexMapShaderGuard.inspect().compatible();
-		if (shaderCompatible != lastShaderCompatible) {
-			if (!shaderCompatible && activeJob != null) {
-				failActiveJob("shader-state-changed");
+		boolean environmentCompatible = RendererBotRenderEnvironmentGuard.inspect(client).compatible();
+		if (environmentCompatible != lastShaderCompatible) {
+			if (!environmentCompatible && activeJob != null) {
+				failActiveJob("render-environment-changed");
 			}
 			requestCapabilityRefresh();
 		}

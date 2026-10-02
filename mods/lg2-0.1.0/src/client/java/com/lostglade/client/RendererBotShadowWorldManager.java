@@ -112,6 +112,13 @@ public final class RendererBotShadowWorldManager {
 		);
 	}
 
+	/** Number of chunk snapshots currently held by all active camera shadow worlds. */
+	public static int loadedChunkCount() {
+		synchronized (LOCK) {
+			return SHADOW_SESSIONS.values().stream().mapToInt(session -> session.chunkPacketFingerprints.size()).sum();
+		}
+	}
+
 	public static void onMapDataUpdated(ClientPacketListener connection, net.minecraft.network.protocol.game.ClientboundMapItemDataPacket packet) {
 		if (connection == null || packet == null) {
 			return;

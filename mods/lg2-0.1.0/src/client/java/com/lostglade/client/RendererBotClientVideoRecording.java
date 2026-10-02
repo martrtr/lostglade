@@ -205,6 +205,8 @@ public final class RendererBotClientVideoRecording {
 				);
 				if (!rendered) {
 					clearRecordingFrameInFlight(recording.payload().requestId());
+				} else {
+					RendererClientDiagnostics.cameraFrameRendered();
 				}
 			}
 			return;
@@ -221,6 +223,8 @@ public final class RendererBotClientVideoRecording {
 			);
 			if (!rendered) {
 				clearRecordingFrameInFlight(recording.payload().requestId());
+			} else {
+				RendererClientDiagnostics.cameraFrameRendered();
 			}
 		}
 	}

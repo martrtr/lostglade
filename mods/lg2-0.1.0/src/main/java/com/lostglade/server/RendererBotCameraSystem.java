@@ -86,7 +86,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -120,6 +123,8 @@ public final class RendererBotCameraSystem {
 	private static final int CAMERA_CHUNK_TICKET_UNIQUE_FLAG = 128;
 	private static final int SHADOW_REAR_VIEW_CHUNKS = 2;
 	private static final long LIVE_STREAM_STALE_MS = 1_500L;
+	private static final long LIVE_STREAM_REBALANCE_INTERVAL_MS = 1_000L;
+	private static final long LIVE_STREAM_TRANSFER_COOLDOWN_MS = 5_000L;
 	private static final long ITEM_ICON_CAPTURE_TIMEOUT_MS = 30_000L;
 	private static final long AUDIO_CAPTURE_STALE_MS = 8_000L;
 	private static final long LIVE_STREAM_ORPHAN_CLEANUP_MS = 15_000L;
@@ -164,6 +169,7 @@ public final class RendererBotCameraSystem {
 	private static final Map<CameraChunkTicketKey, Integer> ACTIVE_CAMERA_CHUNK_TICKETS = new HashMap<>();
 	private static final Map<ShadowSyncKey, ShadowDimensionSyncState> ACTIVE_SHADOW_SYNC_STATES = new HashMap<>();
 	private static final Set<ChunkTicketKey> DIRTY_SHADOW_CHUNKS = ConcurrentHashMap.newKeySet();
+	private static long lastLiveStreamRebalanceAtMillis;
 
 	private RendererBotCameraSystem() {
 	}
@@ -188,12 +194,22 @@ public final class RendererBotCameraSystem {
 						READY_BOTS.remove(context.player().getUUID());
 						return;
 					}
-					boolean dedicatedBot = RendererBotPresenceSystem.isRendererBot(context.player());
-					boolean volunteer = payload.volunteerRenderer() && !dedicatedBot
+					boolean rendererBotAccount = RendererBotPresenceSystem.isRendererBot(context.player());
+					// The renderer account is not implicitly trusted: it must also
+					// attest that its local visual environment is canonical. This keeps
+					// a resource pack or shader accidentally enabled on the fallback
+					// client from contaminating every camera feed.
+					boolean dedicatedBot = rendererBotAccount && payload.volunteerRenderer();
+					boolean volunteer = payload.volunteerRenderer() && !rendererBotAccount
 							&& Lg2Config.get().cameraRendererAllowPlayerVolunteers;
 					READY_BOTS.put(context.player().getUUID(), new BotHandshake(
-							context.player().getUUID(), context.player().getScoreboardName(), volunteer
+							context.player().getUUID(), context.player().getScoreboardName(), volunteer, dedicatedBot
 					));
+					Lg2.LOGGER.info(
+							"Renderer client '{}' registered: {}",
+							context.player().getScoreboardName(),
+							dedicatedBot ? "dedicated" : volunteer ? "volunteer" : "not admitted"
+					);
 					// A zero GPU budget is an explicit opt-out. Move active screen feeds
 					// immediately instead of waiting for their stale-frame timeout.
 					if (!volunteer && !dedicatedBot) {
@@ -729,7 +745,7 @@ public final class RendererBotCameraSystem {
 			return false;
 		}
 
-		ServerPlayer bot = selectBot(server);
+		ServerPlayer bot = selectLiveStreamRenderer(server);
 		if (bot == null) {
 			onFailure.accept("Нет активного клиента камеры");
 			return false;
@@ -788,6 +804,10 @@ public final class RendererBotCameraSystem {
 		ActiveLiveStream stream = new ActiveLiveStream(server, streamId, ownerKey, bot.getUUID(), desiredSpec, onFrame, onFailure);
 		ACTIVE_LIVE_STREAMS.put(streamId, stream);
 		LIVE_STREAMS_BY_OWNER.put(ownerKey, streamId);
+		Lg2.LOGGER.info(
+				"Renderer stream {} ({}) assigned to '{}' [{} active streams]",
+				streamId.toString().substring(0, 8), ownerKey, bot.getScoreboardName(), activeLiveStreamCount(bot.getUUID())
+		);
 		startLiveStreamOnRenderer(bot, stream);
 		return true;
 	}
@@ -1319,6 +1339,10 @@ public final class RendererBotCameraSystem {
 					capture.previewWidth(), capture.previewHeight(), capture.fullWidth(), capture.fullHeight(), capture.fovDegrees()
 			));
 			capture.markClientRequestSent();
+			Lg2.LOGGER.info(
+					"Renderer photo {} assigned to '{}'",
+					capture.requestId().toString().substring(0, 8), bot.getScoreboardName()
+			);
 			armCaptureTimeout(capture);
 		} catch (RuntimeException exception) {
 			failPending(capture.requestId(), capture, exception);
@@ -1363,7 +1387,7 @@ public final class RendererBotCameraSystem {
 			ServerPlayer bot = server.getPlayerList().getPlayer(botUuid);
 			BotHandshake handshake = READY_BOTS.get(botUuid);
 			if (bot == null || handshake == null
-					|| (!handshake.volunteerRenderer() && !RendererBotPresenceSystem.isRendererBot(bot))) {
+					|| (!handshake.volunteerRenderer() && !handshake.dedicatedRenderer())) {
 				continue;
 			}
 			if (isLevelActivelyRenderedByBot(server, botUuid, level.dimension())) {
@@ -1551,23 +1575,62 @@ public final class RendererBotCameraSystem {
 		if (server == null || unavailableBotUuid == null) {
 			return;
 		}
-		ServerPlayer replacement = selectBot(server);
 		for (ActiveLiveStream stream : new ArrayList<>(ACTIVE_LIVE_STREAMS.values())) {
 			if (stream == null || !unavailableBotUuid.equals(stream.botUuid())) {
 				continue;
 			}
-			LiveStreamSpec spec = stream.spec();
-			ServerLevel level = spec == null ? null : server.getLevel(spec.dimension());
-			if (replacement == null || level == null || !canBotRenderLevel(replacement, level)) {
+			ServerPlayer replacement = selectLiveStreamRenderer(server, unavailableBotUuid);
+			if (!transferLiveStream(server, stream, replacement, unavailableMessage)) {
 				stopLiveStreamInternal(stream, unavailableMessage, true);
-				continue;
 			}
-			UUID previousBotUuid = stream.botUuid();
-			stream.transferRenderer(replacement.getUUID());
-			startLiveStreamOnRenderer(replacement, stream);
-			releaseBotCameraIfNeeded(server, previousBotUuid, true);
-			Lg2.LOGGER.info("Moved Lostglade camera stream {} from {} to {}", stream.streamId(), previousBotUuid, replacement.getUUID());
 		}
+	}
+
+	/** Keeps active feeds near each client's sustainable throughput without blanking a monitor. */
+	private static void rebalanceLiveStreams(MinecraftServer server) {
+		long now = System.currentTimeMillis();
+		if (server == null || ACTIVE_LIVE_STREAMS.size() < 2
+				|| now - lastLiveStreamRebalanceAtMillis < LIVE_STREAM_REBALANCE_INTERVAL_MS) return;
+		lastLiveStreamRebalanceAtMillis = now;
+		for (ActiveLiveStream stream : new ArrayList<>(ACTIVE_LIVE_STREAMS.values())) {
+			if (stream == null || !stream.canTransferAt(now)) continue;
+			LiveStreamSpec spec = stream.spec();
+			double sourceFps = stream.framesPerSecond(now);
+			if (spec == null || sourceFps >= spec.targetFps() * 0.80D) continue;
+			UUID sourceUuid = stream.botUuid();
+			ServerPlayer replacement = selectLiveStreamRenderer(server, sourceUuid);
+			if (replacement == null) continue;
+			int sourceLoad = activeLiveStreamCount(sourceUuid);
+			int replacementLoad = activeLiveStreamCount(replacement.getUUID());
+			if (sourceLoad <= replacementLoad || !transferLiveStream(server, stream, replacement, "low live-stream FPS")) continue;
+			Lg2.LOGGER.info(
+					"Renderer stream {} rebalanced after {}/{} fps on overloaded client",
+					stream.streamId().toString().substring(0, 8), Math.round(sourceFps), spec.targetFps()
+			);
+		}
+	}
+
+	private static boolean transferLiveStream(
+			MinecraftServer server, ActiveLiveStream stream, ServerPlayer replacement, String reason
+	) {
+		if (server == null || stream == null || replacement == null || replacement.getUUID().equals(stream.botUuid())) return false;
+		LiveStreamSpec spec = stream.spec();
+		ServerLevel level = spec == null ? null : server.getLevel(spec.dimension());
+		if (level == null || !canBotRenderLevel(replacement, level)) return false;
+		UUID previousBotUuid = stream.botUuid();
+		ServerPlayer previous = server.getPlayerList().getPlayer(previousBotUuid);
+		if (previous != null && ServerPlayNetworking.canSend(previous, RendererBotPayloads.RendererBotLiveStreamStopS2CPayload.TYPE)) {
+			ServerPlayNetworking.send(previous, new RendererBotPayloads.RendererBotLiveStreamStopS2CPayload(stream.streamId()));
+		}
+		stream.transferRenderer(replacement.getUUID());
+		startLiveStreamOnRenderer(replacement, stream);
+		releaseBotCameraIfNeeded(server, previousBotUuid, true);
+		Lg2.LOGGER.info(
+				"Renderer stream {} moved from '{}' to '{}' ({})",
+				stream.streamId().toString().substring(0, 8),
+				previous == null ? previousBotUuid : previous.getScoreboardName(), replacement.getScoreboardName(), reason
+		);
+		return true;
 	}
 
 	private static void failLiveStreamsForBot(UUID botUuid, String message) {
@@ -1672,42 +1735,58 @@ public final class RendererBotCameraSystem {
 	}
 
 	private static ServerPlayer selectBot(MinecraftServer server) {
+		return rendererClients(server).stream().findFirst().orElse(null);
+	}
+
+	/** Picks the least-loaded renderer for a new live feed, with volunteers first. */
+	private static ServerPlayer selectLiveStreamRenderer(MinecraftServer server) {
+		return selectLiveStreamRenderer(server, null);
+	}
+
+	private static ServerPlayer selectLiveStreamRenderer(MinecraftServer server, UUID excludedRendererUuid) {
+		ServerPlayer selected = null;
+		int selectedLoad = Integer.MAX_VALUE;
+		for (ServerPlayer candidate : rendererClients(server)) {
+			if (candidate.getUUID().equals(excludedRendererUuid)) continue;
+			if (hasActiveVideoRecording(candidate.getUUID())) continue;
+			int load = activeLiveStreamCount(candidate.getUUID());
+			if (selected == null || load < selectedLoad) {
+				selected = candidate;
+				selectedLoad = load;
+			}
+		}
+		return selected;
+	}
+
+	private static int activeLiveStreamCount(UUID rendererUuid) {
+		if (rendererUuid == null) return 0;
+		int count = 0;
+		for (ActiveLiveStream stream : ACTIVE_LIVE_STREAMS.values()) {
+			if (stream != null && rendererUuid.equals(stream.botUuid())) count++;
+		}
+		return count;
+	}
+
+	/** All live renderer clients that are authenticated, negotiated and usable. */
+	private static List<ServerPlayer> rendererClients(MinecraftServer server) {
 		if (server == null || server.getPlayerList() == null) {
-			return null;
+			return List.of();
 		}
-		// A player has to opt in locally and the server owner may disable this
-		// admission path in lg2.json. Volunteers are preferred, leaving the hidden
-		// renderer client as a transparent fallback for the Contabo VPS.
-		if (Lg2Config.get().cameraRendererAllowPlayerVolunteers) {
-			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
-				BotHandshake handshake = READY_BOTS.get(player.getUUID());
-				if (handshake == null || !handshake.volunteerRenderer()
-						|| !ServerPlayNetworking.canSend(player, RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE)) {
-					continue;
-				}
-				return player;
-			}
-		}
-		String configuredName = Lg2Config.get().cameraRendererBotPlayerName;
-		if (configuredName == null || configuredName.isBlank()) {
-			return null;
-		}
-
-		String trimmedName = configuredName.trim();
+		List<ServerPlayer> volunteers = new ArrayList<>();
+		List<ServerPlayer> dedicated = new ArrayList<>();
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
-			if (!player.getScoreboardName().equalsIgnoreCase(trimmedName)) {
-				continue;
+			BotHandshake handshake = READY_BOTS.get(player.getUUID());
+			if (handshake == null || !ServerPlayNetworking.canSend(player, RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE)) continue;
+			if (handshake.volunteerRenderer()) {
+				volunteers.add(player);
+			} else if (handshake.dedicatedRenderer()) {
+				dedicated.add(player);
 			}
-			if (!READY_BOTS.containsKey(player.getUUID())) {
-				continue;
-			}
-			if (!ServerPlayNetworking.canSend(player, RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE)) {
-				continue;
-			}
-			return player;
 		}
-
-		return null;
+		volunteers.sort(Comparator.comparing(ServerPlayer::getScoreboardName, String.CASE_INSENSITIVE_ORDER));
+		dedicated.sort(Comparator.comparing(ServerPlayer::getScoreboardName, String.CASE_INSENSITIVE_ORDER));
+		volunteers.addAll(dedicated);
+		return List.copyOf(volunteers);
 	}
 
 	private static void prepareBotForStaticView(
@@ -1797,6 +1876,7 @@ public final class RendererBotCameraSystem {
 		syncCameraHotbarWarmupStreams(server);
 		cleanupOrphanedLiveStreams(server);
 		cleanupOrphanedAudioCaptures(server);
+		rebalanceLiveStreams(server);
 		syncLiveStreamPoseUpdates(server);
 		if (!hasActiveShadowSyncWork(server)) {
 			return;
@@ -1808,15 +1888,14 @@ public final class RendererBotCameraSystem {
 		if (server == null || ACTIVE_LIVE_STREAMS.isEmpty()) {
 			return;
 		}
-		ServerPlayer bot = selectBot(server);
-		if (bot == null
-				|| !READY_BOTS.containsKey(bot.getUUID())
-				|| !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotLiveStreamPoseS2CPayload.TYPE)) {
-			return;
-		}
-		UUID botUuid = bot.getUUID();
 		for (ActiveLiveStream stream : ACTIVE_LIVE_STREAMS.values()) {
-			if (stream == null || !botUuid.equals(stream.botUuid())) {
+			if (stream == null) {
+				continue;
+			}
+			ServerPlayer bot = server.getPlayerList().getPlayer(stream.botUuid());
+			if (bot == null
+					|| !READY_BOTS.containsKey(bot.getUUID())
+					|| !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotLiveStreamPoseS2CPayload.TYPE)) {
 				continue;
 			}
 			LiveStreamSpec spec = stream.spec();
@@ -2713,51 +2792,39 @@ public final class RendererBotCameraSystem {
 
 	private static Map<ShadowSyncKey, ShadowDesiredState> collectDesiredShadowStates(MinecraftServer server) {
 		Map<ShadowSyncKey, ShadowDesiredState> desiredStates = new HashMap<>();
-		ServerPlayer bot = selectBot(server);
-		if (server == null || bot == null) {
+		if (server == null) {
 			return desiredStates;
 		}
-		UUID botUuid = bot.getUUID();
-		int viewDistance = resolveShadowViewDistance(bot);
-		PendingVideoRecording rendererVideo = selectVideoRecordingForRenderer(botUuid);
-		PendingCapture rendererCapture = selectPendingCaptureForRenderer(botUuid);
-		boolean videoRecordingActive = rendererVideo != null && rendererVideo.clientStartSent();
-
-		if (!videoRecordingActive) {
+		// Live feeds may be assigned to different volunteers.  Each renderer needs
+		// its own shadow-world state; formerly this method only prepared selectBot().
 		for (ActiveLiveStream stream : ACTIVE_LIVE_STREAMS.values()) {
-			if (stream == null || !botUuid.equals(stream.botUuid())) {
-				continue;
-			}
+			if (stream == null || hasActiveVideoRecording(stream.botUuid())) continue;
+			ServerPlayer streamBot = server.getPlayerList().getPlayer(stream.botUuid());
+			if (streamBot == null || !READY_BOTS.containsKey(streamBot.getUUID())) continue;
 			LiveStreamSpec spec = stream.spec();
 			ScheduledServiceTarget target = resolveServiceTarget(
-					server,
-					spec.dimension(),
-					spec.expectedX(),
-					spec.expectedY(),
-					spec.expectedZ(),
-					spec.expectedYaw(),
-					spec.expectedPitch(),
-					spec.followEntityUuid()
+					server, spec.dimension(), spec.expectedX(), spec.expectedY(), spec.expectedZ(),
+					spec.expectedYaw(), spec.expectedPitch(), spec.followEntityUuid()
 			);
 			if (target == null || target.level() == null) {
 				stopLiveStreamInternal(stream, "Renderer bot live stream target is unavailable", true);
 				continue;
 			}
-			if (spec.cameraPos() != null && !isCameraPlayerLoaded(target.level(), spec.cameraPos())) {
-				continue;
-			}
+			if (spec.cameraPos() != null && !isCameraPlayerLoaded(target.level(), spec.cameraPos())) continue;
 			accumulateShadowDesiredState(
-					desiredStates,
-					botUuid,
-					stream.spec().renderSessionId(),
-					target,
-					viewDistance,
-					spec.hiddenEntityUuids(),
-					spec.omnidirectionalChunkLoading(),
+					desiredStates, streamBot.getUUID(), spec.renderSessionId(), target,
+					resolveShadowViewDistance(streamBot), spec.hiddenEntityUuids(), spec.omnidirectionalChunkLoading(),
 					spec.cameraPos() != null && spec.followEntityUuid() == null
 			);
 		}
-		}
+
+		ServerPlayer bot = selectBot(server);
+		if (bot == null) return desiredStates;
+		UUID botUuid = bot.getUUID();
+		int viewDistance = resolveShadowViewDistance(bot);
+		PendingVideoRecording rendererVideo = selectVideoRecordingForRenderer(botUuid);
+		PendingCapture rendererCapture = selectPendingCaptureForRenderer(botUuid);
+		boolean videoRecordingActive = rendererVideo != null && rendererVideo.clientStartSent();
 
 		if (!videoRecordingActive) {
 		for (ActiveAudioCapture capture : ACTIVE_AUDIO_CAPTURES.values()) {
@@ -4435,7 +4502,7 @@ public final class RendererBotCameraSystem {
 	public record AudioCaptureFrame(short[] samples, long receivedAtNanos, long clientFrameNanos) {
 	}
 
-	private record BotHandshake(UUID playerUuid, String playerName, boolean volunteerRenderer) {
+	private record BotHandshake(UUID playerUuid, String playerName, boolean volunteerRenderer, boolean dedicatedRenderer) {
 	}
 
 	private static final class RemoteVideoUpload {
@@ -4956,6 +5023,9 @@ public final class RendererBotCameraSystem {
 		private LiveStreamFrame pendingFrame;
 		private long newestAcceptedClientFrameNanos;
 		private boolean frameDeliveryScheduled;
+		private boolean receivedFrame;
+		private final Deque<Long> receivedFrameTimes = new ArrayDeque<>();
+		private long lastTransferredAtMillis;
 
 		private ActiveLiveStream(
 				MinecraftServer server,
@@ -4979,6 +5049,8 @@ public final class RendererBotCameraSystem {
 			this.pendingFrame = null;
 			this.newestAcceptedClientFrameNanos = 0L;
 			this.frameDeliveryScheduled = false;
+			this.receivedFrame = false;
+			this.lastTransferredAtMillis = this.startedAtMillis;
 		}
 
 		private MinecraftServer server() {
@@ -5004,9 +5076,12 @@ public final class RendererBotCameraSystem {
 			this.botUuid = botUuid;
 			this.lastFrameAtMillis = System.currentTimeMillis();
 			this.lastDispatchAtMillis = 0L;
-			synchronized (this.frameDeliveryLock) {
+			this.lastTransferredAtMillis = System.currentTimeMillis();
+				synchronized (this.frameDeliveryLock) {
 				this.pendingFrame = null;
 				this.newestAcceptedClientFrameNanos = 0L;
+				this.receivedFrame = false;
+				this.receivedFrameTimes.clear();
 			}
 		}
 
@@ -5031,6 +5106,7 @@ public final class RendererBotCameraSystem {
 				return;
 			}
 			boolean scheduleDelivery = false;
+			boolean firstFrame = false;
 			synchronized (this.frameDeliveryLock) {
 				long frameNanos = frame.clientFrameNanos() > 0L ? frame.clientFrameNanos() : frame.receivedAtNanos();
 				// Frames may complete GPU readback out of order when the client has
@@ -5042,12 +5118,25 @@ public final class RendererBotCameraSystem {
 				if (frameNanos > 0L) {
 					this.newestAcceptedClientFrameNanos = frameNanos;
 				}
-				this.lastFrameAtMillis = System.currentTimeMillis();
+				firstFrame = !this.receivedFrame;
+				this.receivedFrame = true;
+				long receivedAt = System.currentTimeMillis();
+				this.lastFrameAtMillis = receivedAt;
+				this.receivedFrameTimes.addLast(receivedAt);
+				pruneFrameTimes(receivedAt);
 				this.pendingFrame = frame;
 				if (!this.frameDeliveryScheduled) {
 					this.frameDeliveryScheduled = true;
 					scheduleDelivery = true;
 				}
+			}
+			if (firstFrame) {
+				ServerPlayer renderer = this.server.getPlayerList().getPlayer(this.botUuid);
+				Lg2.LOGGER.info(
+						"Renderer stream {} ({}) is producing frames on '{}'",
+						this.streamId.toString().substring(0, 8), this.ownerKey,
+						renderer == null ? this.botUuid : renderer.getScoreboardName()
+				);
 			}
 			if (scheduleDelivery) {
 				LIVE_FRAME_DISPATCH_EXECUTOR.execute(this::deliverPendingFrames);
@@ -5111,6 +5200,23 @@ public final class RendererBotCameraSystem {
 				referenceTime = this.lastFrameAtMillis;
 			}
 			return referenceTime;
+		}
+
+		private double framesPerSecond(long now) {
+			synchronized (this.frameDeliveryLock) {
+				pruneFrameTimes(now);
+				return this.receivedFrameTimes.size();
+			}
+		}
+
+		private boolean canTransferAt(long now) {
+			return now - this.lastTransferredAtMillis >= LIVE_STREAM_TRANSFER_COOLDOWN_MS;
+		}
+
+		private void pruneFrameTimes(long now) {
+			while (!this.receivedFrameTimes.isEmpty() && now - this.receivedFrameTimes.peekFirst() >= 1_000L) {
+				this.receivedFrameTimes.removeFirst();
+			}
 		}
 	}
 

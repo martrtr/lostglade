@@ -172,8 +172,5 @@
   "key.lg2.race_ability": "Race ability: unique ability",
   "key.lg2.race_shnyaga": "Race ability: shnyaga",
   "key.category.lg2.camera": "Lostglade camera",
-  "key.lg2.camera_renderer_volunteer": "Toggle Lostglade background rendering",
-  "message.lg2.camera_renderer_volunteer.enabled": "Lostglade background rendering: enabled",
-  "message.lg2.camera_renderer_volunteer.disabled": "Lostglade background rendering: disabled",
   "item.lg2.ancient_ukr_gas_mask": "Gas Mask"
 }

@@ -453,7 +453,13 @@ public final class RendererBotClientCapture {
 					if (liveStream.lastFrameAtNanos() != 0L && nowNanos - liveStream.lastFrameAtNanos() < intervalNanos) {
 						continue;
 					}
-					if (liveStreamToRender == null || liveStream.startedAtMillis() < liveStreamToRender.startedAtMillis()) {
+					// Rotate streams by the last submitted frame. Choosing the oldest
+					// stream here starved every later stream whenever the first one was
+					// configured at a high FPS.
+					if (liveStreamToRender == null
+							|| liveStream.lastFrameAtNanos() < liveStreamToRender.lastFrameAtNanos()
+							|| (liveStream.lastFrameAtNanos() == liveStreamToRender.lastFrameAtNanos()
+									&& liveStream.startedAtMillis() < liveStreamToRender.startedAtMillis())) {
 						liveStreamToRender = liveStream;
 					}
 				}
@@ -482,6 +488,8 @@ public final class RendererBotClientCapture {
 			);
 			if (!rendered) {
 				clearPendingCaptureRequested(capture.payload().requestId());
+			} else {
+				RendererClientDiagnostics.cameraFrameRendered();
 			}
 			return rendered;
 		}
@@ -503,6 +511,8 @@ public final class RendererBotClientCapture {
 				);
 		if (!rendered) {
 			clearLiveStreamFrameInFlight(liveStream.payload().streamId());
+		} else {
+			RendererClientDiagnostics.cameraFrameRendered();
 		}
 		return rendered;
 	}

@@ -223,7 +223,7 @@ public final class YandexMapRenderPhaseSevenTest {
 		String shadow = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
 		String settings = Files.readString(project.resolve("src/client/java/com/lostglade/client/LostgladeSettingsScreen.java"));
 		String diagnostics = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererClientDiagnostics.java"));
-		String diagnosticsScreen = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererDiagnosticsScreen.java"));
+		String visualGuard = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotRenderEnvironmentGuard.java"));
 
 		require(mapClient.contains("retireActiveJob(\"disconnect\")"), "map disconnect must detach jobs instead of synchronously destroying GL resources");
 		require(mapClient.contains("RETIRED_JOBS") && mapClient.contains("readbackPending()"), "map GL teardown must wait for screenshot readback retirement");
@@ -236,10 +236,16 @@ public final class YandexMapRenderPhaseSevenTest {
 		String abortBody = abortStart >= 0 && abortEnd > abortStart ? video.substring(abortStart, abortEnd) : "";
 		require(!abortBody.contains("RendererBotOffscreenWorldRenderer.clearCaches()"), "video disconnect must not synchronously destroy shared camera GL caches");
 		require(shadow.contains("retireForDisconnect()") && shadow.contains("DISCONNECT_RETIRED_SESSIONS"), "shadow worlds must be retired away from the disconnect callback");
-		require(settings.contains("Renderer diagnostics / логи") && settings.contains("new RendererDiagnosticsScreen(this)"), "Lostglade settings must expose renderer diagnostics");
-		require(diagnostics.contains("mapAcceptedLastMinute") && diagnostics.contains("activeCameraJobs()"), "renderer diagnostics must expose camera and map throughput");
-		require(diagnostics.contains("[renderer-diagnostics][{}] {}"), "renderer diagnostics must mirror hidden bot events into the ordinary client log");
-		require(diagnosticsScreen.contains("текущий map job") && diagnosticsScreen.contains("Последние события"), "renderer diagnostics UI must show active map work and live event history");
+		require(!settings.contains("RendererDiagnosticsScreen"), "Lostglade settings must not expose a renderer diagnostics screen");
+		require(diagnostics.contains("cameraFramesPerSecond") && !diagnostics.contains("[renderer-diagnostics]"), "local renderer state must power the HUD without log diagnostics");
+		require(settings.contains("addStatusLine(") && settings.contains("loadedChunkCount()") && settings.contains("cameraFramesPerSecond()"), "renderer status must be visible as native settings widgets with chunks and camera speed");
+		require(visualGuard.contains("getSelectedPacks()") && visualGuard.contains("third-party-client-mod") && visualGuard.contains("YandexMapShaderGuard.inspect"), "camera workers must reject local packs, shaders and untrusted client render mods");
+		require(mapClient.contains("RendererBotRenderEnvironmentGuard.inspect"), "map workers must use the same canonical visual environment gate");
+		require(capture.contains("liveStream.lastFrameAtNanos() < liveStreamToRender.lastFrameAtNanos()"), "live streams must schedule the least-recently-rendered feed instead of starving later streams");
+		String cameraSystem = Files.readString(project.resolve("src/main/java/com/lostglade/server/RendererBotCameraSystem.java"));
+		require(cameraSystem.contains("selectLiveStreamRenderer(server)") && cameraSystem.contains("activeLiveStreamCount"), "new live streams must balance across available renderer clients");
+		require(cameraSystem.contains("rebalanceLiveStreams(server)") && cameraSystem.contains("framesPerSecond(now)"), "slow live feeds must be moved to a less loaded renderer automatically");
+		require(cameraSystem.contains("Renderer stream {} ({}) assigned") && cameraSystem.contains("is producing frames on"), "server logs must identify stream assignment and first rendered frame");
 		require(mapClient.contains("VANILLA_SETTLE_TIMEOUT_TICKS = 100L") && mapClient.contains("render-settle-timeout:"), "sparse vanilla scenes must fail fast instead of occupying a renderer for the full 120s lease");
 		require(mapClient.contains("readinessSummary(result.readiness())"), "settle timeout diagnostics must expose the exact vanilla readiness state");
 		String jobService = Files.readString(project.resolve("src/main/java/com/lostglade/server/maprender/MapRenderJobService.java"));
