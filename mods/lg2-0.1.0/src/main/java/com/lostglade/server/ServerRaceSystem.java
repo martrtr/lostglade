@@ -114,7 +114,11 @@ import net.minecraft.network.protocol.game.ClientboundTrackedWaypointPacket;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.nbt.CollectionTag;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtAccounter;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.Tag;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.RemoteChatSession;
 import net.minecraft.resources.Identifier;
@@ -146,6 +150,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.Interaction;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.MoverType;
 
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.NeutralMob;
@@ -169,6 +174,7 @@ import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.ai.util.DefaultRandomPos;
 import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.decoration.ItemFrame;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Abilities;
@@ -188,6 +194,7 @@ import net.minecraft.world.entity.raid.Raider;
 import net.minecraft.world.entity.projectile.FireworkRocketEntity;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.entity.projectile.ItemSupplier;
 import net.minecraft.world.entity.projectile.ThrowableProjectile;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
@@ -200,6 +207,8 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemUseAnimation;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
+import net.minecraft.world.item.component.BundleContents;
+import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.item.component.ItemLore;
 import net.minecraft.world.item.component.WrittenBookContent;
 import net.minecraft.world.item.component.Consumable;
@@ -220,6 +229,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.Block;
@@ -234,6 +244,9 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.storage.RegionFile;
+import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.item.trading.Merchant;
@@ -264,6 +277,7 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.DataInputStream;
 import java.io.Reader;
 import java.net.URI;
 import java.security.MessageDigest;
@@ -321,6 +335,7 @@ public final class ServerRaceSystem {
 	private static final String PURO_SAN_RACE_ID = "puro_san";
 	private static final String ANCIENT_UKR_RACE_ID = "ancient_ukr";
 	private static final String ORTHODOX_RACE_ID = "orthodox";
+	private static final String NECROMANCER_RACE_ID = "necromancer";
 	private static final double ORTHODOX_ATTACK_DEFAULT_TARGET_RANGE_BLOCKS = 32.0D;
 	private static final double ORTHODOX_ATTACK_DEFAULT_VISIBILITY_RADIUS_BLOCKS = 50.0D;
 	private static final double ORTHODOX_ATTACK_DEFAULT_DURATION_SECONDS = 600.0D;
@@ -558,7 +573,7 @@ public final class ServerRaceSystem {
 	private static final int WOMAN_SHNYAGA_LETTER_OVERLAY_WIDTH = 134;
 	private static final int MILK_POCKET_MENU_OVERLAY_X_OFFSET = 168;
 	private static final int MILK_POCKET_MENU_OVERLAY_WIDTH = 176;
-	private static final double MILK_POCKET_NAME_LINE_CENTER_X = 86.5D;
+	private static final double MILK_POCKET_NAME_LINE_CENTER_X = 78.5D;
 	private static final int MILK_POCKET_NAME_COLOR = 0xC12CFF;
 	private static final double WOMAN_SHNYAGA_SENDER_LINE_CENTER_X = 36.5D;
 	private static final double WOMAN_SHNYAGA_RECIPIENT_LINE_CENTER_X = 122.5D;
@@ -686,7 +701,6 @@ public final class ServerRaceSystem {
 	private static final float LITTLE_DICTATOR_UNIQUE_SHOCK_SOUND_VOLUME = 4.0F;
 	private static final float LITTLE_DICTATOR_UNIQUE_SHOCK_SOUND_PITCH = 1.0F;
 	private static final double LITTLE_DICTATOR_UNIQUE_SHOCK_SOUND_RANGE_BLOCKS = 96.0D;
-	private static final int LITTLE_DICTATOR_DEFENSE_MIN_PACKET_DELAY_TICKS = 2;
 	private static final int LITTLE_DICTATOR_DEFENSE_MAX_PACKET_DELAY_TICKS = 45;
 	private static final int LITTLE_DICTATOR_DEFENSE_MAX_DELAYED_PACKETS_PER_PLAYER = 4000;
 	private static final double LITTLE_DICTATOR_UNIQUE_DEFAULT_RADIUS_BLOCKS = 48.0D;
@@ -785,6 +799,7 @@ public final class ServerRaceSystem {
 	private static final double GENNADIY_REPORT_DEFAULT_COOLDOWN_SECONDS = 1800.0D;
 	private static final long GENNADIY_REPORT_ITEM_SYNC_INTERVAL_TICKS = 20L;
 	private static final int GENNADIY_REPORT_CONTAINER_SCAN_CHUNK_RADIUS = 16;
+	private static final int GENNADIY_REPORT_NESTED_CONTAINER_MAX_DEPTH = 16;
 	private static final int GENNADIY_REPORT_CONFIRM_LINE_WIDTH_CHARS = 42;
 	private static final long GENNADIY_DEFENSE_WAVE_VISUAL_DURATION_TICKS = 18L;
 	private static final float GENNADIY_DEFENSE_FORCED_PITCH = 90.0F;
@@ -1066,6 +1081,13 @@ public final class ServerRaceSystem {
 	private static final float COPPER_MAN_DEFENSE_COPPER_RED = 0.6509804F;
 	private static final float COPPER_MAN_DEFENSE_COPPER_GREEN = 0.37254903F;
 	private static final float COPPER_MAN_DEFENSE_COPPER_BLUE = 0.30980393F;
+	private static final int KILKA_ATTACK_TINT_STEPS = 5;
+	private static final long KILKA_ATTACK_TINT_FADE_TICKS = 8L;
+	private static final String KILKA_ATTACK_TINT_CACHE_VERSION = "v1-uranium-charge";
+	private static final float KILKA_ATTACK_TINT_MAX_STRENGTH = 0.82F;
+	private static final float KILKA_ATTACK_URANIUM_RED = 0.46F;
+	private static final float KILKA_ATTACK_URANIUM_GREEN = 1.0F;
+	private static final float KILKA_ATTACK_URANIUM_BLUE = 0.08F;
 
 	private static final String COPPER_MAN_REPULSOR_SLIM_MASK_RESOURCE = "/assets/lg2/textures/repulsor_slim.png";
 
@@ -1080,8 +1102,7 @@ public final class ServerRaceSystem {
 	private static final double CARTEL_LAWYER_BASE_MOVE_SPEED = 0.23D;
 	private static final double CARTEL_LAWYER_WALK_SPEED = CARTEL_LAWYER_BASE_MOVE_SPEED;
 	private static final double CARTEL_LAWYER_RETURN_SPEED = CARTEL_LAWYER_BASE_MOVE_SPEED * 1.5D;
-	private static final long CARTEL_LAWYER_MOVEMENT_LOGIC_INTERVAL_TICKS = 1L;
-	private static final double CARTEL_LAWYER_STEERING_SMOOTHING = 0.35D;
+	private static final double CARTEL_LAWYER_ACCELERATION = 0.04D;
 	private static final EntityDimensions CARTEL_LAWYER_DIMENSIONS = EntityDimensions.fixed(0.6F, 1.8F);
 	private static final int CARTEL_DISGUISE_MENU_ROWS = 3;
 	private static final int CARTEL_DISGUISE_PREVIOUS_SLOT = 11;
@@ -1093,9 +1114,9 @@ public final class ServerRaceSystem {
 	private static final int WOMAN_SHNYAGA_PREVIOUS_SLOT = 11;
 	private static final int WOMAN_SHNYAGA_HEAD_SLOT = 13;
 	private static final int WOMAN_SHNYAGA_NEXT_SLOT = 15;
-	private static final int MILK_POCKET_INVITE_PREVIOUS_SLOT = 12;
+	private static final int MILK_POCKET_INVITE_PREVIOUS_SLOT = 11;
 	private static final int MILK_POCKET_INVITE_HEAD_SLOT = 13;
-	private static final int MILK_POCKET_INVITE_NEXT_SLOT = 14;
+	private static final int MILK_POCKET_INVITE_NEXT_SLOT = 15;
 	private static final String CARTEL_LAWYER_SKIN_VALUE = "ewogICJ0aW1lc3RhbXAiIDogMTc1MjAzMzk0NjY5MSwKICAicHJvZmlsZUlkIiA6ICI0ZWE3NGM1ZGUyZGI0OGY2YjViOTk1YTVhNTYzMmU0NCIsCiAgInByb2ZpbGVOYW1lIiA6ICJNclNjYXJ5U3BhY2VDYXQiLAogICJzaWduYXR1cmVSZXF1aXJlZCIgOiB0cnVlLAogICJ0ZXh0dXJlcyIgOiB7CiAgICAiU0tJTiIgOiB7CiAgICAgICJ1cmwiIDogImh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvMjRkNDQ3MDc4N2M4NWRlNWI5ODE5ODVkNDBmOTI5NzNhNmQxMmQ5ZDYxNzc0NGM3YWQzOGY4MWZmMTA3YTE5ZCIKICAgIH0KICB9Cn0=";
 	private static final String CARTEL_LAWYER_SKIN_SIGNATURE = "v4+RHg4+firDGWIHmWQCP2Q2JqS7vSyc3AJDl1kCI8dtquolAJ/QS9kgr1GPZPpCf0PbduYsJTg18Ar0amdwzPzqUYpe3xPek3SGDp2D6pl4BHp5dsimX0KvlUsA13gI1r0DXGZJj3SbXPknP5cBJEBT52bqYhyjG7oV7SaWq6moFhFOWjcuzUNihc0WY7UiFPKxlECtXUGE2ntuRQy5iQ9nW7bJ4vGnCCyTTIalVkWiYfGkW2IzXG0galt8bGZuVUZ1ETTgf2ay8+yzQQO0hOWLVT4TkUmuqR26D0nijuiZCKieZ8h37TZ2N2nsHTLxSGW7JjBIRtmsm7iAA13md3Muc7fmibjySVnjD07+8SAIrU+rIOcfsTBjJMj7+R2h0OiL7ePQKwJZ94alBkOJeegMPrpOnrdkYKmZ/dpsmtdP4vKyUzCCxcmcWumYT95r0TGYvYy4aU/FAxW6i3psJdcb1JPDCuv3363Lqpqk0tguwMsYfT6R4Cp+PvADUTC/uYhlvo19I3KE33/reSj1+Rl51xC3+iutnYQhx6pU5lPVdnRrWdYq08q4nz5HXqmwuJ3phacLCCubrUeu8BtR0c21GfcL9cnW6XG5LURS/tFiAhsd98uovOEDQF3rboeGO/t2cnyU+73T3eqjWvcWi9QfXwnGVLKtwsSCp8jl1Yo=";
 	private static final Property CARTEL_LAWYER_FALLBACK_SKIN_PROPERTY = new Property("textures", CARTEL_LAWYER_SKIN_VALUE, CARTEL_LAWYER_SKIN_SIGNATURE);
@@ -1148,6 +1169,7 @@ public final class ServerRaceSystem {
 	private static final Map<UUID, Long> MARK_DEFENSE_COOLDOWNS = new LinkedHashMap<>();
 	private static final Map<UUID, MarkDefenseSession> MARK_DEFENSE_SESSIONS = new LinkedHashMap<>();
 	private static final Map<UUID, KilkaAttackChargeSession> KILKA_ATTACK_CHARGES = new LinkedHashMap<>();
+	private static final Map<UUID, KilkaAttackVisualSession> KILKA_ATTACK_VISUAL_SESSIONS = new LinkedHashMap<>();
 	private static final Map<UUID, KilkaAttackFlashSession> KILKA_ATTACK_FLASHES = new LinkedHashMap<>();
 	private static final Map<UUID, Long> KILKA_IRRADIATION_END_TICKS = new LinkedHashMap<>();
 	private static final Map<UUID, KilkaDefenseSession> KILKA_DEFENSE_SESSIONS = new LinkedHashMap<>();
@@ -1196,8 +1218,7 @@ public final class ServerRaceSystem {
 	private static final Set<UUID> LITTLE_DICTATOR_PING_OVERLAY_ACTIVE = new HashSet<>();
 	private static final List<LittleDictatorDefenseWaveSession> LITTLE_DICTATOR_DEFENSE_WAVES = new ArrayList<>();
 	private static final List<LittleDictatorUniqueShockWaveSession> LITTLE_DICTATOR_UNIQUE_SHOCK_WAVES = new ArrayList<>();
-	private static final List<LittleDictatorDelayedPacket> LITTLE_DICTATOR_DELAYED_PACKETS = new ArrayList<>();
-	private static final Map<UUID, Long> LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS = new HashMap<>();
+	private static final OrderedPacketDelayQueue<UUID> LITTLE_DICTATOR_PACKET_QUEUE = new OrderedPacketDelayQueue<>(LITTLE_DICTATOR_DEFENSE_MAX_DELAYED_PACKETS_PER_PLAYER);
 	private static final Set<UUID> KILKA_STOCK_NIGHT_VISION = new HashSet<>();
 	private static final Map<UUID, MobEffectInstance> KILKA_STOCK_NATURAL_NIGHT_VISION = new LinkedHashMap<>();
 	private static final Map<UUID, Long> KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS = new LinkedHashMap<>();
@@ -1274,8 +1295,6 @@ public final class ServerRaceSystem {
 	) {
 	}
 
-	private record LittleDictatorDelayedPacket(UUID playerId, long releaseTick, Runnable action) {
-	}
 
 	private record LittleDictatorDefenseWaveSession(
 			ResourceKey<Level> dimension,
@@ -1508,9 +1527,11 @@ public final class ServerRaceSystem {
 		private final double followMaxDistanceBlocks;
 		private final long maxOutsideTicks;
 		private final float reflectedDamageRatio;
-		private long nextMovementLogicTick;
 		private long nextWanderRetargetTick;
-		private Vec3 wanderTarget;
+		private net.minecraft.world.level.pathfinder.Path wanderPath;
+		private Vec3 movementVelocity = Vec3.ZERO;
+		private Vec3 lastWanderPosition;
+		private long wanderProgressTick;
 		private Long outsideSinceTick;
 
 		private CartelDefenseSession(
@@ -1541,6 +1562,7 @@ public final class ServerRaceSystem {
 		private final SkinValue disguisedSkin;
 		private final UUID disguisedPlayerId;
 		private final String disguisedName;
+		private boolean disguisedAsAncientUkr;
 		private long endTick;
 
 		private CartelDisguiseSession(SkinValue originalSkin, SkinValue disguisedSkin, UUID disguisedPlayerId, String disguisedName, long endTick) {
@@ -1602,6 +1624,7 @@ public final class ServerRaceSystem {
 	}
 
 	public static void register() {
+		GennadiyReportTracker.register();
 		rebuildCache();
 		registerCommands();
 		ServerPlayNetworking.registerGlobalReceiver(Lg2Payloads.RaceAbilityC2SPayload.TYPE, (payload, context) -> {
@@ -1650,11 +1673,13 @@ public final class ServerRaceSystem {
 			saveLittleDictatorTaxChests(server);
 			saveKilkaSeaBeacons(server);
 			saveLongPassiveEffects(server);
+			GennadiyReportTracker.save(server);
 			cleanupLongPassiveEffectsForShutdown(server);
 			cleanupAllAncientUkrCreditors(server, false);
 			cleanupAllCartelRaceEntities(server, true);
 			restoreAllCartelDisguises(server);
 			restoreAllCopperManJetpacks(server);
+			restoreAllKilkaAttackVisuals(server);
 			restoreAllCopperManDefenseVisuals(server);
 			cleanupAllGennadiyDonkeys(server);
 			cleanupAllGennadiyHookChains(server);
@@ -1703,6 +1728,7 @@ public final class ServerRaceSystem {
 			COPPER_MAN_DEFENSE_TINT_CACHE.clear();
 			COPPER_MAN_DEFENSE_TINT_RETRY_AT_MS.clear();
 			COPPER_MAN_DEFENSE_TINT_BUILD_IN_FLIGHT.clear();
+			KILKA_ATTACK_VISUAL_SESSIONS.clear();
 			GENNADIY_DONKEY_COOLDOWNS.clear();
 			GENNADIY_DONKEY_STATES.clear();
 			GENNADIY_DONKEY_OWNER_BY_ENTITY.clear();
@@ -1744,8 +1770,7 @@ public final class ServerRaceSystem {
 			LITTLE_DICTATOR_PING_OVERLAY_ACTIVE.clear();
 			LITTLE_DICTATOR_DEFENSE_WAVES.clear();
 			LITTLE_DICTATOR_UNIQUE_SHOCK_WAVES.clear();
-			LITTLE_DICTATOR_DELAYED_PACKETS.clear();
-			LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.clear();
+			LITTLE_DICTATOR_PACKET_QUEUE.clear();
 			LITTLE_DICTATOR_TAX_CHEST_PENDING.clear();
 			LITTLE_DICTATOR_TAX_CHESTS.clear();
 			LITTLE_DICTATOR_TAX_CHEST_HIGHLIGHTS.clear();
@@ -1782,6 +1807,7 @@ public final class ServerRaceSystem {
 					syncWomanShnyagaLinks(server);
 					updateMarkRageHud(handler.player);
 					prewarmCopperManDefenseTint(server, handler.player);
+					prewarmKilkaAttackTints(server, handler.player);
 					restoreLongPassiveEffectsForPlayer(server, handler.player);
 					clearStaleKilkaSalmonInvisibility(handler.player);
 					syncAncientUkrGasMaskForRace(handler.player);
@@ -1805,6 +1831,7 @@ public final class ServerRaceSystem {
 			CARTEL_TRAVKA_GROWTH_ATTEMPTS.removeIf(attempt -> attempt.playerId.equals(handler.player.getUUID()));
 			COPPER_GOLEM_FOLLOWERS.entrySet().removeIf(entry -> handler.player.getUUID().equals(entry.getValue()));
 			clearCopperManDefenseVisual(handler.player);
+			clearKilkaAttackVisual(handler.player);
 			clearCopperManJetpack(handler.player);
 			COPPER_MAN_JETPACK_MOVEMENT_SAMPLES.remove(handler.player.getUUID());
 			COPPER_MAN_JETPACK_GROUND_INERTIA.remove(handler.player.getUUID());
@@ -1875,6 +1902,7 @@ public final class ServerRaceSystem {
 				removeKilkaStockMiningModifiers(newPlayer);
 				clearKilkaSeaBeaconClientDisplays(newPlayer);
 				KILKA_ATTACK_FLASHES.remove(newPlayer.getUUID());
+				clearKilkaAttackVisual(newPlayer);
 				KILKA_SALMON_FORM_RESTORE_TICKS.remove(newPlayer.getUUID());
 				cleanupKilkaSalmonForm(newPlayer.level().getServer(), newPlayer.getUUID(), KILKA_SALMON_FORMS.remove(newPlayer.getUUID()), true);
 				forgetKilkaSalmonForm(newPlayer.level().getServer(), newPlayer.getUUID());
@@ -2021,6 +2049,7 @@ public final class ServerRaceSystem {
 					.then(literal("accrue_credit_interest").executes(AncientUkrCreditSystem::forceInterestAccrual))
 					.then(literal("holines_reset").executes(OrthodoxHolinessSystem::resetHolinessCommand))
 					.then(literal("milk_pocket_clear").executes(context -> ServerMilkPocketDimensionSystem.clearAccessCommand(context.getSource())))
+					.then(literal("report_clear").executes(GennadiyReportTracker::clearCommand))
 			);
 
 			dispatcher.register(literal("use")
@@ -2041,6 +2070,14 @@ public final class ServerRaceSystem {
 					.requires(ServerRaceSystem::canUseMarkRageBarCommand)
 					.executes(ServerRaceSystem::toggleMarkRageBarFromCommand)
 			);
+
+			dispatcher.register(literal("holinessbar")
+					.requires(source -> source.getPlayer() != null && OrthodoxHolinessSystem.isOrthodox(source.getPlayer()))
+					.executes(context -> OrthodoxHolinessSystem.toggleBar(context.getSource().getPlayer())));
+			dispatcher.register(literal("speedbar")
+					.requires(source -> source.getPlayer() != null && getRace(source.getPlayer())
+							.map(race -> PURO_SAN_RACE_ID.equals(sanitizePath(race.id))).orElse(false))
+					.executes(context -> togglePuroSanOverdriveBar(context.getSource().getPlayer())));
 
 			dispatcher.register(literal("creditbar")
 					.requires(ServerRaceSystem::canUseAncientUkrCreditBarCommand)
@@ -2205,9 +2242,11 @@ public final class ServerRaceSystem {
 		CartelSecretRecipeBookSystem.syncJoinedPlayer(player);
 		CopperManGogglesSystem.syncPlayerRecipeBook(player);
 		MarkShieldRecipeSystem.syncJoinedPlayer(player);
+		NecromancerStockSystem.syncPlayerRecipeBook(player);
 		syncWomanShnyagaLinks(server);
 		updateMarkRageHud(player);
 		prewarmCopperManDefenseTint(server, player);
+		prewarmKilkaAttackTints(server, player);
 		syncAncientUkrGasMaskForRace(player);
 	}
 
@@ -2216,6 +2255,7 @@ public final class ServerRaceSystem {
 		clearCartelDisguise(player);
 		removeAncientUkrCreditor(server, playerId, true);
 		clearCopperManDefenseVisual(player);
+		clearKilkaAttackVisual(player);
 		clearCopperManJetpack(player);
 		WOMAN_DEFENSE_SESSIONS.remove(playerId);
 		if (WOMAN_DEFENSE_BLIND_PLAYERS.remove(playerId)) {
@@ -2368,6 +2408,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		clearAllGennadiyReportCooldowns(server);
 		CopperManGogglesSystem.resetAllAbilityCooldowns(server);
 		CopperManRepulsorSystem.resetAllAbilityCooldowns(server);
+		NecromancerStockSystem.restoreAllMana(server);
 	}
 
 	private static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
@@ -2498,6 +2539,23 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		}
 		if (KILKA_RACE_ID.equals(raceId) && isKilkaSalmonForm(player) && (slot == RaceAbilitySlot.ATTACK || slot == RaceAbilitySlot.DEFENSE)) {
 			player.displayClientMessage(Component.literal("В форме лосося эта способность недоступна").withStyle(ChatFormatting.RED), true);
+			return 0;
+		}
+		if (NECROMANCER_RACE_ID.equals(raceId)) {
+			if (slot == RaceAbilitySlot.ATTACK) {
+				return NecromancerAttackSystem.use(player, ability);
+			}
+			if (slot == RaceAbilitySlot.DEFENSE) {
+				return NecromancerDefenseSystem.use(player, ability);
+			}
+			if (slot == RaceAbilitySlot.UNIQUE_ABILITY) {
+				return NecromancerUniqueSystem.use(player, ability);
+			}
+			if (slot == RaceAbilitySlot.SHNYAGA) {
+				return NecromancerShnyagaSystem.use(player, ability);
+			}
+			player.displayClientMessage(Component.literal("Механика способности пока не реализована")
+					.withStyle(ChatFormatting.GRAY), true);
 			return 0;
 		}
 		if (!isCustomHandledAbility(raceId, slot) && displayGenericAbilityCooldown(player, slot)) {
@@ -3324,6 +3382,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 			caster.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, (int) Math.min(Integer.MAX_VALUE, durationTicks), 1, false, false, true));
 			startCopperManDefenseVisual(server, caster, nowTick + durationTicks);
 			playCopperManDefenseActivationSound(level, caster);
+			spawnCopperManDefenseActivationParticles(level, caster);
 			startOnlineCooldown(COPPER_MAN_DEFENSE_COOLDOWNS, caster.getUUID(), cooldownTicks);
 
 			Lg2.LOGGER.info("Player {} used copper man defense '{}' from race '{}'", caster.getGameProfile().name(), ability.abilityId, race.id);
@@ -4132,18 +4191,10 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		}
 		long nowTick = server.overworld().getGameTime();
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+			GennadiyReportTracker.observePlayer(player);
 			tickGennadiyReportPlayerInventory(player, nowTick);
 		}
-		if (nowTick % GENNADIY_REPORT_ITEM_SYNC_INTERVAL_TICKS != 0L) {
-			return;
-		}
-		for (ServerLevel level : server.getAllLevels()) {
-			for (Entity entity : level.getAllEntities()) {
-				if (entity instanceof ItemEntity itemEntity && isGennadiyReportItem(itemEntity.getItem())) {
-					enforceGennadiyReportComponents(itemEntity.getItem());
-				}
-			}
-		}
+		GennadiyReportTracker.tick(server);
 	}
 
 	private static void tickGennadiyReportPlayerInventory(ServerPlayer player, long nowTick) {
@@ -4649,6 +4700,7 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		private long remainingTicks;
 		private String disguisedName;
 		private String disguisedPlayerId;
+		private boolean disguisedAsAncientUkr;
 		private PersistedSkinValue originalSkin;
 		private PersistedSkinValue disguisedSkin;
 	}
@@ -5003,6 +5055,32 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		}
 	}
 
+	private static void spawnCopperManDefenseActivationParticles(ServerLevel level, ServerPlayer caster) {
+		if (level == null || caster == null) return;
+		DustParticleOptions copper = new DustParticleOptions(0xB85A2B, 0.62F);
+		double radius = Math.max(0.38D, caster.getBbWidth() * 0.72D);
+		double baseY = caster.getY() + caster.getBbHeight() * 0.16D;
+		double verticalStep = caster.getBbHeight() * 0.34D;
+		for (int ring = 0; ring < 3; ring++) {
+			double y = baseY + verticalStep * ring;
+			double phase = ring * Math.PI / 8.0D;
+			for (int point = 0; point < 8; point++) {
+				double angle = phase + point * Math.PI / 4.0D;
+				level.sendParticles(
+						copper,
+						caster.getX() + Math.cos(angle) * radius,
+						y,
+						caster.getZ() + Math.sin(angle) * radius,
+						1,
+						0.015D,
+						0.025D,
+						0.015D,
+						0.002D
+				);
+			}
+		}
+	}
+
 	private record AncientUkrStorageHighlight(int entityId, BlockState state) {
 	}
 
@@ -5233,6 +5311,24 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 			this.selfWeaknessTicks = Math.max(0L, selfWeaknessTicks);
 			this.selfNauseaTicks = Math.max(0L, selfNauseaTicks);
 			this.nextClickTick = startTick;
+		}
+	}
+
+	private static final class KilkaAttackVisualSession {
+		private final SkinValue originalSkin;
+		private final String playerName;
+		private int appliedStep = -1;
+		private double displayedProgress;
+		private long fadeStartTick = Long.MIN_VALUE;
+		private double fadeStartProgress;
+
+		private KilkaAttackVisualSession(SkinValue originalSkin, String playerName) {
+			this.originalSkin = originalSkin;
+			this.playerName = playerName;
+		}
+
+		private boolean isFading() {
+			return fadeStartTick != Long.MIN_VALUE;
 		}
 	}
 	private static final class MarkBleedingSession {
@@ -6063,6 +6159,17 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 			targetPlayer.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, playerSlownessDurationTicks, LITTLE_DICTATOR_ATTACK_PLAYER_SLOWNESS_LEVEL - 1, false, true, true));
 		}
 		spawnLittleDictatorAttackTargetParticles(level, target);
+		if (target instanceof ServerPlayer targetPlayer) {
+			sendPersonalSound(
+					targetPlayer,
+					SoundEvents.WARDEN_ROAR,
+					SoundSource.PLAYERS,
+					targetPlayer.position().add(0.0D, targetPlayer.getBbHeight() * 0.55D, 0.0D),
+					1.15F,
+					0.62F,
+					level.getRandom().nextLong()
+			);
+		}
 		startGenericAbilityCooldownSeconds(player, RaceAbilitySlot.ATTACK, positiveOrDefault(ability.cooldownSeconds, LITTLE_DICTATOR_ATTACK_DEFAULT_COOLDOWN_SECONDS));
 		Lg2.LOGGER.info(
 				"Player {} used little dictator attack '{}' from race '{}' on target {} and redirected {} mobs",
@@ -6080,8 +6187,23 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 			return;
 		}
 		Vec3 center = target.position().add(0.0D, Math.max(0.45D, target.getBbHeight() * 0.55D), 0.0D);
-		level.sendParticles(ParticleTypes.ENCHANT, center.x, center.y, center.z, 12, 0.22D, 0.28D, 0.22D, 0.02D);
-		level.sendParticles(ParticleTypes.CRIT, center.x, center.y + 0.08D, center.z, 8, 0.18D, 0.22D, 0.18D, 0.01D);
+		double radius = Math.max(0.48D, target.getBbWidth() * 0.85D);
+		for (int i = 0; i < 7; i++) {
+			double angle = Math.PI * 2.0D * i / 7.0D;
+			double y = center.y + ((i & 1) == 0 ? 0.30D : -0.24D);
+			level.sendParticles(
+					ParticleTypes.RAID_OMEN,
+					center.x + Math.cos(angle) * radius,
+					y,
+					center.z + Math.sin(angle) * radius,
+					0,
+					0.0D,
+					0.018D,
+					0.0D,
+					1.0D
+			);
+		}
+		level.sendParticles(ParticleTypes.CRIT, center.x, center.y + 0.08D, center.z, 11, 0.20D, 0.24D, 0.20D, 0.012D);
 	}
 
 	private static int useLittleDictatorDefense(ServerPlayer player, PlayerRaceConfig race, RaceAbilityConfig ability) {
@@ -6104,7 +6226,6 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 
 		clearLittleDictatorPingEffect(player);
 		LITTLE_DICTATOR_PING_SESSIONS.remove(player.getUUID());
-		LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.remove(player.getUUID());
 
 		for (ServerPlayer target : level.getEntitiesOfClass(ServerPlayer.class, player.getBoundingBox().inflate(radius), candidate ->
 				candidate != null && candidate != player && candidate.isAlive() && !candidate.isSpectator())) {
@@ -8898,44 +9019,22 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 	}
 
 	private static void tickLittleDictatorDelayedPackets(MinecraftServer server) {
-		if (server == null) {
-			return;
-		}
+        if (server == null) return;
+        for (var entry : LITTLE_DICTATOR_PACKET_QUEUE.drainDue(server.overworld().getGameTime())) {
+            if (server.getPlayerList().getPlayer(entry.owner()) != null) replayLittleDictatorPacket(entry);
+        }
+    }
 
-		long nowTick = server.overworld().getGameTime();
-		List<LittleDictatorDelayedPacket> readyPackets = new ArrayList<>();
-		synchronized (LITTLE_DICTATOR_DELAYED_PACKETS) {
-			if (LITTLE_DICTATOR_DELAYED_PACKETS.isEmpty()) {
-				return;
-			}
-			Iterator<LittleDictatorDelayedPacket> iterator = LITTLE_DICTATOR_DELAYED_PACKETS.iterator();
-			while (iterator.hasNext()) {
-				LittleDictatorDelayedPacket delayedPacket = iterator.next();
-				if (delayedPacket == null || nowTick < delayedPacket.releaseTick()) {
-					continue;
-				}
-				iterator.remove();
-				if (delayedPacket.playerId() == null
-						|| server.getPlayerList().getPlayer(delayedPacket.playerId()) == null
-						|| delayedPacket.action() == null) {
-					continue;
-				}
-				readyPackets.add(delayedPacket);
-			}
-		}
-		for (LittleDictatorDelayedPacket delayedPacket : readyPackets) {
-			LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.set(Boolean.TRUE);
-			try {
-				delayedPacket.action().run();
-			} catch (RuntimeException exception) {
-				Lg2.LOGGER.warn("Failed to replay delayed Little Dictator packet for {}", delayedPacket.playerId(), exception);
-			} finally {
-				LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.set(Boolean.FALSE);
-			}
-		}
-	}
+    private static void replayLittleDictatorPacket(OrderedPacketDelayQueue.Entry<UUID> entry) {
+        ThreadLocal<Boolean> guard = entry.inbound() ? LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET : LITTLE_DICTATOR_REPLAYING_OUTGOING_PACKET;
+        boolean previous = Boolean.TRUE.equals(guard.get());
+        guard.set(true);
+        try { entry.action().run(); }
+        catch (RuntimeException exception) { Lg2.LOGGER.warn("Failed to replay delayed packet for {}", entry.owner(), exception); }
+        finally { guard.set(previous); }
+    }
 
-	private static void tickLittleDictatorDefenseWaves(MinecraftServer server) {
+    private static void tickLittleDictatorDefenseWaves(MinecraftServer server) {
 		if (server == null || LITTLE_DICTATOR_DEFENSE_WAVES.isEmpty()) {
 			return;
 		}
@@ -8975,7 +9074,6 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			LittleDictatorPingSession session = entry.getValue();
 			if (session == null) {
 				LITTLE_DICTATOR_PING_OVERLAY_ACTIVE.remove(playerId);
-				LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.remove(playerId);
 				iterator.remove();
 				continue;
 			}
@@ -8993,13 +9091,11 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			}
 			if (nowTick >= session.endTick()) {
 				clearLittleDictatorPingEffect(player);
-				LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.remove(playerId);
 				iterator.remove();
 				continue;
 			}
 			if (isLittleDictatorPlayer(player)) {
 				clearLittleDictatorPingEffect(player);
-				LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.remove(playerId);
 				iterator.remove();
 				continue;
 			}
@@ -9028,102 +9124,60 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		if (player == null || player.connection == null) {
 			return;
 		}
+		flushLittleDictatorDelayedPackets(player);
 		sendLittleDictatorActualLatency(player);
 		syncLittleDictatorDefenseOverlay(player, false, true);
 	}
 
-	public static boolean delayLittleDictatorServerboundPacket(ServerPlayer player, Runnable action) {
-		if (player == null || player.connection == null || action == null) {
-			return false;
-		}
-		if (isLittleDictatorPlayer(player)) {
-			return false;
-		}
-		if (Boolean.TRUE.equals(LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.get())) {
-			return false;
-		}
-		LittleDictatorPingSession session = LITTLE_DICTATOR_PING_SESSIONS.get(player.getUUID());
-		if (session == null) {
-			return false;
-		}
-		MinecraftServer server = player.level() instanceof ServerLevel serverLevel ? serverLevel.getServer() : null;
-		long nowTick = server == null ? player.level().getGameTime() : server.overworld().getGameTime();
-		if (nowTick >= session.endTick()) {
-			return false;
-		}
+	private static final ThreadLocal<Boolean> LITTLE_DICTATOR_REPLAYING_OUTGOING_PACKET = ThreadLocal.withInitial(() -> false);
 
-		int pingMs = session.lastSentPingMs() > 0
-				? session.lastSentPingMs()
-				: Mth.nextInt(player.getRandom(), session.minPingMs(), session.maxPingMs());
-		int delayTicks = Mth.clamp(
-				(int) Math.ceil(pingMs / 50.0D),
-				LITTLE_DICTATOR_DEFENSE_MIN_PACKET_DELAY_TICKS,
-				LITTLE_DICTATOR_DEFENSE_MAX_PACKET_DELAY_TICKS
-		);
-		return enqueueLittleDictatorDelayedPacket(player, delayTicks, action);
-	}
+    private static void flushLittleDictatorDelayedPackets(ServerPlayer player) {
+        if (player == null) return;
+        boolean incoming = Boolean.TRUE.equals(LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.get());
+        boolean outgoing = Boolean.TRUE.equals(LITTLE_DICTATOR_REPLAYING_OUTGOING_PACKET.get());
+        LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.set(true);
+        LITTLE_DICTATOR_REPLAYING_OUTGOING_PACKET.set(true);
+        try {
+            for (var entry : LITTLE_DICTATOR_PACKET_QUEUE.drainOwner(player.getUUID())) replayLittleDictatorPacket(entry);
+        } finally {
+            LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.set(incoming);
+            LITTLE_DICTATOR_REPLAYING_OUTGOING_PACKET.set(outgoing);
+        }
+    }
 
-	public static boolean delayLittleDictatorClientboundPacket(ServerPlayer player, Packet<?> packet, Runnable action) {
-		if (player == null || player.connection == null || packet == null || action == null) {
-			return false;
-		}
-		if (isLittleDictatorPlayer(player)) {
-			return false;
-		}
-		if (Boolean.TRUE.equals(LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET.get())) {
-			return false;
-		}
-		LittleDictatorPingSession session = LITTLE_DICTATOR_PING_SESSIONS.get(player.getUUID());
-		if (session == null) {
-			return false;
-		}
-		MinecraftServer server = player.level() instanceof ServerLevel serverLevel ? serverLevel.getServer() : null;
-		long nowTick = server == null ? player.level().getGameTime() : server.overworld().getGameTime();
-		if (nowTick >= session.endTick()) {
-			return false;
-		}
+    public static boolean delayLittleDictatorServerboundPacket(ServerPlayer player, Runnable action) {
+        return delayLittleDictatorPacket(player, true, action);
+    }
 
-		int pingMs = session.lastSentPingMs() > 0
-				? session.lastSentPingMs()
-				: Mth.nextInt(player.getRandom(), session.minPingMs(), session.maxPingMs());
-		int delayTicks = Mth.clamp(
-				(int) Math.ceil(pingMs / 50.0D),
-				LITTLE_DICTATOR_DEFENSE_MIN_PACKET_DELAY_TICKS,
-				LITTLE_DICTATOR_DEFENSE_MAX_PACKET_DELAY_TICKS
-		);
-		return enqueueLittleDictatorDelayedPacket(player, delayTicks, action);
-	}
+    public static boolean delayLittleDictatorClientboundPacket(ServerPlayer player, Packet<?> packet, Runnable action) {
+        if (packet == null) return false;
+        return delayLittleDictatorPacket(player, false, action);
+    }
 
-	private static boolean enqueueLittleDictatorDelayedPacket(ServerPlayer player, int delayTicks, Runnable action) {
-		if (player == null || action == null) {
-			return false;
-		}
-		MinecraftServer server = player.level() instanceof ServerLevel serverLevel ? serverLevel.getServer() : null;
-		long nowTick = server == null ? player.level().getGameTime() : server.overworld().getGameTime();
-		UUID playerId = player.getUUID();
-		long targetReleaseTick = nowTick + delayTicks;
-		long lastReleaseTick = LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.getOrDefault(playerId, Long.MIN_VALUE);
-		long releaseTick = Math.max(targetReleaseTick, lastReleaseTick);
-		LITTLE_DICTATOR_LAST_DELAYED_PACKET_RELEASE_TICKS.put(playerId, releaseTick);
-		synchronized (LITTLE_DICTATOR_DELAYED_PACKETS) {
-			int queuedForPlayer = 0;
-			Iterator<LittleDictatorDelayedPacket> iterator = LITTLE_DICTATOR_DELAYED_PACKETS.iterator();
-			while (iterator.hasNext()) {
-				LittleDictatorDelayedPacket delayedPacket = iterator.next();
-				if (delayedPacket != null && playerId.equals(delayedPacket.playerId())) {
-					queuedForPlayer++;
-					if (queuedForPlayer >= LITTLE_DICTATOR_DEFENSE_MAX_DELAYED_PACKETS_PER_PLAYER) {
-						iterator.remove();
-						break;
-					}
-				}
-			}
-			LITTLE_DICTATOR_DELAYED_PACKETS.add(new LittleDictatorDelayedPacket(playerId, releaseTick, action));
-		}
-		return true;
-	}
+    private static boolean delayLittleDictatorPacket(ServerPlayer player, boolean incoming, Runnable action) {
+        if (player == null || player.connection == null || action == null) return false;
+        ThreadLocal<Boolean> guard = incoming ? LITTLE_DICTATOR_REPLAYING_DELAYED_PACKET : LITTLE_DICTATOR_REPLAYING_OUTGOING_PACKET;
+        if (Boolean.TRUE.equals(guard.get())) return false;
+        MinecraftServer server = player.level().getServer();
+        if (server == null) return false;
+        if (!server.isSameThread()) {
+            server.execute(() -> { if (!delayLittleDictatorPacket(player, incoming, action)) action.run(); });
+            return true;
+        }
+        if (isLittleDictatorPlayer(player)) return false;
+        LittleDictatorPingSession session = LITTLE_DICTATOR_PING_SESSIONS.get(player.getUUID());
+        long now = server.overworld().getGameTime();
+        if (session == null || now >= session.endTick()) return false;
+        int ping = session.lastSentPingMs() > 0 ? session.lastSentPingMs() : session.minPingMs();
+        // The configured ping is round-trip time, split evenly across both directions.
+        int ticks = Mth.clamp((int) Math.ceil(ping / 100.0D), 1, LITTLE_DICTATOR_DEFENSE_MAX_PACKET_DELAY_TICKS);
+        for (var entry : LITTLE_DICTATOR_PACKET_QUEUE.enqueue(player.getUUID(), incoming, now, ticks, action)) {
+            replayLittleDictatorPacket(entry);
+        }
+        return true;
+    }
 
-	private static void sendLittleDictatorActualLatency(ServerPlayer player) {
+    private static void sendLittleDictatorActualLatency(ServerPlayer player) {
 		if (player == null || player.connection == null) {
 			return;
 		}
@@ -9148,7 +9202,16 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 				0,
 				(RemoteChatSession.Data) null
 		));
-		player.connection.send(packet);
+		MinecraftServer server = player.level() instanceof ServerLevel serverLevel ? serverLevel.getServer() : null;
+		if (server == null) {
+			player.connection.send(packet);
+			return;
+		}
+		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+			if (viewer != null && viewer.connection != null) {
+				viewer.connection.send(packet);
+			}
+		}
 	}
 
 	private static void syncLittleDictatorDefenseOverlay(ServerPlayer player, boolean enabled, boolean force) {
@@ -9675,6 +9738,8 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		}
 		ClientboundRemoveEntitiesPacket removeEntityPacket = new ClientboundRemoveEntitiesPacket(player.getId());
 		ClientboundTrackedWaypointPacket removeWaypointPacket = ClientboundTrackedWaypointPacket.removeWaypoint(player.getUUID());
+		level.getChunkSource().chunkMap.move(player);
+		level.getWaypointManager().untrackWaypoint(player);
 		for (ServerPlayer viewer : level.players()) {
 			if (viewer == null || viewer == player || viewer.connection == null) {
 				continue;
@@ -9719,22 +9784,22 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
 			ServerLevel level = session == null ? null : server.getLevel(session.dimension);
 			if (session == null || player == null || level == null || !player.level().dimension().equals(session.dimension) || !canUseMilkMouse(player)) {
-				cleanupMilkMouseSession(server, playerId, session, player != null, true);
 				iterator.remove();
+				cleanupMilkMouseSession(server, playerId, session, player != null, true);
 				continue;
 			}
 
 			Entity controlledEntity = level.getEntity(session.controlledSilverfishId);
 			if (!(controlledEntity instanceof Silverfish controlled) || !controlled.isAlive()) {
-				cleanupMilkMouseSession(server, playerId, session, true, true);
 				iterator.remove();
+				cleanupMilkMouseSession(server, playerId, session, true, true);
 				continue;
 			}
 
 			session.lastPosition = controlled.position();
 			if (level.getGameTime() >= session.endTick) {
-				cleanupMilkMouseSession(server, playerId, session, true, true);
 				iterator.remove();
+				cleanupMilkMouseSession(server, playerId, session, true, true);
 				continue;
 			}
 
@@ -9855,6 +9920,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			return;
 		}
 		for (Map.Entry<UUID, MilkMouseSession> entry : new ArrayList<>(MILK_MOUSE_SESSIONS.entrySet())) {
+			MILK_MOUSE_SESSIONS.remove(entry.getKey());
 			cleanupMilkMouseSession(server, entry.getKey(), entry.getValue(), restorePlayers, false);
 		}
 	}
@@ -9901,6 +9967,13 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			player.connection.teleport(returnPosition.x, returnPosition.y, returnPosition.z, player.getYRot(), player.getXRot());
 		}
 		player.setDeltaMovement(Vec3.ZERO);
+		if (!isMilkMouseActive(player) && player.level() instanceof ServerLevel restoredLevel) {
+			restoredLevel.getChunkSource().chunkMap.move(player);
+			restoredLevel.getWaypointManager().untrackWaypoint(player);
+			if (player.isTransmittingWaypoint()) {
+				restoredLevel.getWaypointManager().trackWaypoint(player);
+			}
+		}
 	}
 
 	private static Vec3 getMilkMouseReturnPosition(ServerLevel level, MilkMouseSession session) {
@@ -11777,6 +11850,10 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		return server.getWorldPath(LevelResource.ROOT).resolve("data").resolve(MARK_RAGE_STATE_FILE_NAME);
 	}
 
+	public static void markGennadiyReportDestroyed(MinecraftServer server, ItemStack stack) {
+		GennadiyReportTracker.destroyed(server, stack);
+	}
+
 	private static void writePersistedState(Path path, Object state, String stateName) {
 		try {
 			Files.createDirectories(path.getParent());
@@ -11900,6 +11977,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			stored.remainingTicks = Math.max(0L, session.endTick - nowTick);
 			stored.disguisedName = session.disguisedName;
 			stored.disguisedPlayerId = session.disguisedPlayerId == null ? null : session.disguisedPlayerId.toString();
+			stored.disguisedAsAncientUkr = session.disguisedAsAncientUkr;
 			stored.originalSkin = persistSkinValue(session.originalSkin);
 			stored.disguisedSkin = persistSkinValue(session.disguisedSkin);
 			if (stored.originalSkin != null && stored.disguisedSkin != null) {
@@ -12026,6 +12104,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 								nonBlank(stored.disguisedName, ""),
 								nowTick + Math.max(0L, stored.remainingTicks)
 						));
+						CARTEL_DISGUISE_SESSIONS.get(playerId).disguisedAsAncientUkr = stored.disguisedAsAncientUkr;
 					}
 				}
 			}
@@ -12083,6 +12162,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 				if (disguiseSession.disguisedPlayerId != null) {
 					CartelWebcamBridge.beginDisguise(playerId, disguiseSession.disguisedPlayerId);
 				}
+				CartelGasMaskVisualSystem.sync(player);
 			}
 		}
 	}
@@ -13582,6 +13662,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 				radius
 		);
 		MARK_DEFENSE_SESSIONS.put(player.getUUID(), session);
+		displayMarkDefenseTimer(player, session, level.getGameTime());
 		captureMarkDefenseProjectiles(level, player, session);
 		spawnMarkDefenseActivationSphere(level, player, radius);
 		playMarkDefenseActivationSound(level, player);
@@ -14925,8 +15006,8 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			removeAttributeModifier(blockBreakSpeed, KILKA_STOCK_LAND_MINING_PENALTY_MODIFIER_ID);
 			removeAttributeModifier(movementSpeed, KILKA_STOCK_LAND_MOVEMENT_PENALTY_MODIFIER_ID);
 			restoreKilkaStockClientWalkingSpeed(player);
-			syncKilkaStockSeaFloorWaterEfficiency(player, waterMovementEfficiency);
-			removeAttributeModifier(movementSpeed, KILKA_STOCK_SEAFLOOR_MOVEMENT_SPEED_MODIFIER_ID);
+			syncKilkaStockWaterEfficiency(player, waterMovementEfficiency);
+			syncKilkaStockSwimmingSpeed(player, movementSpeed);
 			removeAttributeModifier(submergedMiningSpeed, KILKA_STOCK_UNDERWATER_MINING_BONUS_MODIFIER_ID);
 			if (!hasAquaAffinity) {
 				applyKilkaMissingAttributeBonus(
@@ -14941,10 +15022,10 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		removeAttributeModifier(submergedMiningSpeed, KILKA_STOCK_UNDERWATER_MINING_BONUS_MODIFIER_ID);
 		if (feetInWater) {
 			removeAttributeModifier(movementSpeed, KILKA_STOCK_LAND_MOVEMENT_PENALTY_MODIFIER_ID);
-			// Only the vanilla water-efficiency attribute changes movement on the sea floor.
+			// Use the same vanilla water-efficiency path for wading and free swimming.
 			restoreKilkaStockClientWalkingSpeed(player);
-			syncKilkaStockSeaFloorWaterEfficiency(player, waterMovementEfficiency);
-			removeAttributeModifier(movementSpeed, KILKA_STOCK_SEAFLOOR_MOVEMENT_SPEED_MODIFIER_ID);
+			syncKilkaStockWaterEfficiency(player, waterMovementEfficiency);
+			syncKilkaStockSwimmingSpeed(player, movementSpeed);
 		} else {
 			removeAttributeModifier(waterMovementEfficiency, KILKA_STOCK_UNDERWATER_WALKING_BONUS_MODIFIER_ID);
 			removeAttributeModifier(movementSpeed, KILKA_STOCK_SEAFLOOR_MOVEMENT_SPEED_MODIFIER_ID);
@@ -15035,25 +15116,29 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		}
 	}
 
-	private static void syncKilkaStockSeaFloorWaterEfficiency(
+	private static void syncKilkaStockWaterEfficiency(
 			ServerPlayer player,
 			AttributeInstance waterMovementEfficiency
 	) {
 		applyKilkaMissingAttributeBonus(
 				waterMovementEfficiency,
 				KILKA_STOCK_UNDERWATER_WALKING_BONUS_MODIFIER_ID,
-				isKilkaStockSeaFloorWalking(player) ? 1.0D : 0.0D
+				player != null && !isKilkaSalmonForm(player)
+						&& (isKilkaFeetInWater(player) || isKilkaHeadUnderwater(player)) ? 1.0D : 0.0D
 		);
 	}
 
-	private static boolean isKilkaStockSeaFloorWalking(ServerPlayer player) {
-		return player != null
-				&& !isKilkaSalmonForm(player)
-				&& (isKilkaFeetInWater(player) || isKilkaHeadUnderwater(player))
-				&& (player.onGround()
-						|| player.verticalCollisionBelow
-						|| hasKilkaFloorSupport(player, 0.1D));
+	private static void syncKilkaStockSwimmingSpeed(ServerPlayer player, AttributeInstance speed) {
+		if (player.onGround()) {
+			removeAttributeModifier(speed, KILKA_STOCK_SEAFLOOR_MOVEMENT_SPEED_MODIFIER_ID);
+			return;
+		}
+		double original = getKilkaStockExternalMovementSpeed(speed, KILKA_STOCK_SEAFLOOR_MOVEMENT_SPEED_MODIFIER_ID);
+		// Vanilla halves water efficiency in mid-water, changing both input and drag.
+		double compensated = KilkaWaterSpeed.swimmingAttribute(original, player.isSprinting(), player.hasEffect(MobEffects.DOLPHINS_GRACE));
+		syncKilkaStockFinalMovementSpeed(speed, KILKA_STOCK_SEAFLOOR_MOVEMENT_SPEED_MODIFIER_ID, Math.max(0.0D, compensated));
 	}
+
 	private static boolean isKilkaStockMiningSupported(ServerPlayer player) {
 		return player != null && (player.onGround() || hasKilkaFloorSupport(player, 0.1D));
 	}
@@ -15342,6 +15427,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		KilkaAttackChargeSession interruptedCharge = KILKA_ATTACK_CHARGES.remove(playerId);
 		if (interruptedCharge != null) {
 			cleanupKilkaAttackCharge(player);
+			clearKilkaAttackVisual(player);
 		}
 		KILKA_DEFENSE_SESSIONS.remove(playerId);
 		startKilkaSalmonForm(player, ability, true);
@@ -17830,8 +17916,9 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 	}
 
 	public static boolean isLockedAncientUkrGasMaskSlot(ServerPlayer player, EquipmentSlot slot) {
-		return slot == EquipmentSlot.HEAD && isAncientUkrPlayer(player)
-				&& isAncientUkrGasMask(player.getItemBySlot(EquipmentSlot.HEAD));
+		return player != null && slot == EquipmentSlot.HEAD
+				&& (isCartelGasMaskVisualActive(player) || (isAncientUkrPlayer(player)
+					&& isAncientUkrGasMask(player.getItemBySlot(EquipmentSlot.HEAD))));
 	}
 
 	public static boolean isLockedAncientUkrGasMaskSlot(
@@ -17839,16 +17926,15 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			AbstractContainerMenu menu,
 			int slotIndex
 	) {
-		if (!isAncientUkrPlayer(player) || menu == null || slotIndex < 0 || slotIndex >= menu.slots.size()) return false;
+		if (player == null || menu == null || slotIndex < 0 || slotIndex >= menu.slots.size()) return false;
 		return isLockedAncientUkrGasMaskSlot(player, menu.getSlot(slotIndex));
 	}
 
 	public static boolean isLockedAncientUkrGasMaskSlot(ServerPlayer player, Slot slot) {
-		return isAncientUkrPlayer(player)
-				&& slot != null
+		return player != null && slot != null
 				&& slot.container == player.getInventory()
 				&& slot.getContainerSlot() == ANCIENT_UKR_GAS_MASK_HEAD_INVENTORY_SLOT
-				&& isAncientUkrGasMask(slot.getItem());
+				&& isLockedAncientUkrGasMaskSlot(player, EquipmentSlot.HEAD);
 	}
 	private static int useAncientUkrUnique(ServerPlayer player, PlayerRaceConfig race, RaceAbilityConfig ability) {
 		if (player == null || race == null || ability == null || !(player.level() instanceof ServerLevel level) || !player.isAlive() || player.isSpectator()) return 0;
@@ -17998,6 +18084,11 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 		double maxDistance = positiveOrDefault(ability.ancientUkrShnyagaMaxDistanceBlocks, ANCIENT_UKR_SHNYAGA_DEFAULT_MAX_DISTANCE_BLOCKS);
 		AncientUkrCreditorEntity creditor = spawnAncientUkrCreditor(level, player);
 		if (creditor == null) {
+			player.displayClientMessage(
+					Component.literal("\u041d\u0435\u0442 \u043c\u0435\u0441\u0442\u0430 \u0434\u043b\u044f \u043a\u0440\u0435\u0434\u0438\u0442\u043e\u0440\u0430")
+							.withStyle(style -> style.withColor(ChatFormatting.RED).withItalic(false)),
+					true
+			);
 			return 0;
 		}
 		Vec3 anchorPosition = creditor.position();
@@ -18336,8 +18427,8 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 	private static void spawnAncientUkrSmokeParticles(ServerLevel level, Vec3 origin, double radius) {
 		if (radius <= 0.03D) return;
 		RandomSource random = level.random;
-		int shellCount = Math.max(51, (int) Math.ceil(radius * radius * 1.875D));
-		int volumeCount = Math.max(78, (int) Math.ceil(radius * radius * 3.45D));
+		int shellCount = Math.max(26, (int) Math.ceil(radius * radius * 0.9375D));
+		int volumeCount = Math.max(39, (int) Math.ceil(radius * radius * 1.725D));
 		for (int index = 0; index < shellCount + volumeCount; index++) {
 			double cosTheta = random.nextDouble() * 2.0D - 1.0D;
 			double phi = random.nextDouble() * Math.PI * 2.0D;
@@ -18351,7 +18442,7 @@ private static int useAncientUkrShnyaga(ServerPlayer player, PlayerRaceConfig ra
 			level.sendParticles(ParticleTypes.CAMPFIRE_SIGNAL_SMOKE, x, y, z, 1,
 					0.024D, 0.024D, 0.024D, 0.0005D);
 		}
-		int outerTrailCount = Math.max(9, (int) Math.ceil(radius * 2.4D));
+		int outerTrailCount = Math.max(5, (int) Math.ceil(radius * 1.2D));
 		double maxTrailLength = Math.min(2.0D, radius * 0.32D);
 		for (int index = 0; index < outerTrailCount; index++) {
 			double cosTheta = random.nextDouble() * 2.0D - 1.0D;
@@ -18916,6 +19007,7 @@ Vec3 offset = target.position().subtract(origin);
 				asTicks(positiveOrDefault(ability.kilkaAttackSelfWeaknessSeconds, KILKA_ATTACK_DEFAULT_SELF_WEAKNESS_SECONDS)),
 				asTicks(positiveOrDefault(ability.kilkaAttackSelfNauseaSeconds, KILKA_ATTACK_DEFAULT_SELF_NAUSEA_SECONDS))
 		));
+		startKilkaAttackVisual(player);
 		syncKilkaAttackChargeScale(player, 0.0D);
 		Lg2.LOGGER.info("Player {} started kilka attack '{}' from race '{}'", player.getGameProfile().name(), ability.abilityId, race.id);
 		return 1;
@@ -18927,6 +19019,7 @@ Vec3 offset = target.position().subtract(origin);
 		}
 		tickKilkaAttackFlash(server);
 		tickKilkaIrradiation(server);
+		tickKilkaAttackVisuals(server);
 		if (KILKA_ATTACK_CHARGES.isEmpty()) {
 			return;
 		}
@@ -18939,6 +19032,7 @@ Vec3 offset = target.position().subtract(origin);
 			if (session == null || player == null || level == null || player.level() != level || !player.isAlive() || player.isSpectator()) {
 				if (player != null) {
 					syncKilkaAttackChargeScale(player, 0.0D);
+					clearKilkaAttackVisual(player);
 				}
 				iterator.remove();
 				continue;
@@ -18947,12 +19041,14 @@ Vec3 offset = target.position().subtract(origin);
 			if (nowTick >= session.endTick) {
 				iterator.remove();
 				syncKilkaAttackChargeScale(player, 0.0D);
+				clearKilkaAttackVisual(player);
 				explodeKilkaAttack(level, player, session);
 				startGenericAbilityCooldownSeconds(player, RaceAbilitySlot.ATTACK, session.fullCooldownTicks / 20.0D);
 				continue;
 			}
 			double progress = Mth.clamp((double) (nowTick - session.startTick) / (double) session.chargeTicks, 0.0D, 1.0D);
 			syncKilkaAttackChargeScale(player, progress);
+			syncKilkaAttackVisual(server, player, progress);
 			spawnKilkaAttackChargeParticles(level, player, progress);
 			playKilkaAttackGeigerClick(level, player, session, progress, nowTick);
 			double remainingSeconds = Math.max(0.0D, (session.endTick - nowTick) / 20.0D);
@@ -19014,6 +19110,7 @@ Vec3 offset = target.position().subtract(origin);
 			return;
 		}
 		cleanupKilkaAttackCharge(player);
+		startKilkaAttackVisualFade(player);
 		long nowTick = player.level().getGameTime();
 		double spentRatio = Mth.clamp((double) (nowTick - session.startTick) / (double) session.chargeTicks, 0.0D, 1.0D);
 		long cooldownTicks = Math.round(session.fullCooldownTicks * spentRatio);
@@ -20219,7 +20316,19 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 
 			captureMarkDefenseProjectiles(level, player, session);
 			syncMarkDefenseCapturedProjectiles(server, level, player, session);
+			if (level.getGameTime() % 10L == 0L) {
+				displayMarkDefenseTimer(player, session, level.getGameTime());
+			}
 		}
+	}
+
+	private static void displayMarkDefenseTimer(ServerPlayer player, MarkDefenseSession session, long nowTick) {
+		player.displayClientMessage(Component.literal(formatMarkDefenseTimer(session.endTick - nowTick))
+				.withStyle(style -> style.withColor(0xD3D3D3).withItalic(false)), true);
+	}
+
+	static String formatMarkDefenseTimer(long remainingTicks) {
+		return Math.max(0L, (remainingTicks + 19L) / 20L) + "s";
 	}
 
 	private static void captureMarkDefenseProjectiles(ServerLevel level, ServerPlayer player, MarkDefenseSession session) {
@@ -20372,8 +20481,12 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 	}
 
 	private static void releaseMarkDefenseField(MinecraftServer server, MarkDefenseSession session, boolean repel, ServerPlayer player) {
-		if (server == null || session == null || session.capturedProjectiles.isEmpty()) {
+		if (server == null || session == null) {
 			return;
+		}
+		ServerPlayer owner = server.getPlayerList().getPlayer(session.playerId);
+		if (owner != null) {
+			owner.displayClientMessage(Component.empty(), true);
 		}
 		ServerLevel level = session.dimension == null ? null : server.getLevel(session.dimension);
 		Vec3 center = player != null && player.level() == level ? getMarkDefenseCenter(player) : null;
@@ -20425,7 +20538,30 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 		projectile.setInvisible(captured.originalInvisible);
 		projectile.setOwner(player);
 		projectile.shoot(direction.x, direction.y, direction.z, (float) speed, 0.0F);
+		playMarkDefenseProjectileLaunchSound(player, projectile);
 		projectile.hurtMarked = true;
+	}
+
+	private static void playMarkDefenseProjectileLaunchSound(ServerPlayer player, Projectile projectile) {
+		String soundId = switch (BuiltInRegistries.ENTITY_TYPE.getKey(projectile.getType()).getPath()) {
+			case "trident" -> "item.trident.throw";
+			case "snowball" -> "entity.snowball.throw";
+			case "egg" -> "entity.egg.throw";
+			case "ender_pearl" -> "entity.ender_pearl.throw";
+			case "potion", "splash_potion", "lingering_potion" -> "entity.splash_potion.throw";
+			case "experience_bottle" -> "entity.experience_bottle.throw";
+			case "firework_rocket" -> "entity.firework_rocket.launch";
+			case "fireball", "small_fireball", "dragon_fireball" -> "entity.ghast.shoot";
+			case "shulker_bullet" -> "entity.shulker.shoot";
+			case "llama_spit" -> "entity.llama.spit";
+			case "wind_charge", "breeze_wind_charge" -> "entity.wind_charge.throw";
+			default -> "entity.arrow.shoot";
+		};
+		SoundEvent sound = BuiltInRegistries.SOUND_EVENT.getValue(Identifier.withDefaultNamespace(soundId));
+		if (sound != null && player.level() instanceof ServerLevel level) {
+			level.playSound(null, player.getX(), player.getY(), player.getZ(), sound, SoundSource.PLAYERS,
+					0.7F, 0.9F + player.getRandom().nextFloat() * 0.2F);
+		}
 	}
 
 	private static void setMarkDefenseProjectileNoPhysics(Projectile projectile, boolean noPhysics) {
@@ -21707,6 +21843,7 @@ private static int confirmGennadiyReport(CommandContext<CommandSourceStack> cont
 			player.setItemInHand(pending.hand(), reportStack);
 		}
 
+		GennadiyReportTracker.created(player, reportStack);
 		player.getCooldowns().removeCooldown(GENNADIY_REPORT_COOLDOWN_GROUP_ID);
 		sendPersonalSound(player, SoundEvents.WITHER_SPAWN, SoundSource.PLAYERS, player.position(), 1.0F, 1.0F, nowTick ^ player.getUUID().getLeastSignificantBits());
 		return 1;
@@ -21773,6 +21910,7 @@ private static InteractionHand selectGennadiyReportHand(ServerPlayer player) {
 	}
 
 	private static GennadiyReportData readGennadiyReportData(ItemStack stack) {
+		if (stack != null && GennadiyReportTracker.isRevoked(stack)) return null;
 		if (stack == null || stack.isEmpty()) {
 			return null;
 		}
@@ -21815,89 +21953,7 @@ private static InteractionHand selectGennadiyReportHand(ServerPlayer player) {
 	}
 
 	private static boolean hasActiveGennadiyReport(MinecraftServer server) {
-		if (server == null) {
-			return false;
-		}
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
-			if (findGennadiyReportInPlayer(player) != null) {
-				return true;
-			}
-		}
-		for (ServerLevel level : server.getAllLevels()) {
-			for (Entity entity : level.getAllEntities()) {
-				if (entity instanceof ItemEntity itemEntity && isGennadiyReportItem(itemEntity.getItem())) {
-					enforceGennadiyReportComponents(itemEntity.getItem());
-					return true;
-				}
-			}
-			if (hasGennadiyReportInLoadedContainers(level)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static ItemStack findGennadiyReportInPlayer(ServerPlayer player) {
-		if (player == null) {
-			return null;
-		}
-		Inventory inventory = player.getInventory();
-		for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
-			ItemStack stack = inventory.getItem(slot);
-			if (isGennadiyReportItem(stack)) {
-				enforceGennadiyReportComponents(stack);
-				return stack;
-			}
-		}
-		ItemStack carried = player.containerMenu == null ? ItemStack.EMPTY : player.containerMenu.getCarried();
-		if (isGennadiyReportItem(carried)) {
-			enforceGennadiyReportComponents(carried);
-			return carried;
-		}
-		return null;
-	}
-
-	private static boolean hasGennadiyReportInLoadedContainers(ServerLevel level) {
-		if (level == null) {
-			return false;
-		}
-		Set<Long> checkedChunks = new HashSet<>();
-		for (ServerPlayer player : level.players()) {
-			int centerChunkX = player.chunkPosition().x;
-			int centerChunkZ = player.chunkPosition().z;
-			for (int chunkX = centerChunkX - GENNADIY_REPORT_CONTAINER_SCAN_CHUNK_RADIUS; chunkX <= centerChunkX + GENNADIY_REPORT_CONTAINER_SCAN_CHUNK_RADIUS; chunkX++) {
-				for (int chunkZ = centerChunkZ - GENNADIY_REPORT_CONTAINER_SCAN_CHUNK_RADIUS; chunkZ <= centerChunkZ + GENNADIY_REPORT_CONTAINER_SCAN_CHUNK_RADIUS; chunkZ++) {
-					long chunkKey = net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ);
-					if (!checkedChunks.add(chunkKey)) {
-						continue;
-					}
-					LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
-					if (chunk == null) {
-						continue;
-					}
-					for (BlockEntity blockEntity : chunk.getBlockEntities().values()) {
-						if (blockEntity instanceof Container container && containsGennadiyReport(container)) {
-							return true;
-						}
-					}
-				}
-			}
-		}
-		return false;
-	}
-
-	private static boolean containsGennadiyReport(Container container) {
-		if (container == null) {
-			return false;
-		}
-		for (int slot = 0; slot < container.getContainerSize(); slot++) {
-			ItemStack stack = container.getItem(slot);
-			if (isGennadiyReportItem(stack)) {
-				enforceGennadiyReportComponents(stack);
-				return true;
-			}
-		}
-		return false;
+		return server != null && GennadiyReportTracker.hasActive(server);
 	}
 
 	private static long getGennadiyReportCooldownTicks() {
@@ -24249,6 +24305,9 @@ private static InteractionHand selectGennadiyReportHand(ServerPlayer player) {
 			displayRemainingCooldown(attacker, remainingTicks);
 			return;
 		}
+		target.connection.disconnect(Component.literal(
+				"\u0412\u0430\u0441 \u0437\u0430\u0440\u0435\u043f\u043e\u0440\u0442\u0438\u043b " + attacker.getGameProfile().name() + "."
+		));
 	}
 
 	public static void handleGennadiyRageMeleeDamage(ServerLevel level, LivingEntity victim, DamageSource damageSource, float damage, boolean applied) {
@@ -25252,7 +25311,6 @@ private static InteractionHand selectGennadiyReportHand(ServerPlayer player) {
 					reflectedDamageRatio
 			);
 			session.nextWanderRetargetTick = nowTick;
-			session.wanderTarget = caster.position();
 			CARTEL_DEFENSE_SESSIONS.put(caster.getUUID(), session);
 
 			startOnlineCooldown(CARTEL_DEFENSE_COOLDOWNS, caster.getUUID(), cooldownTicks);
@@ -25617,6 +25675,8 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 						nowTick + Math.max(1L, durationTicks)
 				)
 		);
+		CARTEL_DISGUISE_SESSIONS.get(caster.getUUID()).disguisedAsAncientUkr = isAncientUkrPlayer(target);
+		CartelGasMaskVisualSystem.sync(caster);
 
 		long cooldownTicks = asTicks(positiveOrDefault(ability.cooldownSeconds, CARTEL_DEFAULT_UNIQUE_COOLDOWN_SECONDS));
 		startOnlineCooldown(CARTEL_UNIQUE_COOLDOWNS, caster.getUUID(), cooldownTicks);
@@ -25689,6 +25749,12 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		}
 	}
 
+	public static boolean isCartelGasMaskVisualActive(ServerPlayer player) {
+		if (player == null) return false;
+		CartelDisguiseSession session = CARTEL_DISGUISE_SESSIONS.get(player.getUUID());
+		return session != null && session.disguisedAsAncientUkr;
+	}
+
 	private static void prewarmCopperManDefenseTints(MinecraftServer server) {
 		if (server == null) {
 			return;
@@ -25696,6 +25762,7 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			prewarmCopperManDefenseTint(server, player);
+			prewarmKilkaAttackTints(server, player);
 		}
 	}
 
@@ -25729,6 +25796,218 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		PlayerRaceConfig race = raceOptional.get();
 		return COPPER_MAN_RACE_ID.equals(sanitizePath(race.id))
 				&& (hasUnlockedAbility(player, race, RaceAbilitySlot.DEFENSE) || hasUnlockedAbility(player, race, RaceAbilitySlot.ATTACK));
+	}
+
+	private static void prewarmKilkaAttackTints(MinecraftServer server, ServerPlayer player) {
+		if (server == null || player == null || !player.isAlive() || player.isSpectator()) {
+			return;
+		}
+		Optional<PlayerRaceConfig> raceOptional = getRace(player);
+		if (raceOptional.isEmpty()) {
+			return;
+		}
+		PlayerRaceConfig race = raceOptional.get();
+		if (!KILKA_RACE_ID.equals(sanitizePath(race.id)) || !hasUnlockedAbility(player, race, RaceAbilitySlot.ATTACK)) {
+			return;
+		}
+
+		KilkaAttackVisualSession visual = KILKA_ATTACK_VISUAL_SESSIONS.get(player.getUUID());
+		SkinValue sourceSkin = visual == null ? captureCurrentSkinValue(player) : visual.originalSkin;
+		if (sourceSkin == null || sourceSkin.value() == null) {
+			return;
+		}
+		for (int step = 1; step <= KILKA_ATTACK_TINT_STEPS; step++) {
+			queueKilkaAttackTintBuild(server, player.getScoreboardName(), sourceSkin.value(), step);
+		}
+	}
+
+	private static void startKilkaAttackVisual(ServerPlayer player) {
+		if (player == null || player.level().getServer() == null) {
+			return;
+		}
+		KilkaAttackVisualSession existing = KILKA_ATTACK_VISUAL_SESSIONS.get(player.getUUID());
+		SkinValue originalSkin = existing == null ? captureCurrentSkinValue(player) : existing.originalSkin;
+		if (originalSkin == null || originalSkin.value() == null) {
+			return;
+		}
+		KILKA_ATTACK_VISUAL_SESSIONS.put(
+				player.getUUID(),
+				new KilkaAttackVisualSession(originalSkin, player.getScoreboardName())
+		);
+		prewarmKilkaAttackTints(player.level().getServer(), player);
+	}
+
+	private static void syncKilkaAttackVisual(MinecraftServer server, ServerPlayer player, double progress) {
+		if (server == null || player == null) {
+			return;
+		}
+		KilkaAttackVisualSession session = KILKA_ATTACK_VISUAL_SESSIONS.get(player.getUUID());
+		if (session == null || session.originalSkin == null || session.originalSkin.value() == null) {
+			return;
+		}
+
+		double clampedProgress = Mth.clamp(progress, 0.0D, 1.0D);
+		session.displayedProgress = clampedProgress;
+		int targetStep = clampedProgress <= 0.0D
+				? 0
+				: Mth.clamp((int) Math.ceil(clampedProgress * KILKA_ATTACK_TINT_STEPS), 1, KILKA_ATTACK_TINT_STEPS);
+		if (targetStep == session.appliedStep) {
+			return;
+		}
+		if (targetStep == 0) {
+			if (!isPlayerUsingSkin(player, session.originalSkin.value())) {
+				applySkin(server, player, session.originalSkin);
+			}
+			session.appliedStep = 0;
+			return;
+		}
+
+		String cacheKey = getKilkaAttackTintSourceCacheKey(session.originalSkin.value(), targetStep);
+		Property targetProperty = COPPER_MAN_DEFENSE_TINT_CACHE.get(cacheKey);
+		if (targetProperty == null) {
+			queueKilkaAttackTintBuild(server, session.playerName, session.originalSkin.value(), targetStep);
+			return;
+		}
+		if (!isPlayerUsingSkin(player, targetProperty)) {
+			SkinVariant variant = resolveSkinVariant(targetProperty);
+			applySkin(server, player, new SkinValue("lg2_kilka_attack_charge", session.playerName, variant, targetProperty, targetProperty));
+		}
+		session.appliedStep = targetStep;
+	}
+
+	private static void startKilkaAttackVisualFade(ServerPlayer player) {
+		if (player == null) {
+			return;
+		}
+		KilkaAttackVisualSession session = KILKA_ATTACK_VISUAL_SESSIONS.get(player.getUUID());
+		if (session == null) {
+			return;
+		}
+		session.fadeStartTick = player.level().getGameTime();
+		session.fadeStartProgress = session.displayedProgress;
+	}
+
+	private static void tickKilkaAttackVisuals(MinecraftServer server) {
+		if (server == null || KILKA_ATTACK_VISUAL_SESSIONS.isEmpty()) {
+			return;
+		}
+		for (Map.Entry<UUID, KilkaAttackVisualSession> entry : new ArrayList<>(KILKA_ATTACK_VISUAL_SESSIONS.entrySet())) {
+			KilkaAttackVisualSession session = entry.getValue();
+			if (session == null || !session.isFading()) {
+				continue;
+			}
+			ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
+			if (player == null) {
+				KILKA_ATTACK_VISUAL_SESSIONS.remove(entry.getKey());
+				continue;
+			}
+			long elapsed = Math.max(0L, player.level().getGameTime() - session.fadeStartTick);
+			if (elapsed >= KILKA_ATTACK_TINT_FADE_TICKS) {
+				clearKilkaAttackVisual(player);
+				continue;
+			}
+			double remaining = 1.0D - (double) elapsed / (double) KILKA_ATTACK_TINT_FADE_TICKS;
+			syncKilkaAttackVisual(server, player, session.fadeStartProgress * remaining);
+		}
+	}
+
+	private static void clearKilkaAttackVisual(ServerPlayer player) {
+		if (player == null) {
+			return;
+		}
+		KilkaAttackVisualSession session = KILKA_ATTACK_VISUAL_SESSIONS.remove(player.getUUID());
+		MinecraftServer server = player.level().getServer();
+		if (session == null || server == null || session.originalSkin == null
+				|| isPlayerUsingSkin(player, session.originalSkin.value())) {
+			return;
+		}
+		applySkin(server, player, session.originalSkin);
+	}
+
+	private static void restoreAllKilkaAttackVisuals(MinecraftServer server) {
+		if (server == null || KILKA_ATTACK_VISUAL_SESSIONS.isEmpty()) {
+			return;
+		}
+		for (UUID playerId : new ArrayList<>(KILKA_ATTACK_VISUAL_SESSIONS.keySet())) {
+			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+			if (player != null) {
+				clearKilkaAttackVisual(player);
+			}
+		}
+		KILKA_ATTACK_VISUAL_SESSIONS.clear();
+	}
+
+	private static String getKilkaAttackTintSourceCacheKey(Property sourceSkin, int step) {
+		return getCopperManDefenseTintSourceCacheKey(
+				sourceSkin,
+				false,
+				false,
+				KILKA_ATTACK_TINT_CACHE_VERSION + "|step=" + Mth.clamp(step, 1, KILKA_ATTACK_TINT_STEPS)
+		);
+	}
+
+	private static void queueKilkaAttackTintBuild(MinecraftServer server, String playerName, Property sourceSkin, int step) {
+		String cacheKey = getKilkaAttackTintSourceCacheKey(sourceSkin, step);
+		if (sourceSkin == null || cacheKey.isBlank() || COPPER_MAN_DEFENSE_TINT_CACHE.containsKey(cacheKey)) {
+			return;
+		}
+		Property diskCached = readCopperManDefenseTintFromDisk(server, cacheKey);
+		if (diskCached != null) {
+			COPPER_MAN_DEFENSE_TINT_CACHE.put(cacheKey, diskCached);
+			COPPER_MAN_DEFENSE_TINT_RETRY_AT_MS.remove(cacheKey);
+			return;
+		}
+		long nowMs = System.currentTimeMillis();
+		Long retryAtMs = COPPER_MAN_DEFENSE_TINT_RETRY_AT_MS.get(cacheKey);
+		if ((retryAtMs != null && nowMs < retryAtMs) || !COPPER_MAN_DEFENSE_TINT_BUILD_IN_FLIGHT.add(cacheKey)) {
+			return;
+		}
+
+		int safeStep = Mth.clamp(step, 1, KILKA_ATTACK_TINT_STEPS);
+		CompletableFuture.runAsync(() -> {
+			Property generated = null;
+			try {
+				generated = buildKilkaAttackTintSkin(sourceSkin, playerName, (float) safeStep / KILKA_ATTACK_TINT_STEPS);
+			} finally {
+				if (generated != null) {
+					COPPER_MAN_DEFENSE_TINT_CACHE.put(cacheKey, generated);
+					COPPER_MAN_DEFENSE_TINT_RETRY_AT_MS.remove(cacheKey);
+					writeCopperManDefenseTintToDisk(server, cacheKey, generated);
+				} else {
+					COPPER_MAN_DEFENSE_TINT_RETRY_AT_MS.put(cacheKey, nowMs + COPPER_MAN_DEFENSE_TINT_RETRY_COOLDOWN_MS);
+				}
+				COPPER_MAN_DEFENSE_TINT_BUILD_IN_FLIGHT.remove(cacheKey);
+			}
+		});
+	}
+
+	private static Property buildKilkaAttackTintSkin(Property sourceSkin, String playerName, float progress) {
+		Path tempSkinPath = null;
+		try {
+			Pair<String, SkinVariant> skinData = PlayerUtils.getSkinUrl(sourceSkin);
+			if (skinData == null || skinData.first() == null || skinData.first().isBlank()) {
+				return null;
+			}
+			BufferedImage sourceSkinImage = loadSkinImage(new URI(skinData.first()));
+			if (sourceSkinImage == null) {
+				return null;
+			}
+			BufferedImage finalSkin = applyKilkaAttackTint(sourceSkinImage, progress);
+			SkinVariant variant = skinData.second() == null ? SkinVariant.CLASSIC : skinData.second();
+			tempSkinPath = Files.createTempFile("lg2_kilka_attack_", "_" + shortSha1(sourceSkin.value()) + ".png");
+			ImageIO.write(finalSkin, "PNG", tempSkinPath.toFile());
+			return signCopperDefenseSkin(tempSkinPath.toUri(), variant);
+		} catch (Exception exception) {
+			Lg2.LOGGER.debug("Failed to build Kilka attack skin tint for {}", playerName, exception);
+			return null;
+		} finally {
+			if (tempSkinPath != null) {
+				try {
+					Files.deleteIfExists(tempSkinPath);
+				} catch (IOException ignored) {
+				}
+			}
+		}
 	}
 
 	private static void startCopperManDefenseVisual(MinecraftServer server, ServerPlayer player, long expireTick) {
@@ -26118,6 +26397,33 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		return tinted;
 	}
 
+	private static BufferedImage applyKilkaAttackTint(BufferedImage source, float progress) {
+		BufferedImage tinted = toArgb(source);
+		float strength = KILKA_ATTACK_TINT_MAX_STRENGTH * clamp01(progress);
+		for (int y = 0; y < tinted.getHeight(); y++) {
+			for (int x = 0; x < tinted.getWidth(); x++) {
+				int argb = tinted.getRGB(x, y);
+				int alpha = (argb >>> 24) & 0xFF;
+				if (alpha <= 0) {
+					continue;
+				}
+				float red = ((argb >>> 16) & 0xFF) / 255.0F;
+				float green = ((argb >>> 8) & 0xFF) / 255.0F;
+				float blue = (argb & 0xFF) / 255.0F;
+				float luminance = red * 0.2126F + green * 0.7152F + blue * 0.0722F;
+				float shading = clamp01(0.36F + luminance * 0.86F);
+				float targetRed = clamp01(KILKA_ATTACK_URANIUM_RED * (0.48F + shading * 0.72F));
+				float targetGreen = clamp01(KILKA_ATTACK_URANIUM_GREEN * (0.54F + shading * 0.60F));
+				float targetBlue = clamp01(KILKA_ATTACK_URANIUM_BLUE * (0.42F + shading * 0.62F));
+				int outRed = Math.round(lerp(red, targetRed, strength) * 255.0F);
+				int outGreen = Math.round(lerp(green, targetGreen, strength) * 255.0F);
+				int outBlue = Math.round(lerp(blue, targetBlue, strength) * 255.0F);
+				tinted.setRGB(x, y, (alpha << 24) | (outRed << 16) | (outGreen << 8) | outBlue);
+			}
+		}
+		return tinted;
+	}
+
 	private static BufferedImage overlayCopperManRepulsorMask(BufferedImage source, BufferedImage mask) {
 		BufferedImage base = toArgb(source);
 		BufferedImage overlay = normalizeSkinImage(toArgb(mask));
@@ -26270,6 +26576,10 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 	}
 
 	private static void restoreCartelDisguise(MinecraftServer server, ServerPlayer player, CartelDisguiseSession session) {
+		if (session != null) {
+			session.disguisedAsAncientUkr = false;
+		}
+		CartelGasMaskVisualSystem.sync(player);
 		if (player != null) {
 			CartelWebcamBridge.endDisguise(player.getUUID());
 		}
@@ -27365,9 +27675,16 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		Vec3 cartelPos = cartel.position();
 		Vec3 lawyerPos = lawyer.position();
 		double distanceSqr = horizontalDistanceToSqr(lawyerPos, cartelPos);
-		double minDistanceSqr = session.innerMinDistanceBlocks * session.innerMinDistanceBlocks;
 		double maxDistanceSqr = session.followMaxDistanceBlocks * session.followMaxDistanceBlocks;
+		lawyer.setTarget(null);
+		lawyer.getNavigation().stop();
+		if (lawyer instanceof CartelLawyerEntity companion) {
+			companion.wanderBoundsCenter = distanceSqr > maxDistanceSqr ? null : cartelPos;
+			companion.wanderInnerRadius = session.innerMinDistanceBlocks;
+			companion.wanderOuterRadius = session.followMaxDistanceBlocks;
+		}
 		if (distanceSqr > maxDistanceSqr) {
+			session.wanderPath = null;
 			if (session.outsideSinceTick == null) {
 				session.outsideSinceTick = nowTick;
 			}
@@ -27377,93 +27694,111 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 					lawyerPos,
 					Math.max(session.innerMinDistanceBlocks + 0.35D, session.followMaxDistanceBlocks - 0.35D)
 			);
-			moveLawyerTowardTarget(lawyer, returnTarget, CARTEL_LAWYER_RETURN_SPEED);
+			moveLawyerTowardTarget(lawyer, session, returnTarget, CARTEL_LAWYER_RETURN_SPEED, true, null);
 			if (nowTick - session.outsideSinceTick >= session.maxOutsideTicks) {
 				Vec3 returnPos = findCartelLawyerSpawnPos(level, cartel, session.innerMinDistanceBlocks, session.followMaxDistanceBlocks);
 				lawyer.teleportTo(returnPos.x, returnPos.y, returnPos.z);
 				lawyer.getNavigation().stop();
+				session.movementVelocity = Vec3.ZERO;
+				lawyer.setDeltaMovement(Vec3.ZERO);
 				session.outsideSinceTick = null;
 				session.nextWanderRetargetTick = nowTick + 20L;
-				session.wanderTarget = returnPos;
 			}
 			return;
 		}
 
-		session.outsideSinceTick = null;
-		if (nowTick >= session.nextMovementLogicTick) {
-			session.nextMovementLogicTick = nowTick + CARTEL_LAWYER_MOVEMENT_LOGIC_INTERVAL_TICKS;
-			boolean pathCutsInnerRing = distanceSqr >= minDistanceSqr
-					&& session.wanderTarget != null
-					&& segmentIntersectsInnerRadius(cartelPos, lawyerPos, session.wanderTarget, session.innerMinDistanceBlocks + 0.2D);
-			if (
-					session.wanderTarget == null
-							|| nowTick >= session.nextWanderRetargetTick
-							|| lawyer.position().distanceToSqr(session.wanderTarget) <= 1.0D
-							|| !isWithinLawyerBounds(cartel.position(), session, session.wanderTarget)
-							|| pathCutsInnerRing
-			) {
-				session.wanderTarget = sampleLawyerWanderTarget(level, cartel, lawyer.position(), session.innerMinDistanceBlocks, session.followMaxDistanceBlocks);
-				session.nextWanderRetargetTick = nowTick + 20L;
-			}
+		if (session.outsideSinceTick != null) {
+			session.outsideSinceTick = null;
+			session.nextWanderRetargetTick = nowTick;
 		}
-
-		lawyer.setTarget(null);
-		Vec3 target = session.wanderTarget == null
-				? findCartelLawyerSpawnPos(level, cartel, session.innerMinDistanceBlocks, session.followMaxDistanceBlocks)
-				: session.wanderTarget;
-		moveLawyerTowardTarget(lawyer, target, CARTEL_LAWYER_WALK_SPEED);
+		if (distanceSqr < session.innerMinDistanceBlocks * session.innerMinDistanceBlocks) {
+			session.wanderPath = null;
+			Vec3 target = projectLawyerToRing(level, cartelPos, lawyerPos,
+					Math.min(session.innerMinDistanceBlocks + 0.35D, session.followMaxDistanceBlocks - 0.1D));
+			moveLawyerTowardTarget(lawyer, session, target, CARTEL_LAWYER_WALK_SPEED, true, cartelPos);
+			return;
+		}
+		if (session.lastWanderPosition == null || horizontalDistanceToSqr(session.lastWanderPosition, lawyerPos) > 0.2D * 0.2D) {
+			session.lastWanderPosition = lawyerPos;
+			session.wanderProgressTick = nowTick;
+		}
+		if (session.wanderPath != null && (nowTick >= session.nextWanderRetargetTick
+				|| nowTick - session.wanderProgressTick > 40L
+				|| !isLawyerWanderPathWithinBounds(cartelPos, lawyer, session, session.wanderPath))) {
+			session.wanderPath = null;
+			session.nextWanderRetargetTick = nowTick + 10L;
+		}
+		Vec3 target = CompanionMovement.waypoint(session.wanderPath, lawyer, true);
+		if (session.wanderPath != null && target == null) {
+			session.wanderPath = null;
+			session.nextWanderRetargetTick = nowTick + 20L + cartel.getRandom().nextInt(40);
+		}
+		if (session.wanderPath == null && nowTick >= session.nextWanderRetargetTick) {
+			// Calm husks choose a land destination, then walk the ground path rather than a straight line.
+			for (int attempt = 0; attempt < 24; attempt++) {
+				Vec3 candidate;
+				if (attempt < 8) {
+					candidate = net.minecraft.world.entity.ai.util.LandRandomPos.getPos((PathfinderMob) lawyer, 6, 3);
+				} else {
+					// A small permitted field needs local alternatives to the vanilla ten-block stroll search.
+					double angle = Math.atan2(lawyerPos.z - cartelPos.z, lawyerPos.x - cartelPos.x)
+							+ (cartel.getRandom().nextDouble() * 2.0D - 1.0D) * 1.2D;
+						double minRadius = session.innerMinDistanceBlocks + 0.1D;
+						double radius = minRadius + cartel.getRandom().nextDouble()
+							* Math.max(0.0D, session.followMaxDistanceBlocks - 0.1D - minRadius);
+						candidate = resolveLawyerSpawnPosition(level, cartelPos.add(Math.cos(angle) * radius, 0.0D, Math.sin(angle) * radius));
+				}
+				if (candidate == null || !isWithinLawyerBounds(cartelPos, session, candidate)
+						|| horizontalDistanceToSqr(candidate, lawyerPos) < 1.0D) continue;
+				net.minecraft.world.level.pathfinder.Path path = lawyer.getNavigation().createPath(BlockPos.containing(candidate), 0);
+				CompanionMovement.skipRoundedStart(path, lawyer);
+				if (path == null || !path.canReach() || !isLawyerWanderPathWithinBounds(cartelPos, lawyer, session, path)) continue;
+				session.wanderPath = path;
+				session.lastWanderPosition = lawyerPos;
+				session.wanderProgressTick = nowTick;
+				break;
+			}
+			session.nextWanderRetargetTick = nowTick + (session.wanderPath == null ? 20L : 200L);
+			target = CompanionMovement.waypoint(session.wanderPath, lawyer, true);
+		}
+		boolean finalNode = session.wanderPath == null
+				|| session.wanderPath.getNextNodeIndex() >= session.wanderPath.getNodeCount() - 1;
+		moveLawyerTowardTarget(lawyer, session, target, CARTEL_LAWYER_WALK_SPEED, finalNode, cartelPos);
 	}
 
-	private static void moveLawyerTowardTarget(Mob lawyer, Vec3 target, double speed) {
-		if (lawyer == null || target == null) {
-			return;
+	private static boolean isLawyerWanderPathWithinBounds(Vec3 center, Mob lawyer, CartelDefenseSession session, net.minecraft.world.level.pathfinder.Path path) {
+		Vec3 previous = lawyer.position();
+		for (int i = path.getNextNodeIndex(); i < path.getNodeCount(); i++) {
+			Vec3 next = path.getEntityPosAtNode(lawyer, i);
+			if (!isWithinLawyerBounds(center, session, next)) return false;
+			if (isWithinLawyerBounds(center, session, previous)
+					&& segmentIntersectsInnerRadius(center, previous, next, session.innerMinDistanceBlocks)) return false;
+			previous = next;
 		}
+		return true;
+	}
 
-		lawyer.getNavigation().stop();
+	private static void moveLawyerTowardTarget(Mob lawyer, CartelDefenseSession session, Vec3 target, double speed, boolean arrive, Vec3 boundsCenter) {
 		Vec3 position = lawyer.position();
-		Vec3 horizontal = new Vec3(target.x - position.x, 0.0D, target.z - position.z);
-		double distance = horizontal.length();
-		if (distance <= 0.08D) {
-			Vec3 delta = lawyer.getDeltaMovement();
-			lawyer.setDeltaMovement(delta.x * 0.5D, delta.y, delta.z * 0.5D);
-			return;
+		Vec3 horizontal = target == null ? Vec3.ZERO : new Vec3(target.x - position.x, 0.0D, target.z - position.z);
+		Vec3 movement = CompanionMovement.steer(session.movementVelocity, horizontal, speed, CARTEL_LAWYER_ACCELERATION, arrive);
+		if (boundsCenter != null) {
+			movement = CompanionMovement.constrainStep(new Vec3(boundsCenter.x, 0.0D, boundsCenter.z),
+					new Vec3(position.x, 0.0D, position.z), movement, session.innerMinDistanceBlocks, session.followMaxDistanceBlocks);
 		}
-
-		Vec3 desiredMovement = horizontal.scale(Math.min(speed, distance) / distance);
+		session.movementVelocity = movement;
 		Vec3 delta = lawyer.getDeltaMovement();
-		Vec3 currentHorizontal = new Vec3(delta.x, 0.0D, delta.z);
-		Vec3 movement = currentHorizontal.scale(1.0D - CARTEL_LAWYER_STEERING_SMOOTHING).add(desiredMovement.scale(CARTEL_LAWYER_STEERING_SMOOTHING));
-		if (distance <= 0.4D) {
-			movement = movement.scale(0.65D);
-		}
 		lawyer.setDeltaMovement(movement.x, delta.y, movement.z);
-		if (lawyer.horizontalCollision && lawyer.onGround()) {
+		if (target != null && lawyer.onGround() && (lawyer.horizontalCollision || target.y > position.y + 0.5D)) {
 			lawyer.jumpFromGround();
 		}
-		float yaw = (float) (Math.toDegrees(Math.atan2(movement.z, movement.x)) - 90.0D);
-		lawyer.setYRot(yaw);
-		lawyer.setYBodyRot(yaw);
-		lawyer.setYHeadRot(yaw);
-		lawyer.hurtMarked = true;
-	}
-
-	private static Vec3 sampleLawyerWanderTarget(ServerLevel level, ServerPlayer cartel, Vec3 lawyerPosition, double innerRadius, double outerRadius) {
-		double minDistance = Math.max(0.35D, innerRadius + 0.35D);
-		double maxDistance = Math.max(minDistance, outerRadius - 0.35D);
-		for (int attempt = 0; attempt < 10; attempt++) {
-			double angle = cartel.getRandom().nextDouble() * Math.PI * 2.0D;
-			double distance = minDistance + cartel.getRandom().nextDouble() * Math.max(0.001D, maxDistance - minDistance);
-			Vec3 desired = new Vec3(
-					cartel.getX() + Math.cos(angle) * distance,
-					cartel.getY(),
-					cartel.getZ() + Math.sin(angle) * distance
-			);
-			Vec3 resolved = resolveLawyerSpawnPosition(level, desired);
-			if (resolved != null && (lawyerPosition == null || !segmentIntersectsInnerRadius(cartel.position(), lawyerPosition, resolved, innerRadius + 0.2D))) {
-				return resolved;
-			}
+		if (movement.horizontalDistanceSqr() > 1.0E-6D) {
+			float wantedYaw = (float) (Math.toDegrees(Math.atan2(movement.z, movement.x)) - 90.0D);
+			float yaw = CompanionMovement.turn(lawyer.getYRot(), wantedYaw);
+			lawyer.setYRot(yaw);
+			lawyer.setYBodyRot(yaw);
+			lawyer.setYHeadRot(yaw);
 		}
-		return findCartelLawyerSpawnPos(level, cartel, innerRadius, outerRadius);
 	}
 
 	private static boolean isWithinLawyerBounds(Vec3 center, CartelDefenseSession session, Vec3 position) {
@@ -27644,6 +27979,8 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		List<EntityType<? extends Raider>> raiderTypes = new ArrayList<>();
 		raiderTypes.add(EntityType.PILLAGER);
 		raiderTypes.add(EntityType.PILLAGER);
+		raiderTypes.add(EntityType.PILLAGER);
+		raiderTypes.add(EntityType.VINDICATOR);
 		raiderTypes.add(EntityType.VINDICATOR);
 		raiderTypes.add(EntityType.VINDICATOR);
 		for (int i = raiderTypes.size() - 1; i > 0; i--) {
@@ -27651,16 +27988,19 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 			Collections.swap(raiderTypes, i, swapIndex);
 		}
 
-		List<Direction> directions = List.of(Direction.NORTH, Direction.SOUTH, Direction.WEST, Direction.EAST);
 		long lifetimeTicks = asTicks(positiveOrDefault(ability.summonLifetimeSeconds, CARTEL_DEFAULT_LIFETIME_SECONDS));
 		long afterKillTicks = asTicks(positiveOrDefault(ability.summonAfterKillSeconds, CARTEL_DEFAULT_AFTER_KILL_SECONDS));
 		double armorDivider = positiveOrDefault(ability.cartelRaiderArmorDivider, CARTEL_DEFAULT_RAIDER_ARMOR_DIVIDER);
 		CartelSummonSession session = new CartelSummonSession(level.dimension(), caster.getUUID(), target.getUUID(), nowTick + Math.max(1L, lifetimeTicks), Math.max(1L, afterKillTicks), armorDivider, target.position());
 
 		BlockPos center = target.blockPosition();
-		for (int i = 0; i < directions.size(); i++) {
-			Direction direction = directions.get(i);
-			BlockPos anchor = center.relative(direction, CARTEL_SPAWN_OFFSET_BLOCKS);
+		for (int i = 0; i < raiderTypes.size(); i++) {
+			double angle = Math.PI * 2.0D * i / raiderTypes.size();
+			BlockPos anchor = BlockPos.containing(
+					center.getX() + Math.cos(angle) * CARTEL_SPAWN_OFFSET_BLOCKS,
+					center.getY(),
+					center.getZ() + Math.sin(angle) * CARTEL_SPAWN_OFFSET_BLOCKS
+			);
 			Raider raider = spawnCartelRaider(level, raiderTypes.get(i), anchor, target, caster, armorDivider);
 			if (raider != null) {
 				session.raiderIds.add(raider.getUUID());
@@ -28595,6 +28935,10 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 	}
 
 	private static final class CartelLawyerEntity extends PathfinderMob {
+		private Vec3 wanderBoundsCenter;
+		private double wanderInnerRadius;
+		private double wanderOuterRadius;
+
 		private CartelLawyerEntity(ServerLevel level) {
 			super(EntityType.HUSK, level);
 			this.xpReward = 0;
@@ -28613,6 +28957,14 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		}
 
 		@Override
+		protected void playStepSound(BlockPos pos, BlockState state) {
+			// Keep ambient mob sounds muted, but use vanilla movement's step cadence.
+			SoundType sound = state.getSoundType();
+			this.level().playSound(null, this.getX(), this.getY(), this.getZ(), sound.getStepSound(),
+					SoundSource.PLAYERS, sound.getVolume() * 0.15F, sound.getPitch());
+		}
+
+		@Override
 		protected void registerGoals() {
 		}
 
@@ -28624,6 +28976,20 @@ private static final CartelManualPage[] CARTEL_MANUAL_PAGES_EN = {
 		@Override
 		public float maxUpStep() {
 			return 1.0F;
+		}
+
+		@Override
+		public void move(MoverType type, Vec3 movement) {
+			if (type == MoverType.SELF && wanderBoundsCenter != null) {
+				Vec3 center = new Vec3(wanderBoundsCenter.x, 0.0D, wanderBoundsCenter.z);
+				Vec3 position = new Vec3(this.getX(), 0.0D, this.getZ());
+				if (position.distanceToSqr(center) <= wanderOuterRadius * wanderOuterRadius + 1.0E-6D) {
+					Vec3 horizontal = CompanionMovement.constrainStep(center, position,
+							new Vec3(movement.x, 0.0D, movement.z), wanderInnerRadius, wanderOuterRadius);
+					movement = new Vec3(horizontal.x, movement.y, horizontal.z);
+				}
+			}
+			super.move(type, movement);
 		}
 
 		@Override

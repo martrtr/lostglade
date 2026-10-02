@@ -44,6 +44,13 @@ public final class ServerWaypointVisibilitySystem {
 			return filterBundle(receiver, bundlePacket);
 		}
 		if (packet instanceof ClientboundTrackedWaypointPacket waypointPacket) {
+			if (!"UNTRACK".equals(String.valueOf(waypointPacket.operation()))
+					&& (ServerRaceSystem.shouldSuppressMilkMouseWaypoint(receiver, waypointPacket)
+						|| ServerRaceSystem.shouldSuppressKilkaSalmonWaypoint(receiver, waypointPacket))) {
+				Set<Either<UUID, String>> visible = VISIBLE_WAYPOINTS.get(receiver.getUUID());
+				return visible != null && visible.remove(waypointPacket.waypoint().id())
+						? ClientboundTrackedWaypointPacket.removeWaypoint(waypointPacket.waypoint().id().left().orElseThrow()) : null;
+			}
 			return shouldSend(receiver, waypointPacket) ? packet : null;
 		}
 		return packet;

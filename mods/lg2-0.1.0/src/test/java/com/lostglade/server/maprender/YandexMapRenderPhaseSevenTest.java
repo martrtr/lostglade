@@ -147,7 +147,8 @@ public final class YandexMapRenderPhaseSevenTest {
 		Path project = Path.of("").toAbsolutePath();
 		String adapter = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorYandexMapsClientTileRenderer.java"));
 		String runtime = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorYandexMapsRuntime.java"));
-		String screens = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorScreenSystem.java"));
+		String screens = Files.readString(project.resolve("src/main/java/com/lostglade/server/MonitorScreenSystem.java"))
+				.replace("\r\n", "\n");
 		require(!runtime.contains("drawMapCanvasBackground"), "Yandex runtime must not paint a second gradient/textured map background over the compositor frame");
 		require(adapter.contains("Frame.failure(canvas, \"Карта недоступна\")") && adapter.contains("Frame.failure(canvas, \"Карта пока не отрендерена\")"), "even an empty/unavailable cache must return the flat old-renderer background instead of exposing screen_on.png");
 		require(screens.contains("if (work.yandexMapsSnapshot() != null) {\n\t\t\treturn true;"), "Yandex monitor work must keep the old dynamic-render graphics path");

@@ -193,6 +193,12 @@ tasks.withType(JavaCompile).configureEach {
 
 tasks.named("test", Test) {
 	failOnNoDiscoveredTests = false
+	dependsOn(tasks.named("extractSkinRestorerNestedLibraries"))
+}
+
+// All runtime classpaths consume the extracted SkinRestorer client library.
+tasks.withType(JavaExec).configureEach {
+	dependsOn(tasks.named("extractSkinRestorerNestedLibraries"))
 }
 
 
@@ -277,7 +283,6 @@ tasks.register("runMicrophoneSpeakerCapturePolicyTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
-
 tasks.register("runYandexMapRenderPhaseOneTest", JavaExec) {
 	group = "verification"
 	description = "Runs Yandex map renderer Phase 0/1 disk-index, tile-store and architecture checks."
@@ -346,6 +351,28 @@ tasks.register("runYandexMapRenderPhaseEightTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
+tasks.register("runRaceFixRegressionTest", JavaExec) {
+	group = "verification"
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.RaceFixRegressionTest"
+	dependsOn(tasks.named("testClasses"))
+	dependsOn(tasks.named("extractSkinRestorerNestedLibraries"))
+}
+
+tasks.register("runCompanionMovementTest", JavaExec) {
+	group = "verification"
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.CompanionMovementTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register("runGennadiyReportTrackerTest", JavaExec) {
+	group = "verification"
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.GennadiyReportTrackerTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
 tasks.named("check") {
 	dependsOn(tasks.named("runYandexMapRenderPhaseEightTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseSevenTest"))
@@ -355,6 +382,9 @@ tasks.named("check") {
 	dependsOn(tasks.named("runYandexMapRenderPhaseThreeTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseTwoTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseOneTest"))
+	dependsOn(tasks.named("runGennadiyReportTrackerTest"))
+	dependsOn(tasks.named("runCompanionMovementTest"))
+	dependsOn(tasks.named("runRaceFixRegressionTest"))
 	dependsOn(tasks.named("runAncientUkrCreditorSelectionTest"))
 	dependsOn(tasks.named("runAncientUkrCollectorRulesTest"))
 	dependsOn(tasks.named("runOrthodoxLightSyncTest"))

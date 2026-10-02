@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "lg2:item/gui/necromancer_trans_work"
+  }
+}

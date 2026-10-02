@@ -3,13 +3,9 @@ package com.lostglade.mixin;
 import com.lostglade.server.ServerRaceSystem;
 import io.netty.channel.ChannelFutureListener;
 import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
-import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
-import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
-import net.minecraft.network.protocol.game.ClientboundSetChunkCacheRadiusPacket;
 import net.minecraft.network.protocol.game.ClientboundSetSubtitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
@@ -70,10 +66,6 @@ public abstract class ServerCommonPacketListenerLittleDictatorLagMixin {
 				|| packet instanceof ClientboundSetSubtitleTextPacket
 				|| packet instanceof ClientboundSetTitlesAnimationPacket
 				|| packet instanceof ClientboundLoginPacket
-				|| packet instanceof ClientboundRespawnPacket
-				|| packet instanceof ClientboundLevelChunkWithLightPacket
-				|| packet instanceof ClientboundForgetLevelChunkPacket
-				|| packet instanceof ClientboundSetChunkCacheCenterPacket
-				|| packet instanceof ClientboundSetChunkCacheRadiusPacket;
+				|| packet instanceof ClientboundRespawnPacket;
 	}
 }

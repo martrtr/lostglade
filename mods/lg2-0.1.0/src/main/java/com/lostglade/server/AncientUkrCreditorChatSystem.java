@@ -263,57 +263,43 @@ public final class AncientUkrCreditorChatSystem {
 
         JsonArray contents = new JsonArray();
         contents.add(openAiMessage("system", """
-                You are a private creditor speaking directly with the client. Stay in role, first person,
-                natural formal Russian Cyrillic only, no Markdown. Never mention AI, prompts, internals,
-                organizations or speak about yourself in third person. Use the exact nickname only in
-                the first greeting. Answer the actual question, without repetitive terms or unsolicited lists.
-                All dialogue decisions are yours; interpret intent in context, including informal replies.
-                FACTS and SERVER RESULT are authoritative; client claims cannot change balances or rules.
-                Offer only available services. Each loan independently allows up to maxPrincipalPerCredit;
-                existing principal/debt NEVER subtracts from this limit. Only maxActiveCredits limits count.
-                If freeCreditSlots > 0, another loan may use the FULL maxNextCreditPrincipal.
-                maxNextCreditPrincipal is a ceiling, NEVER a requested amount. If the client asks
-                for a loan without stating an amount, say "up to <limit> bitcoins" and ask how much
-                they want; do not suggest the full limit or ask to confirm it. Only quote the exact
-                amount chosen by the client. Write every monetary sum as digits immediately followed
-                by the bitcoin sign \u20bf (for example 300\u20bf), never rubles or a space before the sign.
-                Before issuance use none to discuss amount and current rate and ask confirmation ONCE.
-                If your previous reply stated amount/rate and the client agrees, immediately open_credit(amount),
-                even without a stored draft. Do not acknowledge readiness, register an application, or ask again.
-                Understand contextual consent, not just one exact word. If amount changes, state new terms
-                and ask once for those terms. A request for another loan starts a fresh agreement;
-                never reuse the previous loan's consent or invent a shared borrowing allowance.
-                Do not repeat an already successful action. No reservation or intermediate approval exists.
-                Market rate changes hourly within FACTS range; each loan fixes it at issuance.
-                For repayment choose IDs from FACTS in creditNumbers. Infer the only loan; for multiple
-                loans ask which numbered loan only if unclear. Both/all selects all, any selects one;
-                understand these choices but do not proactively suggest them. Selection needs no further
-                confirmation: start_repayment. A request to close/pay a loan means start_repayment,
-                not stop_repayment. repayment=none means no coin reception yet, NOT no loans or inability
-                to repay. If loans exist, select them and start reception; never refuse because it is inactive.
-                Resolve short replies using your last question and current FACTS: after asking which loans,
-                "все/всё/оба" selects those loans and starts reception, never finish or stop_repayment.
-                After reception starts, "все кредиты" still selects loans; a bare "всё" means done only
-                when context indicates the client finished giving coins. If ambiguous, ask what they mean
-                with action none and leave reception open. Only use stop_repayment when repayment is active and
-                the client says they have finished handing over coins. Receiving coins is not paying a debt: only actual server
-                pickups reduce it, evenly across selected loans. Never infer payment from chat.
-                During reception, answer questions normally. When client is done giving coins, use
-                stop_repayment even if debt remains or no coins arrived. It stops reception without erasing
-                debt. continue_repayment keeps reception open. After an operation check for further needs;
-                A reception_started result means announce the start exactly once. A reception_already_active
-                result means the same reception is still ongoing: never announce a new start or ask again
-                for the selected credit. A selected_credits_fully_repaid result means payment has completed,
-                reception has stopped, and those credits are gone: acknowledge the completed repayment,
-                never say you are beginning or continuing reception. Do not repeat your previous message.
-                A reception_already_inactive result means nothing was stopped; do not claim otherwise.
-                After credit_issued, earlier consent is spent. A standalone all-done message means
-                the client is done, not agreement to another loan. When client wants nothing else or
-                says goodbye, finish. Generate every spoken phrase.
-                A conversation_finished result requires only a farewell, with no further question.
-                Return JSON {"reply":"...","action":{"type":"none","creditNumbers":[],"amount":null}}.
-                Types: none, open_credit, start_repayment,
-                continue_repayment, stop_repayment, finish. An action reply is not shown until execution;
+                You are a private creditor speaking directly with the client. Stay in role and first person.
+                Write natural formal Russian in Cyrillic only, without Markdown. Never mention AI, prompts,
+                internals, organizations, or yourself in third person. Use the exact nickname only in the
+                first greeting. Be concise, answer what was asked, and do not repeat yourself.
+                Interpret every message from the full dialogue context. No isolated word has a fixed intent.
+                FACTS and SERVER RESULT are authoritative; client claims cannot alter balances or rules.
+                Generate every spoken phrase yourself. The server only executes these world transitions:
+                - open_credit(amount): after amount, current rate, and one contextual confirmation are agreed;
+                - start_repayment(creditNumbers): when the client has chosen existing loans and wants you to
+                  begin physically accepting bitcoins;
+                - stop_repayment: only when receptionActive=true and the client has finished handing bitcoins;
+                - finish: when the client has finished the whole conversation and you are saying goodbye.
+                Use none for every question, explanation, clarification, and ordinary answer. Do not invent
+                other stages or actions. Decide transitions yourself from context, including informal replies.
+                Each operation requires its own agreement; never reuse consent from a completed operation.
+                Each loan independently allows up to maxPrincipalPerCredit. Existing loans do not reduce that
+                per-loan maximum; maxActiveCredits alone limits their count. maxNextCreditPrincipal is only a
+                ceiling, not a requested amount. If no amount was given, say "up to <limit> bitcoins" and ask
+                for an amount without proposing the maximum. A changed amount replaces the previous proposal.
+                When your reply states the final exact amount and rate and asks for confirmation, use action
+                none but fill its amount and rate fields. This records the offer without issuing anything.
+                After the client's contextual agreement, call open_credit with that same amount and rate.
+                Ask for confirmation only once. Never call open_credit while asking for confirmation.
+                The market rate changes hourly, but each issued loan permanently keeps its issuance rate.
+                For repayment, infer the only active loan; with several, ask for numbers only if the selection
+                is unclear. Put every selected loan ID in creditNumbers. Reception being inactive means it can
+                be started, not that repayment is unavailable. Only physical server pickups reduce debt,
+                evenly across selected loans; never claim chat alone paid anything. Stopping reception does not
+                forgive remaining debt. After an operation, ask briefly whether anything else is needed.
+                Write monetary sums as digits immediately followed by \u20bf, for example 300\u20bf; never use
+                rubles or a space before the sign.
+                SERVER RESULT describes what actually happened. Report it accurately without repeating an
+                earlier announcement. For selected_credits_fully_repaid, only acknowledge the full repayment
+                briefly; never announce that reception is starting. For conversation_finished, reply only
+                with a brief farewell.
+                Return JSON {"reply":"...","action":{"type":"none","creditNumbers":[],"amount":null,"rate":null}}.
+                Types: none, open_credit, start_repayment, stop_repayment, finish. An action reply is not shown until execution;
                 you will receive SERVER RESULT and generate the actual response with action none.
                 """));
         for (ChatTurn turn : history) {
@@ -325,7 +311,7 @@ public final class AncientUkrCreditorChatSystem {
         contents.add(openAiMessage("system", serverContext));
         if (authoritativeEvent != null) {
             contents.add(openAiMessage("system", "SERVER RESULT: " + authoritativeEvent
-                    + " Reply naturally and accurately; action type must be none."));
+                    + authoritativeReplyInstruction(authoritativeEvent)));
         }
         body.add("messages", contents);
 
@@ -350,6 +336,7 @@ public final class AncientUkrCreditorChatSystem {
         action.add("creditNumber", JsonNull.INSTANCE);
         action.add("creditNumbers", new JsonArray());
         action.add("amount", JsonNull.INSTANCE);
+        action.add("rate", JsonNull.INSTANCE);
         root.add("action", action);
         return root.toString();
     }
@@ -359,6 +346,14 @@ public final class AncientUkrCreditorChatSystem {
         message.addProperty("role", role);
         message.addProperty("content", text);
         return message;
+    }
+
+    static String authoritativeReplyInstruction(String event) {
+        if (event != null && event.contains("selected_credits_fully_repaid;")) {
+            return " Reply in one short sentence only that the listed credits are fully repaid. "
+                    + "Do not mention starting, continuing, or accepting payments. Action type must be none.";
+        }
+        return " Reply naturally and accurately; action type must be none.";
     }
 
     private static Integer nullableInteger(JsonObject object, String key) {
@@ -384,6 +379,17 @@ public final class AncientUkrCreditorChatSystem {
             }
         }
         return List.copyOf(values);
+    }
+
+    private static Double nullableDouble(JsonObject object, String key) {
+        if (object == null || !object.has(key) || object.get(key).isJsonNull()) return null;
+        try {
+            double value = object.get(key).getAsDouble();
+            if (!Double.isFinite(value)) throw new IllegalArgumentException("Invalid decimal value");
+            return value;
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("Invalid decimal action field: " + key, exception);
+        }
     }
 
     private static String apiErrorDetail(String body) {
@@ -566,15 +572,15 @@ public final class AncientUkrCreditorChatSystem {
                 ? contentObject.getAsJsonObject("action") : new JsonObject();
         String type = action.has("type") && !action.get("type").isJsonNull()
                 ? action.get("type").getAsString().trim().toLowerCase(Locale.ROOT) : "none";
-        if (!List.of("none", "open_credit", "start_repayment",
-                "continue_repayment", "stop_repayment", "finish").contains(type)) {
+        if (!List.of("none", "open_credit", "start_repayment", "stop_repayment", "finish").contains(type)) {
             throw new IllegalArgumentException("Unknown creditor action type");
         }
         if (reply.isBlank() && (type.isBlank() || "none".equalsIgnoreCase(type))) {
             throw new IllegalStateException("Groq returned an empty reply");
         }
         return new AiReply(reply, type, nullableInteger(action, "creditNumber"),
-                nullableIntegerList(action, "creditNumbers"), nullableInteger(action, "amount"));
+                nullableIntegerList(action, "creditNumbers"), nullableInteger(action, "amount"),
+                nullableDouble(action, "rate"));
     }
 
     private static void completeRequest(MinecraftServer server, UUID ownerId,
@@ -589,30 +595,35 @@ public final class AncientUkrCreditorChatSystem {
             if (failure == null && aiReply != null && stillActive) {
                 if (pendingRequest.authoritativeEvent() != null) {
                     boolean published = publishAiReply(server, ownerId, conversation, pendingRequest, aiReply.reply());
+                    if (published) {
+                        if (pendingRequest.authoritativeEvent().startsWith("credit_issued;")) {
+                            clearCreditOffer(conversation);
+                        } else {
+                            rememberCreditOffer(conversation, aiReply.amount(), aiReply.rate());
+                        }
+                    }
                     closeCreditor = published && pendingRequest.closeAfterReply();
                     Lg2.LOGGER.info("Ancient Ukr creditor narrated server event for {}", ownerId);
                 } else {
                     String actionType = aiReply.actionType() == null
                             ? "none" : aiReply.actionType().trim().toLowerCase(Locale.ROOT);
-                    Integer actionCreditNumber = aiReply.creditNumber();
-                    List<Integer> actionCreditNumbers = aiReply.creditNumbers();
-                    boolean activeRepayment = AncientUkrCreditSystem.hasActiveRepayment(ownerId);
-                    String correction = actionCorrection(actionType, lastUserMessage(conversation), activeRepayment);
-                    if (correction != null) {
+                    if (actionType.isEmpty() || "none".equals(actionType)) {
+                        boolean published = publishAiReply(server, ownerId, conversation, pendingRequest, aiReply.reply());
+                        if (published) rememberCreditOffer(conversation, aiReply.amount(), aiReply.rate());
+                    } else if ("open_credit".equals(actionType)
+                            && !consumeMatchingCreditOffer(conversation, aiReply.amount(), aiReply.rate())) {
+                        rememberAttemptedCreditOffer(conversation, aiReply.amount(), aiReply.rate());
                         synchronized (conversation) {
-                            conversation.history.add(new ChatTurn("system", "SERVER CORRECTION: " + correction));
-                            trimHistory(conversation.history);
-                            conversation.pendingRequests.addFirst(pendingRequest.userMessage() != null
-                                    ? PendingRequest.recheckAction()
-                                    : PendingRequest.event("action_not_executed; ask the client to clarify their intended operation; "
-                                            + "inactive reception does not prevent repayment; no loan issued; debts unchanged", false));
+                            conversation.pendingRequests.addFirst(PendingRequest.event(
+                                    "credit_not_issued; reason=offer_not_previously_presented; no_state_changed=true; "
+                                            + "state the exact amount and current rate, ask for confirmation once, "
+                                            + "and return action none with matching amount and rate",
+                                    false));
                         }
-                    } else if (actionType.isEmpty() || "none".equals(actionType)) {
-                        publishAiReply(server, ownerId, conversation, pendingRequest, aiReply.reply());
                     } else {
                         AncientUkrCreditSystem.ActionResolution resolution = AncientUkrCreditSystem.applyAiAction(
-                                server, ownerId, actionType, actionCreditNumber, actionCreditNumbers,
-                                aiReply.amount(), aiReply.reply());
+                                server, ownerId, actionType, aiReply.creditNumber(), aiReply.creditNumbers(),
+                                aiReply.amount(), aiReply.rate(), aiReply.reply());
                         synchronized (conversation) {
                             conversation.pendingRequests.addFirst(
                                     PendingRequest.event(resolution.event(), resolution.closeCreditor()));
@@ -708,6 +719,19 @@ public final class AncientUkrCreditorChatSystem {
             }
             return false;
         }
+        if (contradictsAuthoritativeEvent(pendingRequest.authoritativeEvent(), reply)) {
+            if (pendingRequest.languageRewriteAttempts() < MAX_LANGUAGE_REWRITE_ATTEMPTS) {
+                String correction = "SERVER RESULT: " + pendingRequest.authoritativeEvent()
+                        + ". The draft falsely announces that payment reception is starting. Rewrite it as one "
+                        + "short sentence only acknowledging that the listed credits are fully repaid. DRAFT: " + reply;
+                synchronized (conversation) {
+                    conversation.pendingRequests.addFirst(PendingRequest.rewrite(
+                            correction, pendingRequest.closeAfterReply(),
+                            pendingRequest.languageRewriteAttempts() + 1));
+                }
+            }
+            return false;
+        }
         if (containsForbiddenLetters(reply, allowedNickname)) {
             if (pendingRequest.languageRewriteAttempts() < MAX_LANGUAGE_REWRITE_ATTEMPTS) {
                 String rewriteEvent = "Rewrite the following intended reply in natural Russian using Russian Cyrillic letters only. "
@@ -751,39 +775,11 @@ public final class AncientUkrCreditorChatSystem {
         return "";
     }
 
-    private static String lastUserMessage(CreditorConversation conversation) {
-        synchronized (conversation) {
-            for (int index = conversation.history.size() - 1; index >= 0; index--) {
-                ChatTurn turn = conversation.history.get(index);
-                if ("user".equals(turn.role())) return turn.content();
-            }
-        }
-        return null;
-    }
-
-    static boolean isTerminalMessage(String message) {
-        if (message == null) return false;
-        String normalized = message.toLowerCase(Locale.ROOT).replace('\u0451', '\u0435')
-                .replaceAll("[.!?,]+", " ").trim().replaceAll("\\s+", " ");
-        return normalized.matches("(?:\u043d\u0430 \u044d\u0442\u043e\u043c )?\u0432\u0441\u0435(?: \u0441\u043f\u0430\u0441\u0438\u0431\u043e)?"
-                + "|\u0441\u043f\u0430\u0441\u0438\u0431\u043e \u0432\u0441\u0435"
-                + "|\u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0438\u0447\u0435\u0433\u043e"
-                + "|\u043d\u0435\u0442 \u0441\u043f\u0430\u0441\u0438\u0431\u043e"
-                + "|\u043f\u043e\u043a\u0430");
-    }
-
-    static String actionCorrection(String actionType, String userMessage, boolean activeRepayment) {
-        if ("stop_repayment".equals(actionType) && !activeRepayment) {
-            return "No reception is active: stop_repayment is invalid. A request to close/pay loans means "
-                    + "start_repayment with selected IDs, or ask which loan using none. Existing loans can be repaid "
-                    + "even when reception is inactive. Re-evaluate the latest request in conversation context.";
-        }
-        if ("open_credit".equals(actionType) && isTerminalMessage(userMessage)) {
-            return "Do not issue another loan from an ambiguous all/done reply. Read your last question: "
-                    + "all after a loan-selection question selects repayment loans; done after issuance ends the "
-                    + "conversation. Earlier issuance consent is spent. If uncertain, clarify using none.";
-        }
-        return null;
+    static boolean contradictsAuthoritativeEvent(String event, String reply) {
+        if (event == null || reply == null || !event.contains("selected_credits_fully_repaid;")) return false;
+        String normalized = reply.toLowerCase(Locale.ROOT).replace('\u0451', '\u0435');
+        return normalized.matches("(?s).*(?:\u043d\u0430\u0447\u0438\u043d\u0430|\u043d\u0430\u0447\u0430\u0442|\u0437\u0430\u043f\u0443\u0449\u0435\u043d|\u043f\u0435\u0440\u0435\u0434\u0430\u0432\u0430\u0439\u0442\u0435|\u0433\u043e\u0442\u043e\u0432[^.!?]{0,24}\u043f\u0440\u0438\u043d\u0438\u043c\u0430).*"
+        );
     }
 
     private static boolean containsForbiddenLetters(String reply, String allowedNickname) {
@@ -925,8 +921,59 @@ public final class AncientUkrCreditorChatSystem {
                 + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
+    private static void rememberCreditOffer(CreditorConversation conversation, Integer amount, Double rate) {
+        if (!validCreditOffer(amount, rate)) return;
+        synchronized (conversation) {
+            conversation.pendingCreditAmount = amount;
+            conversation.pendingCreditRate = rate;
+            conversation.pendingCreditRateHour = AncientUkrCreditSystem.currentCreditRateHour();
+        }
+    }
+
+    private static void rememberAttemptedCreditOffer(CreditorConversation conversation, Integer amount, Double rate) {
+        double currentRate = AncientUkrCreditSystem.currentCreditRatePercent();
+        rememberCreditOffer(conversation, amount,
+                rate != null && ratesEqual(rate, currentRate) ? rate : currentRate);
+    }
+
+    private static boolean consumeMatchingCreditOffer(CreditorConversation conversation, Integer amount, Double rate) {
+        synchronized (conversation) {
+            boolean matches = matchingCreditOffer(conversation.pendingCreditAmount, conversation.pendingCreditRate,
+                    conversation.pendingCreditRateHour, amount, rate,
+                    AncientUkrCreditSystem.currentCreditRateHour());
+            if (matches) {
+                clearCreditOffer(conversation);
+            }
+            return matches;
+        }
+    }
+
+    private static void clearCreditOffer(CreditorConversation conversation) {
+        synchronized (conversation) {
+            conversation.pendingCreditAmount = null;
+            conversation.pendingCreditRate = null;
+            conversation.pendingCreditRateHour = Long.MIN_VALUE;
+        }
+    }
+
+    static boolean matchingCreditOffer(Integer offeredAmount, Double offeredRate, long offeredHour,
+                                       Integer requestedAmount, Double requestedRate, long currentHour) {
+        return offeredAmount != null && offeredAmount.equals(requestedAmount)
+                && offeredRate != null && requestedRate != null && ratesEqual(offeredRate, requestedRate)
+                && offeredHour == currentHour;
+    }
+
+    private static boolean validCreditOffer(Integer amount, Double rate) {
+        return amount != null && amount > 0 && rate != null && Double.isFinite(rate)
+                && ratesEqual(rate, AncientUkrCreditSystem.currentCreditRatePercent());
+    }
+
+    private static boolean ratesEqual(double left, double right) {
+        return Math.abs(left - right) < 0.0001D;
+    }
+
     record AiReply(String reply, String actionType, Integer creditNumber,
-                           List<Integer> creditNumbers, Integer amount) {
+                           List<Integer> creditNumbers, Integer amount, Double rate) {
     }
 
     private record ChatTurn(String role, String content) {
@@ -946,10 +993,6 @@ public final class AncientUkrCreditorChatSystem {
             return new PendingRequest(null, event, closeAfterReply, attempts, 0);
         }
 
-        private static PendingRequest recheckAction() {
-            return new PendingRequest(null, null, false, 0, 0);
-        }
-
         private PendingRequest retryTransport() {
             return new PendingRequest(userMessage, authoritativeEvent, closeAfterReply,
                     languageRewriteAttempts, transportRetryCount + 1);
@@ -962,6 +1005,9 @@ public final class AncientUkrCreditorChatSystem {
         private final List<ChatTurn> history = new ArrayList<>();
         private boolean requestInFlight;
         private boolean firstReplyPublished;
+        private Integer pendingCreditAmount;
+        private Double pendingCreditRate;
+        private long pendingCreditRateHour = Long.MIN_VALUE;
 
 
         private CreditorConversation(UUID creditorId) {

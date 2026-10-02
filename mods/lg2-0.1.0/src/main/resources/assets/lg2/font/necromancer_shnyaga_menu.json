@@ -1,0 +1,17 @@
+{
+  "providers": [
+    {
+      "type": "bitmap",
+      "file": "lg2:font/necromancer_shnyaga_menu.png",
+      "ascent": 13,
+      "height": 166,
+      "chars": [
+        "\uebc0"
+      ]
+    },
+    {
+      "type": "reference",
+      "id": "minecraft:default"
+    }
+  ]
+}

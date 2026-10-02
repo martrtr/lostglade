@@ -299,7 +299,8 @@ public final class ServerMechanicsGateSystem {
 			return true;
 		}
 		String requirement = requiredUpgradeForCraftResult(stack);
-		return requirement == null || ServerUpgradeUiSystem.hasUpgrade(player, requirement);
+		return (requirement == null || ServerUpgradeUiSystem.hasUpgrade(player, requirement))
+				&& NecromancerStockSystem.canTakeCraftResult(player, stack);
 	}
 
 	public static boolean canPlaceBlock(ServerPlayer player, Block block) {
@@ -399,7 +400,8 @@ public final class ServerMechanicsGateSystem {
 			return true;
 		}
 		String requirement = requiredUpgradeForCraftResult(stack);
-		return requirement == null || ServerUpgradeUiSystem.hasUpgrade(player, requirement);
+		return (requirement == null || ServerUpgradeUiSystem.hasUpgrade(player, requirement))
+				&& NecromancerStockSystem.canOwnItem(player, stack);
 	}
 
 	private static String requiredUpgradeForCraftResult(ItemStack stack) {

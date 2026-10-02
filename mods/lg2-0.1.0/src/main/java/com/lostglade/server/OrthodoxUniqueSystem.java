@@ -4,6 +4,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
 import net.minecraft.core.particles.ColorParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.MinecraftServer;
@@ -91,8 +92,6 @@ public final class OrthodoxUniqueSystem {
 				wave.pendingGrowth.addAll(wave.blockShells.get(wave.age - 1));
 				if (wave.age == WAVE_DURATION_TICKS) {
 					clearWaveLights(wave);
-					wave.level.playSound(null, BlockPos.containing(wave.center), SoundEvents.AMETHYST_BLOCK_RESONATE,
-							SoundSource.PLAYERS, 0.9F, 1.65F);
 				}
 			}
 			processGrowthQueue(wave);
@@ -123,15 +122,17 @@ public final class OrthodoxUniqueSystem {
 
 	private static void emitExpansionSound(LightWave wave, double progress) {
 		if (wave.age <= 0 || wave.age >= WAVE_DURATION_TICKS || wave.age % WAVE_SOUND_INTERVAL_TICKS != 0) return;
-		float pitch = 0.82F + (float) Math.max(0.0D, Math.min(1.0D, progress)) * 0.24F;
-		wave.level.playSound(
-				null,
-				BlockPos.containing(wave.center),
-				SoundEvents.BREEZE_IDLE_AIR,
-				SoundSource.PLAYERS,
-				0.52F,
-				pitch
-		);
+		double radius = wave.radius * progress;
+		for (ServerPlayer listener : wave.level.players()) {
+			Vec3 delta = listener.getEyePosition().subtract(wave.center);
+			Vec3 direction = delta.lengthSqr() < 1.0E-8D ? new Vec3(1.0D, 0.0D, 0.0D) : delta.normalize();
+			Vec3 surface = wave.center.add(direction.scale(radius));
+			if (listener.getEyePosition().distanceToSqr(surface) > 16.0D * 16.0D) continue;
+			listener.connection.send(new ClientboundSoundPacket(Holder.direct(SoundEvents.BEACON_AMBIENT),
+					SoundSource.PLAYERS, surface.x, surface.y, surface.z, 0.85F, 1.35F, wave.level.random.nextLong()));
+			listener.connection.send(new ClientboundSoundPacket(Holder.direct(SoundEvents.AMETHYST_BLOCK_CHIME),
+					SoundSource.PLAYERS, surface.x, surface.y, surface.z, 1.0F, 0.85F, wave.level.random.nextLong()));
+		}
 	}
 
 	private static void updateWaveLights(LightWave wave, double radius) {

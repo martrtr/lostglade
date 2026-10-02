@@ -3,6 +3,7 @@ package com.lostglade.mixin;
 import com.lostglade.block.ModBlocks;
 import com.lostglade.server.ServerMechanicsGateSystem;
 import com.lostglade.server.ServerRaceSystem;
+import com.lostglade.server.GennadiyReportTracker;
 import com.lostglade.server.SeasonStartSystem;
 import com.lostglade.server.ServerUpgradeUiSystem;
 import net.minecraft.resources.ResourceKey;
@@ -22,6 +23,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(ItemEntity.class)
 public abstract class ServerItemEntityMixin {
+	@Inject(method = "setItem", at = @At("TAIL"))
+	private void lg2$trackReportStackChange(net.minecraft.world.item.ItemStack stack, CallbackInfo ci) {
+		GennadiyReportTracker.itemEntityChanged((ItemEntity) (Object) this);
+	}
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void lg2$protectServerItem(CallbackInfo ci) {
 		ItemEntity self = (ItemEntity) (Object) this;
@@ -36,6 +41,16 @@ public abstract class ServerItemEntityMixin {
 		ServerRaceSystem.tryProcessCocaineCauldron(self);
 	}
 
+	@Inject(method = "tick", at = @At("TAIL"))
+	private void lg2$trackDestroyedGennadiyReport(CallbackInfo ci) {
+		ItemEntity self = (ItemEntity) (Object) this;
+		if (self.isRemoved() && self.getRemovalReason() != null && self.getRemovalReason().shouldDestroy()
+				&& self.level() instanceof ServerLevel level
+				&& ServerRaceSystem.isGennadiyReportItem(self.getItem())) {
+			ServerRaceSystem.markGennadiyReportDestroyed(level.getServer(), self.getItem());
+		}
+	}
+
 	@Inject(method = "hurtClient", at = @At("HEAD"), cancellable = true)
 	private void lg2$ignoreClientDamage(DamageSource source, CallbackInfoReturnable<Boolean> cir) {
 		if (lg2$isProtectedServerItem((ItemEntity) (Object) this)) {
@@ -47,6 +62,20 @@ public abstract class ServerItemEntityMixin {
 	private void lg2$ignoreServerDamage(ServerLevel level, DamageSource source, float amount, CallbackInfoReturnable<Boolean> cir) {
 		if (lg2$isProtectedServerItem((ItemEntity) (Object) this)) {
 			cir.setReturnValue(false);
+		}
+	}
+
+	@Inject(method = "hurtServer", at = @At("TAIL"))
+	private void lg2$trackDamagedGennadiyReport(
+			ServerLevel level,
+			DamageSource source,
+			float amount,
+			CallbackInfoReturnable<Boolean> cir
+	) {
+		ItemEntity self = (ItemEntity) (Object) this;
+		if (self.isRemoved() && self.getRemovalReason() != null && self.getRemovalReason().shouldDestroy()
+				&& ServerRaceSystem.isGennadiyReportItem(self.getItem())) {
+			ServerRaceSystem.markGennadiyReportDestroyed(level.getServer(), self.getItem());
 		}
 	}
 

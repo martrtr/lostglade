@@ -1,6 +1,7 @@
 package com.lostglade.mixin;
 
 import com.lostglade.server.ServerRaceSystem;
+import com.lostglade.server.NecromancerStockSystem;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -18,6 +19,13 @@ public abstract class EquippableAncientUkrGasMaskMixin {
 	@Inject(method = "swapWithEquipmentSlot", at = @At("HEAD"), cancellable = true)
 	private void lg2$preventGasMaskReplacement(ItemStack stack, Player player,
 			CallbackInfoReturnable<InteractionResult> cir) {
+		if (player instanceof ServerPlayer serverPlayer
+				&& NecromancerStockSystem.shouldBlockEquipping(serverPlayer, stack, ((Equippable) (Object) this).slot())) {
+			serverPlayer.getInventory().setChanged();
+			serverPlayer.inventoryMenu.broadcastFullState();
+			cir.setReturnValue(InteractionResult.FAIL);
+			return;
+		}
 		if (player instanceof ServerPlayer serverPlayer
 				&& ServerRaceSystem.isLockedAncientUkrGasMaskSlot(serverPlayer, ((Equippable) (Object) this).slot())) {
 			// Right-click equipment swaps bypass inventory Slot.mayPickup.
