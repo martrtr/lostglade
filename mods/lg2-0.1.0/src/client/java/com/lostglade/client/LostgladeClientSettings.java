@@ -3,13 +3,14 @@ package com.lostglade.client;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.lostglade.Lg2;
-import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.fabricmc.fabric.api.client.screen.v1.Screens;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.screens.options.OptionsScreen;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.chat.Component;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
+import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -17,16 +18,18 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Local-only preferences for a player who contributes GPU time to cameras. */
+/** Local-only preferences for Lostglade's client features. */
 public final class LostgladeClientSettings {
-	private static final int MIN_PARALLEL_CAPTURES = 1;
+	private static final int DEFAULT_RENDER_BUDGET_PERCENT = 100;
 	private static final int MAX_PARALLEL_CAPTURES = 4;
-	private static final int MIN_MAP_RENDERER_FPS = 20;
-	private static final int MAX_MAP_RENDERER_FPS = 240;
-	private static final int MIN_MAP_RENDERER_JOBS_PER_MINUTE = 1;
-	private static final int MAX_MAP_RENDERER_JOBS_PER_MINUTE = 60;
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("lostglade-client.json");
+	private static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(
+			Identifier.fromNamespaceAndPath("lg2", "lostglade")
+	);
+	private static final KeyMapping OPEN_SETTINGS = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+			"key.lg2.open_settings", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_F7, CATEGORY
+	));
 	private static Settings settings = Settings.defaults();
 
 	private LostgladeClientSettings() {
@@ -37,84 +40,56 @@ public final class LostgladeClientSettings {
 		if (Files.isRegularFile(PATH)) {
 			try (Reader reader = Files.newBufferedReader(PATH)) {
 				Settings parsed = GSON.fromJson(reader, Settings.class);
-				if (parsed != null) {
-					loaded = parsed;
-				}
+				if (parsed != null) loaded = parsed;
 			} catch (Exception exception) {
 				Lg2.LOGGER.warn("Failed to read Lostglade client settings {}, restoring defaults", PATH, exception);
 			}
 		}
 		boolean changed = sanitize(loaded);
 		settings = loaded;
-		if (changed || !Files.exists(PATH)) {
-			write();
-		}
+		if (changed || !Files.exists(PATH)) write();
 	}
 
+	/** One shared limit for background camera and map work, from 0 to 100 percent. */
+	public static int renderBudgetPercent() {
+		return settings.renderBudgetPercent;
+	}
+
+	/** The common Controls-screen category used by Lostglade client bindings. */
+	public static KeyMapping.Category keyCategory() {
+		return CATEGORY;
+	}
+
+	public static synchronized void setRenderBudgetPercent(int percent) {
+		int clamped = Math.clamp(percent, 0, 100);
+		if (settings.renderBudgetPercent == clamped) return;
+		settings.renderBudgetPercent = clamped;
+		write();
+	}
+
+	public static boolean isRenderContributionEnabled() {
+		return settings.renderBudgetPercent > 0;
+	}
+
+	/** Compatibility for existing camera code; camera work has priority over map work. */
 	public static boolean isCameraRendererEnabled() {
-		return settings.cameraRendererEnabled;
+		return isRenderContributionEnabled();
 	}
 
 	public static synchronized void setCameraRendererEnabled(boolean enabled) {
-		if (settings.cameraRendererEnabled == enabled && Boolean.TRUE.equals(settings.cameraRendererToggleConfigured)) {
-			return;
-		}
-		settings.cameraRendererEnabled = enabled;
-		settings.cameraRendererToggleConfigured = true;
-		write();
+		setRenderBudgetPercent(enabled
+				? (settings.renderBudgetPercent > 0 ? settings.renderBudgetPercent : DEFAULT_RENDER_BUDGET_PERCENT)
+				: 0);
 	}
 
+	/** Converts the percentage into the existing 1..4 camera frame capacity. */
 	public static int maxParallelCaptures() {
-		return settings.maxParallelCaptures;
+		return Math.max(1, (int) Math.ceil(renderBudgetPercent() * MAX_PARALLEL_CAPTURES / 100.0D));
 	}
 
-	public static synchronized void setMaxParallelCaptures(int value) {
-		int clamped = Math.clamp(value, MIN_PARALLEL_CAPTURES, MAX_PARALLEL_CAPTURES);
-		if (settings.maxParallelCaptures == clamped) {
-			return;
-		}
-		settings.maxParallelCaptures = clamped;
-		write();
-	}
-
-	public static MapRendererMode mapRendererMode() {
-		return settings.mapRendererMode;
-	}
-
-	public static synchronized void setMapRendererMode(MapRendererMode mode) {
-		MapRendererMode safe = mode == null ? MapRendererMode.OFF : mode;
-		if (settings.mapRendererMode == safe && Boolean.TRUE.equals(settings.mapRendererModeConfigured)) {
-			return;
-		}
-		settings.mapRendererMode = safe;
-		settings.mapRendererModeConfigured = true;
-		write();
-	}
-
-	public static int mapRendererMinFps() {
-		return settings.mapRendererMinFps;
-	}
-
-	public static synchronized void setMapRendererMinFps(int fps) {
-		int clamped = Math.clamp(fps, MIN_MAP_RENDERER_FPS, MAX_MAP_RENDERER_FPS);
-		if (settings.mapRendererMinFps == clamped) {
-			return;
-		}
-		settings.mapRendererMinFps = clamped;
-		write();
-	}
-
-	public static int mapRendererMaxJobsPerMinute() {
-		return settings.mapRendererMaxJobsPerMinute;
-	}
-
-	public static synchronized void setMapRendererMaxJobsPerMinute(int jobs) {
-		int clamped = Math.clamp(jobs, MIN_MAP_RENDERER_JOBS_PER_MINUTE, MAX_MAP_RENDERER_JOBS_PER_MINUTE);
-		if (settings.mapRendererMaxJobsPerMinute == clamped) {
-			return;
-		}
-		settings.mapRendererMaxJobsPerMinute = clamped;
-		write();
+	/** Limits map offers with the same common percentage as camera rendering. */
+	public static int maxMapJobsPerMinute() {
+		return Math.max(1, (int) Math.ceil(renderBudgetPercent() * 60 / 100.0D));
 	}
 
 	public static boolean isRaceMenuEnabled() {
@@ -148,59 +123,31 @@ public final class LostgladeClientSettings {
 		write();
 	}
 
-	public static void registerOptionsScreen() {
-		ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
-			if (!(screen instanceof OptionsScreen)) {
-				return;
+	/** Settings are intentionally reachable only by this key binding and Mod Menu. */
+	public static void registerSettingsKeyBinding() {
+		ClientTickEvents.END_CLIENT_TICK.register(LostgladeClientSettings::openSettingsWhenRequested);
+	}
+
+	private static void openSettingsWhenRequested(Minecraft client) {
+		while (OPEN_SETTINGS.consumeClick()) {
+			if (client != null && !(client.screen instanceof LostgladeSettingsScreen)) {
+				client.setScreen(new LostgladeSettingsScreen(client.screen));
 			}
-			Screens.getButtons(screen).add(Button.builder(
-					Component.literal("Lostglade"),
-					button -> client.setScreen(new LostgladeSettingsScreen(screen))
-			).bounds(width / 2 - 155, height - 52, 150, 20).build());
-		});
+		}
 	}
 
 	private static boolean sanitize(Settings value) {
 		boolean changed = false;
-		// The previous client had no explicit settings-page opt-in and defaulted the
-		// volunteer camera renderer to ON. Migrate that legacy implicit state once.
-		if (!Boolean.TRUE.equals(value.cameraRendererToggleConfigured)) {
-			value.cameraRendererEnabled = false;
-			value.cameraRendererToggleConfigured = true;
+		// Pre-UI-rework files kept camera and map limits separately. Preserve an
+		// explicit opt-out; otherwise migrate them to the new shared default.
+		if (value.renderBudgetPercent == null) {
+			value.renderBudgetPercent = !value.cameraRendererEnabled && value.mapRendererMode == MapRendererMode.OFF
+					? 0 : DEFAULT_RENDER_BUDGET_PERCENT;
 			changed = true;
 		}
-		// Older configs used maxParallelCaptures=0 as the disabled state. Keep them
-		// disabled, but migrate the stored limit to a valid 1..4 value so the new
-		// explicit toggle can be enabled without losing the preferred capacity.
-		if (value.maxParallelCaptures <= 0) {
-			value.cameraRendererEnabled = false;
-			value.maxParallelCaptures = 1;
-			changed = true;
-		}
-		int clamped = Math.clamp(value.maxParallelCaptures, MIN_PARALLEL_CAPTURES, MAX_PARALLEL_CAPTURES);
-		if (clamped != value.maxParallelCaptures) {
-			value.maxParallelCaptures = clamped;
-			changed = true;
-		}
-		// Map workers used to default to OFF. Migrate that implicit default once so
-		// every updated Lostglade client actually joins the distributed map pool.
-		// Any choice made after this migration is marked explicit and is preserved.
-		if (!Boolean.TRUE.equals(value.mapRendererModeConfigured)) {
-			value.mapRendererMode = MapRendererMode.ALWAYS;
-			value.mapRendererModeConfigured = true;
-			changed = true;
-		} else if (value.mapRendererMode == null) {
-			value.mapRendererMode = MapRendererMode.ALWAYS;
-			changed = true;
-		}
-		int minFps = Math.clamp(value.mapRendererMinFps, MIN_MAP_RENDERER_FPS, MAX_MAP_RENDERER_FPS);
-		if (minFps != value.mapRendererMinFps) {
-			value.mapRendererMinFps = minFps;
-			changed = true;
-		}
-		int jobs = Math.clamp(value.mapRendererMaxJobsPerMinute, MIN_MAP_RENDERER_JOBS_PER_MINUTE, MAX_MAP_RENDERER_JOBS_PER_MINUTE);
-		if (jobs != value.mapRendererMaxJobsPerMinute) {
-			value.mapRendererMaxJobsPerMinute = jobs;
+		int budget = Math.clamp(value.renderBudgetPercent, 0, 100);
+		if (budget != value.renderBudgetPercent) {
+			value.renderBudgetPercent = budget;
 			changed = true;
 		}
 		float tiltStrength = Math.clamp(Float.isFinite(value.droneTiltStrength) ? value.droneTiltStrength : 1.0F, 0.0F, 1.0F);
@@ -222,36 +169,20 @@ public final class LostgladeClientSettings {
 		}
 	}
 
-	public enum MapRendererMode {
-		OFF,
-		IDLE_ONLY,
-		ALWAYS;
-
-		public MapRendererMode next() {
-			return switch (this) {
-				case OFF -> IDLE_ONLY;
-				case IDLE_ONLY -> ALWAYS;
-				case ALWAYS -> OFF;
-			};
-		}
-	}
+	/** Retained solely to read older local configuration files safely. */
+	private enum MapRendererMode { OFF, IDLE_ONLY, ALWAYS }
 
 	private static final class Settings {
+		private Integer renderBudgetPercent;
 		private boolean cameraRendererEnabled = false;
-		private Boolean cameraRendererToggleConfigured;
-		private int maxParallelCaptures = 1;
 		private MapRendererMode mapRendererMode = MapRendererMode.ALWAYS;
-		private Boolean mapRendererModeConfigured;
-		private int mapRendererMinFps = 50;
-		private int mapRendererMaxJobsPerMinute = 60;
 		private boolean raceMenuEnabled = true;
 		private boolean droneTiltEnabled = true;
 		private float droneTiltStrength = 1.0F;
 
 		private static Settings defaults() {
 			Settings defaults = new Settings();
-			defaults.cameraRendererToggleConfigured = true;
-			defaults.mapRendererModeConfigured = true;
+			defaults.renderBudgetPercent = DEFAULT_RENDER_BUDGET_PERCENT;
 			return defaults;
 		}
 	}

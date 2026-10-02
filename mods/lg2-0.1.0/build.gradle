@@ -50,6 +50,10 @@ repositories {
 		name = "Ladysnake Releases"
 		url = "https://maven.ladysnake.org/releases"
 	}
+	maven {
+		name = "Modrinth"
+		url = "https://api.modrinth.com/maven"
+	}
 }
 
 loom {
@@ -106,6 +110,9 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	// Optional at runtime: this only supplies the config-screen API when the
+	// player has Mod Menu installed.
+	modCompileOnly "maven.modrinth:modmenu:${project.modmenu_version}"
 	modImplementation "eu.pb4:polymer-core:${project.polymer_version}"
 	modImplementation "eu.pb4:polymer-blocks:${project.polymer_version}"
 	modImplementation "eu.pb4:polymer-resource-pack:${project.polymer_version}"

@@ -13,15 +13,30 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(PlayerList.class)
 public abstract class PlayerListAccountAuthMixin {
-	@Inject(method = "placeNewPlayer", at = @At("HEAD"))
+	@Inject(method = "placeNewPlayer", at = @At("HEAD"), cancellable = true)
 	private void lg2$placeInAuthenticationWorldBeforePlayPackets(
 			Connection connection,
 			ServerPlayer player,
 			CommonListenerCookie cookie,
 			CallbackInfo ci
 	) {
-		AccountAuthSystem.preparePlayerPlacement(player, connection);
+		if (!AccountAuthSystem.preparePlayerPlacement(player, connection)) ci.cancel();
 	}
+
+	@Inject(method = "placeNewPlayer", at = @At("RETURN"))
+	private void lg2$startAuthenticationOnlyAfterVanillaPlacementCompletes(
+			Connection connection,
+			ServerPlayer player,
+			CommonListenerCookie cookie,
+			CallbackInfo ci
+	) {
+		AccountAuthSystem.onPlayerPlacementComplete(player);
+	}
+	@Inject(method = "remove", at = @At("RETURN"))
+	private void lg2$clearAuthenticationStateOnlyAfterVanillaSave(ServerPlayer player, CallbackInfo ci) {
+		AccountAuthSystem.onPlayerRemoved(player);
+	}
+
 	@Inject(method = "getPlayerNamesArray", at = @At("RETURN"), cancellable = true)
 	private void lg2$hideUnauthenticatedNamesFromSuggestions(CallbackInfoReturnable<String[]> cir) {
 		PlayerList self = (PlayerList) (Object) this;

@@ -6,8 +6,10 @@
   "description": "Lostglade client: race abilities, drone camera tilt, and GPU camera rendering.",
   "environment": "client",
   "entrypoints": {
-    "client": ["com.lostglade.Lg2Client"]
+    "client": ["com.lostglade.Lg2Client"],
+    "modmenu": ["com.lostglade.client.LostgladeModMenuApi"]
   },
+  "icon": "assets/lg2/icon.png",
   "mixins": [
     "lg2.client.mixins.json",
     "lg2.absolute_invisibility.client.mixins.json",

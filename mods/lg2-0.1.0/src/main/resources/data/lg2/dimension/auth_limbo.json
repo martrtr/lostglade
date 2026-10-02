@@ -1,15 +1,7 @@
 {
-  "type": "minecraft:overworld",
+  "type": "lg2:milk_pocket",
   "generator": {
-    "type": "minecraft:flat",
-    "settings": {
-      "biome": "minecraft:the_void",
-      "features": false,
-      "lakes": false,
-      "layers": [
-        { "block": "minecraft:air", "height": 1 }
-      ],
-      "structure_overrides": []
-    }
+    "type": "lg2:milk_pocket",
+    "biome": "lg2:milk_pocket"
   }
 }

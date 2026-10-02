@@ -40,15 +40,20 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
 import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
 import net.minecraft.network.protocol.game.ClientboundSetChunkCacheRadiusPacket;
 import net.minecraft.network.protocol.game.ClientboundSetSimulationDistancePacket;
-import net.minecraft.network.protocol.game.ClientboundSystemChatPacket;
+import net.minecraft.network.protocol.game.ClientboundSetHealthPacket;
+import net.minecraft.network.protocol.game.ClientboundClearTitlesPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
 import net.minecraft.network.protocol.game.ClientboundUpdateRecipesPacket;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
@@ -57,13 +62,16 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ChunkTrackingView;
 import net.minecraft.world.entity.Relative;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Abilities;
 import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.portal.TeleportTransition;
 
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
@@ -80,6 +88,7 @@ import java.security.spec.KeySpec;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -88,6 +97,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -103,7 +113,7 @@ public final class AccountAuthSystem {
 	private static final int PASSWORD_ITERATIONS = 210_000;
 	private static final int PASSWORD_KEY_BITS = 256;
 	private static final int PROMPT_INTERVAL_TICKS = 40;
-	private static final long CLIENT_TOKEN_GRACE_MILLIS = 5_000L;
+	private static final long CLIENT_TOKEN_GRACE_MILLIS = 1_500L;
 	private static final int MAX_FAILED_ATTEMPTS = 5;
 	private static final long FAILURE_WINDOW_MILLIS = 60_000L;
 
@@ -114,14 +124,21 @@ public final class AccountAuthSystem {
 	private static final Map<String, Account> ACCOUNTS = new ConcurrentHashMap<>();
 	private static final Set<UUID> AUTHENTICATED = ConcurrentHashMap.newKeySet();
 	private static final Set<UUID> AUTH_TRANSITIONING = ConcurrentHashMap.newKeySet();
+	/** Current connection identity for each human UUID; stale disconnects must never mutate a replacement session. */
+	private static final Map<UUID, ServerPlayer> ACTIVE_HUMAN_SESSIONS = new ConcurrentHashMap<>();
+	/** Set only after PlayerList.placeNewPlayer has returned and vanilla entity/chunk registration is complete. */
+	private static final Map<UUID, ServerPlayer> PLACEMENT_COMPLETE = new ConcurrentHashMap<>();
 	private static final Set<UUID> CONNECTED_HUMAN_SESSIONS = ConcurrentHashMap.newKeySet();
 	private static final Set<UUID> PRESENCE_VISIBLE = ConcurrentHashMap.newKeySet();
+	private static final Set<UUID> PRESENCE_PREANNOUNCED = ConcurrentHashMap.newKeySet();
 	private static final Map<UUID, Set<String>> PRESENCE_LABELS = new ConcurrentHashMap<>();
 	private static final Map<UUID, Set<String>> INITIAL_JOIN_LABELS = new ConcurrentHashMap<>();
 	private static final Set<UUID> PRESENCE_REMOVE_END_OF_TICK = ConcurrentHashMap.newKeySet();
 	private static final Set<UUID> VERIFIED_PREMIUM_SESSIONS = ConcurrentHashMap.newKeySet();
 	private static final Set<UUID> PREMIUM_TOKEN_BIND_PENDING = ConcurrentHashMap.newKeySet();
-	private static final Map<UUID, LimboState> LIMBO = new ConcurrentHashMap<>();
+	/** Quarantine state is bound to a concrete connection/player object, never merely a UUID. */
+	private static final Map<ServerPlayer, LimboState> LIMBO = new ConcurrentHashMap<>();
+	private static final Map<Connection, AuthenticationReturnTarget> STAGED_RETURN_TARGETS = Collections.synchronizedMap(new WeakHashMap<>());
 	private static final Map<UUID, List<Runnable>> AFTER_AUTH_ACTIONS = new ConcurrentHashMap<>();
 	private static MinecraftServer authenticatedPlayersCacheServer;
 	private static int authenticatedPlayersCacheTick = Integer.MIN_VALUE;
@@ -175,24 +192,50 @@ public final class AccountAuthSystem {
 
 	public static void register() {
 		load();
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				onJoin((ServerPlayer) handler.player));
-		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
-				server.execute(() -> clearSession(handler.player, server)));
+		// Do not authenticate from ServerPlayConnectionEvents.JOIN. Fabric fires JOIN in the middle of
+		// PlayerList.placeNewPlayer, before vanilla adds the ServerPlayer to its level. A dimension
+		// teleport from that callback corrupts the entity callback / DistanceManager bookkeeping.
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+			ServerPlayer player = handler.player;
+			if (server.isSameThread()) clearSession(player, server);
+			else server.execute(() -> clearSession(player, server));
+		});
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
-			if (AUTHENTICATED.contains(oldPlayer.getUUID())) AUTHENTICATED.add(newPlayer.getUUID());
+			UUID playerId = oldPlayer.getUUID();
+			if (!ACTIVE_HUMAN_SESSIONS.replace(playerId, oldPlayer, newPlayer)) return;
+
+			LimboState pendingState = LIMBO.remove(oldPlayer);
+			if (pendingState != null || !AUTHENTICATED.contains(playerId)) {
+				// A pre-auth player should be impossible to kill, but stale/corrupt client state from an
+				// older build can still request a vanilla respawn. Never let that respawn escape quarantine.
+				AUTHENTICATED.remove(playerId);
+				AUTH_TRANSITIONING.remove(playerId);
+				PLACEMENT_COMPLETE.put(playerId, newPlayer);
+				if (pendingState != null) LIMBO.put(newPlayer, pendingState);
+				retractAnnouncedPresence(newPlayer);
+				invalidateAuthenticatedPlayersCache();
+				newPlayer.connection.disconnect(Component.literal("Authentication session was reset during respawn. Please reconnect."));
+				return;
+			}
+
+			PLACEMENT_COMPLETE.put(playerId, newPlayer);
 			invalidateAuthenticatedPlayersCache();
 		});
+		ServerLifecycleEvents.SERVER_STARTED.register(AccountAuthSystem::warmAuthenticationWorld);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			save();
+			ACTIVE_HUMAN_SESSIONS.clear();
+			PLACEMENT_COMPLETE.clear();
 			CONNECTED_HUMAN_SESSIONS.clear();
 			AUTH_TRANSITIONING.clear();
 			PRESENCE_VISIBLE.clear();
+			PRESENCE_PREANNOUNCED.clear();
 			PRESENCE_LABELS.clear();
 			INITIAL_JOIN_LABELS.clear();
 			PRESENCE_REMOVE_END_OF_TICK.clear();
 			PREMIUM_TOKEN_BIND_PENDING.clear();
 			AFTER_AUTH_ACTIONS.clear();
+			STAGED_RETURN_TARGETS.clear();
 			authenticatedPlayersCacheServer = null;
 			authenticatedPlayersCacheTick = Integer.MIN_VALUE;
 			authenticatedPlayersCache = List.of();
@@ -240,12 +283,24 @@ public final class AccountAuthSystem {
 	}
 
 	public static boolean isAuthenticated(ServerPlayer player) {
-		return player != null && (RendererBotPresenceSystem.isRendererBot(player) || AUTHENTICATED.contains(player.getUUID()));
+		if (player == null) return false;
+		if (RendererBotPresenceSystem.isRendererBot(player)) return true;
+		UUID playerId = player.getUUID();
+		return ACTIVE_HUMAN_SESSIONS.get(playerId) == player
+				&& AUTHENTICATED.contains(playerId)
+				&& !isAuthenticationWorld(player);
 	}
 
-	/** True only after the human session has completed authentication and is allowed to exist publicly. */
+	/** True only after the current human session has completed authentication and is allowed to exist publicly. */
 	public static boolean isPresenceVisible(ServerPlayer player) {
-		return player != null && !RendererBotPresenceSystem.isRendererBot(player) && PRESENCE_VISIBLE.contains(player.getUUID());
+		if (player == null || RendererBotPresenceSystem.isRendererBot(player)) return false;
+		UUID playerId = player.getUUID();
+		return ACTIVE_HUMAN_SESSIONS.get(playerId) == player && PRESENCE_VISIBLE.contains(playerId);
+	}
+
+	/** Profile-only preannouncement used to let remote clients construct the entity after auth succeeds. */
+	public static boolean isPresencePreannounced(UUID playerId) {
+		return playerId != null && PRESENCE_PREANNOUNCED.contains(playerId);
 	}
 
 	public static boolean isPendingAuthentication(UUID playerId) {
@@ -375,7 +430,12 @@ public final class AccountAuthSystem {
 	}
 
 	public static boolean isInLimbo(ServerPlayer player) {
-		return player != null && LIMBO.containsKey(player.getUUID());
+		return player != null && LIMBO.containsKey(player);
+	}
+
+	/** The technical authentication dimension must never become normal gameplay state. */
+	public static boolean isAuthenticationWorld(ServerPlayer player) {
+		return player != null && AUTH_LIMBO_LEVEL.equals(player.level().dimension());
 	}
 
 	/** True only during the synchronous, already-approved hop from auth_limbo to the real level. */
@@ -385,20 +445,9 @@ public final class AccountAuthSystem {
 
 	public static ChunkTrackingView createLimboChunkTrackingView(ServerPlayer player) {
 		if (player == null) return ChunkTrackingView.EMPTY;
-		var center = player.chunkPosition();
-		// ChunkTrackingView.of(center, 0) is empty in 1.21.11. The loading screen
-		// waits for the player's chunk, so expose exactly that one auth-limbo chunk.
-		return new ChunkTrackingView() {
-			@Override
-			public boolean contains(int x, int z, boolean includeNeighbors) {
-				return x == center.x && z == center.z;
-			}
-
-			@Override
-			public void forEach(java.util.function.Consumer<net.minecraft.world.level.ChunkPos> consumer) {
-				consumer.accept(center);
-			}
-		};
+		// A value object is essential here: ChunkMap asks for this view repeatedly. An anonymous
+		// object made every call compare unequal and re-applied the same chunk subscription forever.
+		return new SingleChunkTrackingView(player.chunkPosition());
 	}
 
 	/** Used by the packet mixin as the final guard for movement and inventory packets. */
@@ -408,7 +457,7 @@ public final class AccountAuthSystem {
 
 	/**
 	 * Network quarantine for the play phase. Before authentication the client receives only protocol
-	 * liveness, the auth resource pack/actionbar, and packets needed to enter its private empty limbo chunk.
+	 * liveness, the auth resource pack/title, and packets needed to enter its private empty limbo chunk.
 	 * Everything belonging to the real server (tab, chat, inventory, XP, scoreboard, entities,
 	 * recipes, advancements, boss bars, sounds, particles, commands, etc.) is discarded.
 	 */
@@ -441,8 +490,14 @@ public final class AccountAuthSystem {
 				|| packet instanceof ClientboundSetSimulationDistancePacket) {
 			return packet;
 		}
-		if (packet instanceof ClientboundSystemChatPacket systemChatPacket) {
-			return systemChatPacket.overlay() && isAuthenticationOverlay(receiver, systemChatPacket.content()) ? packet : null;
+		if (packet instanceof ClientboundSetTitleTextPacket titlePacket) {
+			return isAuthenticationMessage(receiver, titlePacket.text()) ? packet : null;
+		}
+		if (packet instanceof ClientboundSetTitlesAnimationPacket) {
+			return isInLimbo(receiver) ? packet : null;
+		}
+		if (packet instanceof ClientboundClearTitlesPacket) {
+			return isInLimbo(receiver) ? packet : null;
 		}
 		// 1.21.11 keeps the terrain-loading screen open until this exact marker arrives.
 		// It carries no real-world data; all other game events remain quarantined.
@@ -479,10 +534,13 @@ public final class AccountAuthSystem {
 		return !(verb.equals("password") || verb.startsWith("password "));
 	}
 
-	private static void onJoin(ServerPlayer player) {
-		if (player == null) return;
-		if (RendererBotPresenceSystem.isRendererBot(player)) return;
-		CONNECTED_HUMAN_SESSIONS.add(player.getUUID());
+	/** Called from PlayerList.placeNewPlayer RETURN, after vanilla registered the entity and chunk tracking. */
+	public static void onPlayerPlacementComplete(ServerPlayer player) {
+		if (player == null || RendererBotPresenceSystem.isRendererBot(player)) return;
+		UUID playerId = player.getUUID();
+		if (ACTIVE_HUMAN_SESSIONS.get(playerId) != player) return;
+		PLACEMENT_COMPLETE.put(playerId, player);
+		CONNECTED_HUMAN_SESSIONS.add(playerId);
 		// Pin the client cache to its isolated limbo chunk before it processes terrain.
 		if (isInLimbo(player) && player.connection != null) {
 			var center = player.chunkPosition();
@@ -501,7 +559,7 @@ public final class AccountAuthSystem {
 			// Prefer the installed client identity over IP. Give the client a brief
 			// play-phase window to present its persisted token; if it does not,
 			// a previously trusted IP remains a compatibility fallback.
-			enterLimbo(player);
+			ensureLimboIsolation(player);
 			CLIENT_TOKEN_GRACE_UNTIL.put(player.getUUID(), System.currentTimeMillis() + CLIENT_TOKEN_GRACE_MILLIS);
 			return;
 		}
@@ -509,7 +567,7 @@ public final class AccountAuthSystem {
 			authorize(player);
 			return;
 		}
-		enterLimbo(player);
+		ensureLimboIsolation(player);
 		sendPrompt(player);
 	}
 
@@ -577,23 +635,23 @@ public final class AccountAuthSystem {
 			return true;
 		}
 		if (!account.canUseOfflineAccess()) {
-			actionbar(player, "premium_password_admin");
+			authTitle(player, "premium_password_admin");
 			return false;
 		}
 		if (isAuthenticated(player)) {
 			if (account.premiumVerified) {
-				actionbar(player, "premium_password_admin");
+				authTitle(player, "premium_password_admin");
 				return false;
 			}
 			account.replacePassword(password);
 			save();
-			actionbar(player, "success_changed");
+			authTitle(player, "success_changed");
 			return true;
 		}
 		if (isLocked(player)) return false;
 		if (!verifyPassword(password, account)) {
 			recordFailure(player);
-			actionbar(player, "wrong_password");
+			authTitle(player, "wrong_password");
 			return false;
 		}
 		FAILURES.remove(key(player.getScoreboardName()));
@@ -650,7 +708,7 @@ public final class AccountAuthSystem {
 			return false;
 		}
 		if (state.count < MAX_FAILED_ATTEMPTS) return false;
-		actionbar(player, "too_many_attempts");
+		authTitle(player, "too_many_attempts");
 		return true;
 	}
 
@@ -675,12 +733,27 @@ public final class AccountAuthSystem {
 		return Set.copyOf(labels);
 	}
 
-	private static void publishPresence(ServerPlayer player) {
+	/**
+	 * Announces the newly authenticated profile before its cross-dimension move.
+	 * The client requires this packet before the entity-spawn packet that the
+	 * destination ChunkMap sends during {@link ServerPlayer#teleportTo}; sending
+	 * it afterwards leaves the player model absent until a later resync.
+	 */
+	private static void announcePresenceBeforeTeleport(ServerPlayer player) {
 		UUID playerId = player.getUUID();
 		PRESENCE_REMOVE_END_OF_TICK.remove(playerId);
-		PRESENCE_VISIBLE.add(playerId);
-		PRESENCE_LABELS.put(playerId, playerPresenceLabels(player));
+		PRESENCE_PREANNOUNCED.add(playerId);
 
+		MinecraftServer server = player.level().getServer();
+		if (server == null) return;
+		ClientboundPlayerInfoUpdatePacket profileOnly = ServerTabPacketSystem.createUnlistedPlayerInitializingPacket(player);
+		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+			if (viewer != player && isAuthenticated(viewer)) viewer.connection.send(profileOnly);
+		}
+	}
+
+	/** Completes the normal player-list sync after the player has reached the real world. */
+	private static void publishPresenceToPlayer(ServerPlayer player) {
 		MinecraftServer server = player.level().getServer();
 		if (server == null) return;
 		List<ServerPlayer> publicPlayers = server.getPlayerList().getPlayers().stream()
@@ -689,9 +762,36 @@ public final class AccountAuthSystem {
 		if (!publicPlayers.isEmpty()) {
 			player.connection.send(ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(publicPlayers));
 		}
-		ClientboundPlayerInfoUpdatePacket selfAnnouncement = ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(List.of(player));
+	}
+
+	/** Makes the already-authenticated player public only after the real-world teleport completed. */
+	private static void finalizePresence(ServerPlayer player) {
+		UUID playerId = player.getUUID();
+		PRESENCE_PREANNOUNCED.remove(playerId);
+		PRESENCE_REMOVE_END_OF_TICK.remove(playerId);
+		PRESENCE_VISIBLE.add(playerId);
+		PRESENCE_LABELS.put(playerId, playerPresenceLabels(player));
+
+		MinecraftServer server = player.level().getServer();
+		if (server == null) return;
+		ClientboundPlayerInfoUpdatePacket announcement = ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(List.of(player));
 		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
-			if (viewer != player && isAuthenticated(viewer)) viewer.connection.send(selfAnnouncement);
+			if (viewer != player && isAuthenticated(viewer)) viewer.connection.send(announcement);
+		}
+		publishPresenceToPlayer(player);
+	}
+
+	/** Retracts the pre-teleport profile if the transition could not complete. */
+	private static void retractAnnouncedPresence(ServerPlayer player) {
+		if (player == null) return;
+		UUID playerId = player.getUUID();
+		PRESENCE_PREANNOUNCED.remove(playerId);
+		removePresence(playerId);
+		MinecraftServer server = player.level().getServer();
+		if (server == null) return;
+		ClientboundPlayerInfoRemovePacket removal = new ClientboundPlayerInfoRemovePacket(List.of(playerId));
+		for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+			if (viewer != player && isAuthenticated(viewer)) viewer.connection.send(removal);
 		}
 	}
 
@@ -721,6 +821,9 @@ public final class AccountAuthSystem {
 			player.getAdvancements().flushDirty(player, true);
 			player.resetSentInfo();
 			((ServerPlayerAccountAuthAccessor) player).lg2$updatePlayerAttributes();
+			player.connection.send(new ClientboundSetHealthPacket(
+					player.getHealth(), player.getFoodData().getFoodLevel(), player.getFoodData().getSaturationLevel()
+			));
 			player.onUpdateAbilities();
 			player.inventoryMenu.broadcastFullState();
 			if (player.containerMenu != player.inventoryMenu) player.containerMenu.broadcastFullState();
@@ -732,8 +835,12 @@ public final class AccountAuthSystem {
 	private static void broadcastAuthenticatedJoin(ServerPlayer player) {
 		MinecraftServer server = player.level().getServer();
 		if (server == null) return;
+		// placeNewPlayer has already returned, so no vanilla initial join can still be pending.
+		// Ensure our post-auth announcement is never mistaken for that suppressed pre-auth message.
+		INITIAL_JOIN_LABELS.remove(player.getUUID());
 		server.getPlayerList().broadcastSystemMessage(
-				Component.translatable("multiplayer.player.joined", player.getDisplayName()), false
+				Component.translatable("multiplayer.player.joined", player.getDisplayName())
+						.withStyle(ChatFormatting.YELLOW), false
 		);
 	}
 
@@ -746,17 +853,24 @@ public final class AccountAuthSystem {
 	private static void authorize(ServerPlayer player, String messageKey) {
 		if (player == null || isAuthenticated(player) || isAuthTransitioning(player)) return;
 		UUID playerId = player.getUUID();
+		if (ACTIVE_HUMAN_SESSIONS.get(playerId) != player || PLACEMENT_COMPLETE.get(playerId) != player) {
+			Lg2.LOGGER.warn("Ignored premature/stale authentication attempt for {}", player.getScoreboardName());
+			return;
+		}
 
 		// Keep gameplay systems blind to this player until the cross-dimension hop has really finished.
 		// Only the network/chunk quarantine is relaxed during this short synchronous transition.
 		if (!AUTH_TRANSITIONING.add(playerId)) return;
 		boolean leftLimbo;
 		try {
+			// A RemotePlayer needs its player-list entry before ChunkMap emits the spawn packet.
+			announcePresenceBeforeTeleport(player);
 			leftLimbo = leaveLimbo(player, true);
 		} finally {
 			AUTH_TRANSITIONING.remove(playerId);
 		}
 		if (!leftLimbo) {
+			retractAnnouncedPresence(player);
 			Lg2.LOGGER.error("Authentication transition failed for {}; keeping the player quarantined", player.getScoreboardName());
 			player.connection.disconnect(Component.literal("Authentication transition failed. Please reconnect."));
 			return;
@@ -767,34 +881,104 @@ public final class AccountAuthSystem {
 		OFFERED_CLIENT_TOKENS.remove(player.getUUID());
 		CLIENT_TOKEN_GRACE_UNTIL.remove(player.getUUID());
 		FAILURES.remove(key(player.getScoreboardName()));
-		publishPresence(player);
+		clearAuthTitle(player);
+		finalizePresence(player);
 		resyncGameplayState(player);
 		runAfterAuthActions(player);
-		if (messageKey != null) actionbar(player, messageKey);
+		if (messageKey != null) authTitle(player, messageKey);
 		broadcastAuthenticatedJoin(player);
 	}
 
 	private static void clearSession(ServerPlayer player, MinecraftServer server) {
 		if (player == null) return;
-		invalidateAuthenticatedPlayersCache();
 		UUID playerId = player.getUUID();
+		// A delayed disconnect belonging to a replaced connection must never clear the new session.
+		if (!ACTIVE_HUMAN_SESSIONS.remove(playerId, player)) return;
+		PLACEMENT_COMPLETE.remove(playerId, player);
+		invalidateAuthenticatedPlayersCache();
 		CONNECTED_HUMAN_SESSIONS.remove(playerId);
 		INITIAL_JOIN_LABELS.remove(playerId);
 		AUTHENTICATED.remove(playerId);
 		AUTH_TRANSITIONING.remove(playerId);
+		PRESENCE_PREANNOUNCED.remove(playerId);
 		VERIFIED_PREMIUM_SESSIONS.remove(playerId);
 		PREMIUM_TOKEN_BIND_PENDING.remove(playerId);
 		OFFERED_CLIENT_TOKENS.remove(playerId);
 		CLIENT_TOKEN_GRACE_UNTIL.remove(playerId);
 		AFTER_AUTH_ACTIONS.remove(playerId);
-		leaveLimbo(player, false);
+		// Do NOT remove this concrete player's LIMBO state here. PlayerList.remove saves playerdata
+		// after the disconnect event, and rewriteLimboPersistentState still needs the real Dimension/Pos.
+		// PlayerListAccountAuthMixin removes the state at PlayerList.remove RETURN instead.
 		// Vanilla broadcasts the leave message during the disconnect path. Keep the presence marker until
 		// the end of this server tick so an authenticated player's leave message is not accidentally hidden.
 		if (PRESENCE_VISIBLE.contains(playerId)) PRESENCE_REMOVE_END_OF_TICK.add(playerId);
 		else removePresence(playerId);
 	}
 
+	/** Called after vanilla finished PlayerList.remove, including its playerdata save. */
+	public static void onPlayerRemoved(ServerPlayer player) {
+		if (player == null) return;
+		LIMBO.remove(player);
+	}
+
+	private static void enforceSessionInvariants(MinecraftServer server) {
+		for (ServerPlayer player : List.copyOf(server.getPlayerList().getPlayers())) {
+			if (player == null || RendererBotPresenceSystem.isRendererBot(player)) continue;
+			UUID playerId = player.getUUID();
+			ServerPlayer activePlayer = ACTIVE_HUMAN_SESSIONS.get(playerId);
+
+			if (activePlayer != player) {
+				// A human that is physically visible to PlayerList but has no current auth session must
+				// never be allowed to idle forever in the technical dimension. Fail closed.
+				if (isAuthenticationWorld(player)) {
+					Lg2.LOGGER.error("Authentication-world player {} has no active session; disconnecting", player.getScoreboardName());
+					player.connection.disconnect(Component.literal("Authentication state was lost. Please reconnect."));
+				}
+				continue;
+			}
+
+			if (PLACEMENT_COMPLETE.get(playerId) != player) {
+				if (isAuthenticationWorld(player) && isInLimbo(player)) {
+					// END_SERVER_TICK can only run after placeNewPlayer returned. If its RETURN injection
+					// was missed by another mixin/control-flow edge case, it is now safe to finish auth setup.
+					Lg2.LOGGER.warn("Recovering missed authentication placement completion for {}", player.getScoreboardName());
+					onPlayerPlacementComplete(player);
+				} else {
+					Lg2.LOGGER.error("Incomplete authentication placement state for {}; disconnecting", player.getScoreboardName());
+					player.connection.disconnect(Component.literal("Authentication initialization failed. Please reconnect."));
+				}
+				continue;
+			}
+
+			if (isAuthenticationWorld(player)) {
+				if (!isInLimbo(player)) {
+					// Never allow a state-less human to remain forever in the empty technical dimension.
+					LimboState recovery = captureReturnState(player);
+					LIMBO.put(player, recovery);
+					AUTHENTICATED.remove(playerId);
+					retractAnnouncedPresence(player);
+					Lg2.LOGGER.error("Lost authentication quarantine state for {}; disconnecting with a safe persistent return target",
+							player.getScoreboardName());
+					player.connection.disconnect(Component.literal("Authentication state was lost. Please reconnect."));
+					continue;
+				}
+				if (AUTHENTICATED.remove(playerId) || PRESENCE_VISIBLE.contains(playerId)) {
+					retractAnnouncedPresence(player);
+					invalidateAuthenticatedPlayersCache();
+					Lg2.LOGGER.error("Recovered impossible authenticated-in-limbo state for {}", player.getScoreboardName());
+				}
+				continue;
+			}
+
+			if (!AUTHENTICATED.contains(playerId) && !AUTH_TRANSITIONING.contains(playerId)) {
+				Lg2.LOGGER.error("Unauthenticated player {} escaped authentication limbo; disconnecting", player.getScoreboardName());
+				player.connection.disconnect(Component.literal("Authentication isolation failed. Please reconnect."));
+			}
+		}
+	}
+
 	private static void tickPrompts(MinecraftServer server) {
+		enforceSessionInvariants(server);
 		// Vanilla's initial join broadcast is synchronous with player placement. Any marker that
 		// survived until END_SERVER_TICK was not needed and must not suppress a later auth join.
 		INITIAL_JOIN_LABELS.clear();
@@ -825,12 +1009,12 @@ public final class AccountAuthSystem {
 			}
 		}
 		Account account = accountFor(player);
-		if (account != null && !account.canUseOfflineAccess()) actionbar(player, "premium_password_admin");
-		else actionbar(player, account == null ? "prompt_new" : "prompt_login");
+		if (account != null && !account.canUseOfflineAccess()) authTitle(player, "premium_password_admin");
+		else authTitle(player, account == null ? "prompt_new" : "prompt_login");
 	}
 
 
-	private static boolean isAuthenticationOverlay(ServerPlayer player, Component content) {
+	private static boolean isAuthenticationMessage(ServerPlayer player, Component content) {
 		if (player == null || content == null) return false;
 		String text = content.getString();
 		return text.equals(localize(player, "prompt_new"))
@@ -840,8 +1024,16 @@ public final class AccountAuthSystem {
 				|| text.equals(localize(player, "premium_password_admin"));
 	}
 
-	private static void actionbar(ServerPlayer player, String messageKey) {
-		player.displayClientMessage(Component.literal(localize(player, messageKey)), true);
+	private static void authTitle(ServerPlayer player, String messageKey) {
+		if (player == null || player.connection == null) return;
+		player.connection.send(new ClientboundSetTitlesAnimationPacket(0, PROMPT_INTERVAL_TICKS + 20, 5));
+		player.connection.send(new ClientboundSetTitleTextPacket(Component.literal(localize(player, messageKey))));
+	}
+
+	private static void clearAuthTitle(ServerPlayer player) {
+		if (player != null && player.connection != null) {
+			player.connection.send(new ClientboundClearTitlesPacket(true));
+		}
 	}
 
 	private static Account accountFor(ServerPlayer player) {
@@ -852,85 +1044,211 @@ public final class AccountAuthSystem {
 		return name == null ? "" : name.toLowerCase(Locale.ROOT);
 	}
 
-	/**
-	 * Moves a newly-created human player into the authentication dimension before PlayerList sends the
-	 * first PLAY-state world packets. This prevents even transient exposure of the real dimension.
-	 */
-	public static void preparePlayerPlacement(ServerPlayer player, Connection connection) {
-		invalidateAuthenticatedPlayersCache();
-		if (player == null || RendererBotPresenceSystem.isRendererBotConnection(player.getScoreboardName(), connection)
-				|| LIMBO.containsKey(player.getUUID())) return;
-		MinecraftServer server = player.level().getServer();
-		ServerLevel authLevel = server == null ? null : server.getLevel(AUTH_LIMBO_LEVEL);
-		if (authLevel == null) throw new IllegalStateException("Authentication limbo dimension is unavailable");
+	private static void warmAuthenticationWorld(MinecraftServer server) {
+		if (server == null) return;
+		ServerLevel level = server.getLevel(AUTH_LIMBO_LEVEL);
+		if (level == null) {
+			Lg2.LOGGER.error("Authentication limbo dimension {} is unavailable", AUTH_LIMBO_LEVEL.identifier());
+			return;
+		}
+		level.getChunkAt(BlockPos.containing(LIMBO_X, LIMBO_Y, LIMBO_Z));
+	}
 
-		ServerLevel returnLevel = player.level();
-		INITIAL_JOIN_LABELS.put(player.getUUID(), playerPresenceLabels(player));
-		LIMBO.put(player.getUUID(), new LimboState(returnLevel, player.getX(), player.getY(), player.getZ(),
-				player.getYRot(), player.getXRot(), player.isNoGravity(), player.tickCount,
-				AbilityState.capture(player.getAbilities()), player.getDeltaMovement(), player.fallDistance));
-		CONNECTED_HUMAN_SESSIONS.add(player.getUUID());
-		// Every unauthenticated session uses the same single empty technical chunk. Network
-		// quarantine prevents players from seeing or interacting with each other, while keeping
-		// the auth dimension from accumulating thousands of useless region files over time.
-		authLevel.getChunkAt(BlockPos.containing(LIMBO_X, LIMBO_Y, LIMBO_Z));
-		player.setServerLevel(authLevel);
-		player.setPos(LIMBO_X, LIMBO_Y, LIMBO_Z);
-		player.setYRot(0.0F);
-		player.setXRot(0.0F);
+	public static Vec3 authenticationSpawnPosition() {
+		return new Vec3(LIMBO_X, LIMBO_Y, LIMBO_Z);
+	}
+
+	/** Saves the real vanilla spawn selected before the human player is constructed in auth_limbo. */
+	public static void stageAuthenticationReturnTarget(Connection connection, ServerLevel level, Vec3 position, Vec2 angle) {
+		if (connection == null || level == null || position == null || angle == null) return;
+		ServerLevel targetLevel = level;
+		Vec3 targetPosition = position;
+		Vec2 targetAngle = angle;
+		if (AUTH_LIMBO_LEVEL.equals(level.dimension())) {
+			MinecraftServer server = level.getServer();
+			targetLevel = server.overworld();
+			BlockPos spawn = targetLevel.getRespawnData().pos();
+			targetPosition = new Vec3(spawn.getX() + 0.5D, spawn.getY() + 0.1D, spawn.getZ() + 0.5D);
+			targetAngle = new Vec2(targetLevel.getRespawnData().yaw(), targetLevel.getRespawnData().pitch());
+		}
+		STAGED_RETURN_TARGETS.put(connection, new AuthenticationReturnTarget(targetLevel, targetPosition, targetAngle));
+	}
+
+	/**
+	 * Initializes quarantine bookkeeping for a human that vanilla already created directly in auth_limbo.
+	 * No level mutation is allowed here: PlayerList must register the entity exactly once in that level.
+	 */
+	public static boolean preparePlayerPlacement(ServerPlayer player, Connection connection) {
+		invalidateAuthenticatedPlayersCache();
+		if (player == null) return false;
+		if (RendererBotPresenceSystem.isRendererBotConnection(player.getScoreboardName(), connection)) return true;
+		UUID playerId = player.getUUID();
+
+		if (!AUTH_LIMBO_LEVEL.equals(player.level().dimension())) {
+			Lg2.LOGGER.error("Human player {} was not constructed in authentication limbo", player.getScoreboardName());
+			if (connection != null) connection.disconnect(Component.literal("Authentication isolation failed. Please reconnect."));
+			return false;
+		}
+		AuthenticationReturnTarget target = STAGED_RETURN_TARGETS.remove(connection);
+		if (target == null) {
+			Lg2.LOGGER.error("Missing staged authentication return target for {}", player.getScoreboardName());
+			if (connection != null) connection.disconnect(Component.literal("Authentication initialization failed. Please reconnect."));
+			return false;
+		}
+
+		// This is a brand-new ServerPlayer object. Drop only transient state belonging to an older
+		// connection with the same UUID; persistent account credentials/premium verification stay intact.
+		ACTIVE_HUMAN_SESSIONS.put(playerId, player);
+		PLACEMENT_COMPLETE.remove(playerId);
+		AUTHENTICATED.remove(playerId);
+		AUTH_TRANSITIONING.remove(playerId);
+		CONNECTED_HUMAN_SESSIONS.remove(playerId);
+		PRESENCE_VISIBLE.remove(playerId);
+		PRESENCE_PREANNOUNCED.remove(playerId);
+		PRESENCE_LABELS.remove(playerId);
+		PRESENCE_REMOVE_END_OF_TICK.remove(playerId);
+		PREMIUM_TOKEN_BIND_PENDING.remove(playerId);
+		OFFERED_CLIENT_TOKENS.remove(playerId);
+		CLIENT_TOKEN_GRACE_UNTIL.remove(playerId);
+		AFTER_AUTH_ACTIONS.remove(playerId);
+		// Never remove another connection's quarantine state merely because it has the same UUID.
+		LIMBO.remove(player);
+
+		INITIAL_JOIN_LABELS.put(playerId, playerPresenceLabels(player));
+		LimboState state = captureReturnState(player, target);
+		if (player.isDeadOrDying() || player.deathTime > 0) {
+			state = recoverPersistedDeathState(player, state);
+		}
+		LIMBO.put(player, state);
+		CONNECTED_HUMAN_SESSIONS.add(playerId);
+		player.setNoGravity(true);
+		applyLimboAbilities(player);
+		player.resetFallDistance();
+		return true;
+	}
+
+	/**
+	 * Reasserts the already-created quarantine. Humans are constructed directly in auth_limbo by
+	 * PrepareSpawnTaskAccountAuthMixin; teleporting here would reintroduce the old PlayerList/ChunkMap
+	 * bookkeeping corruption that caused DistanceManager.removePlayer crashes.
+	 */
+	private static void ensureLimboIsolation(ServerPlayer player) {
+		if (player == null) return;
+		if (!isAuthenticationWorld(player) || !LIMBO.containsKey(player)) {
+			Lg2.LOGGER.error("Missing authentication quarantine for {}; disconnecting instead of teleporting",
+					player.getScoreboardName());
+			player.connection.disconnect(Component.literal("Authentication isolation failed. Please reconnect."));
+			return;
+		}
 		player.setNoGravity(true);
 		applyLimboAbilities(player);
 		player.resetFallDistance();
 	}
 
+	private static LimboState captureReturnState(ServerPlayer player, AuthenticationReturnTarget target) {
+		AbilityState abilities = AbilityState.capture(player.getAbilities());
+		return new LimboState(
+				target.level(), target.position().x, target.position().y, target.position().z,
+				target.angle().x, target.angle().y, player.isNoGravity(), player.tickCount,
+				abilities, player.getDeltaMovement(), player.fallDistance, false
+		);
+	}
+
 	/**
-	 * Fallback for connections that reached JOIN without the early PlayerList quarantine.
+	 * A crash can leave playerdata at zero health. Because auth freezes normal ticks, vanilla would otherwise
+	 * leave that ServerPlayer permanently in its death animation. Recover the technical login object before
+	 * any play packets are sent, while remembering that the post-auth destination must be a respawn target.
 	 */
-	private static void enterLimbo(ServerPlayer player) {
-		if (player == null || LIMBO.containsKey(player.getUUID())) return;
-		MinecraftServer server = player.level().getServer();
-		ServerLevel authLevel = server == null ? null : server.getLevel(AUTH_LIMBO_LEVEL);
-		if (authLevel == null) {
-			Lg2.LOGGER.error("Authentication limbo dimension {} is unavailable", AUTH_LIMBO_LEVEL.identifier());
-			player.connection.disconnect(Component.literal("Authentication service is unavailable."));
-			return;
+	private static LimboState recoverPersistedDeathState(ServerPlayer player, LimboState state) {
+		TeleportTransition respawn = player.findRespawnPositionAndUseSpawnBlock(false, TeleportTransition.DO_NOTHING);
+		LimboState recovered = state.withTarget(
+				respawn.newLevel(), respawn.position(), respawn.yRot(), respawn.xRot(), true
+		);
+		normalizeRecoveredDeathState(player);
+		Lg2.LOGGER.warn("Recovered persisted dead player state for {}; authentication will return to the respawn target",
+				player.getScoreboardName());
+		return recovered;
+	}
+
+	private static void normalizeRecoveredDeathState(ServerPlayer player) {
+		if (player == null) return;
+		player.deathTime = 0;
+		player.hurtTime = 0;
+		player.hurtDuration = 0;
+		player.setHealth(player.getMaxHealth());
+		player.setPose(Pose.STANDING);
+		player.setDeltaMovement(Vec3.ZERO);
+		player.resetFallDistance();
+	}
+
+	private static LimboState captureReturnState(ServerPlayer player) {
+		ServerLevel returnLevel = player.level();
+		double x = player.getX();
+		double y = player.getY();
+		double z = player.getZ();
+		boolean noGravity = player.isNoGravity();
+		AbilityState abilities = AbilityState.capture(player.getAbilities());
+		Vec3 velocity = player.getDeltaMovement();
+		double fallDistance = player.fallDistance;
+
+		// Older auth builds could accidentally persist lg2:auth_limbo into playerdata. Never
+		// treat that technical dimension as a legitimate return point; migrate it immediately.
+		if (AUTH_LIMBO_LEVEL.equals(returnLevel.dimension())) {
+			MinecraftServer server = returnLevel.getServer();
+			if (server == null) throw new IllegalStateException("Cannot recover stale auth-limbo player without a server");
+			returnLevel = server.overworld();
+			BlockPos spawn = returnLevel.getRespawnData().pos();
+			x = spawn.getX() + 0.5D;
+			y = spawn.getY() + 0.1D;
+			z = spawn.getZ() + 0.5D;
+			noGravity = false;
+			velocity = Vec3.ZERO;
+			fallDistance = 0.0D;
+			abilities = AbilityState.recoveredFor(player);
+			Lg2.LOGGER.warn("Recovered stale auth-limbo playerdata for {}; returning to overworld spawn", player.getScoreboardName());
 		}
 
-		ServerLevel returnLevel = player.level();
-		INITIAL_JOIN_LABELS.putIfAbsent(player.getUUID(), playerPresenceLabels(player));
-		LimboState state = new LimboState(returnLevel, player.getX(), player.getY(), player.getZ(),
-				player.getYRot(), player.getXRot(), player.isNoGravity(), player.tickCount,
-				AbilityState.capture(player.getAbilities()), player.getDeltaMovement(), player.fallDistance);
-		LIMBO.put(player.getUUID(), state);
-
-		authLevel.getChunkAt(BlockPos.containing(LIMBO_X, LIMBO_Y, LIMBO_Z));
-		player.setNoGravity(true);
-		applyLimboAbilities(player);
-		player.teleportTo(authLevel, LIMBO_X, LIMBO_Y, LIMBO_Z, ABSOLUTE_TELEPORT, 0.0F, 0.0F, false);
-		player.resetFallDistance();
+		return new LimboState(returnLevel, x, y, z, player.getYRot(), player.getXRot(), noGravity,
+				player.tickCount, abilities, velocity, fallDistance, false);
 	}
 
 	private static boolean leaveLimbo(ServerPlayer player, boolean restorePlayerPosition) {
 		if (player == null) return false;
-		UUID playerId = player.getUUID();
-		LimboState state = LIMBO.get(playerId);
-		if (state == null) return true;
+		LimboState state = LIMBO.get(player);
+		if (state == null) {
+			// Missing quarantine state while still physically in auth_limbo must never be treated as success.
+			return !restorePlayerPosition || !isAuthenticationWorld(player);
+		}
 
-		if (!restorePlayerPosition || player.isRemoved()) {
-			LIMBO.remove(playerId, state);
+		if (!restorePlayerPosition) {
+			LIMBO.remove(player, state);
 			return true;
+		}
+		if (player.isRemoved()) return false;
+
+		LimboState transitionState = state;
+		if (state.recoveredDeadState) {
+			// Consume a respawn-anchor charge only now, when authentication has actually succeeded.
+			TeleportTransition respawn = player.findRespawnPositionAndUseSpawnBlock(true, TeleportTransition.DO_NOTHING);
+			transitionState = state.withTarget(respawn.newLevel(), respawn.position(), respawn.yRot(), respawn.xRot(), true);
+			normalizeRecoveredDeathState(player);
 		}
 
 		// Remove the limbo marker while teleportTo updates chunk tracking. Keeping it set would make
 		// ChunkMapVirtualCameraTrackingMixin force the destination back to the single auth chunk.
-		LIMBO.remove(playerId, state);
-		state.level.getChunkAt(BlockPos.containing(state.x, state.y, state.z));
+		LIMBO.remove(player, state);
+		transitionState.level.getChunkAt(BlockPos.containing(transitionState.x, transitionState.y, transitionState.z));
 		boolean teleported = player.teleportTo(
-				state.level, state.x, state.y, state.z, ABSOLUTE_TELEPORT, state.yaw, state.pitch, false
+				transitionState.level, transitionState.x, transitionState.y, transitionState.z,
+				ABSOLUTE_TELEPORT, transitionState.yaw, transitionState.pitch, false
 		);
-		if (!teleported) {
+		boolean arrivedInRealWorld = teleported
+				&& player.level() == transitionState.level
+				&& !player.isRemoved()
+				&& !AUTH_LIMBO_LEVEL.equals(player.level().dimension());
+		if (!arrivedInRealWorld) {
 			// Never restore gravity/normal vulnerability while the player is still standing in the void.
-			LIMBO.put(playerId, state);
+			LIMBO.put(player, state);
 			player.setNoGravity(true);
 			applyLimboAbilities(player);
 			player.resetFallDistance();
@@ -941,8 +1259,12 @@ public final class AccountAuthSystem {
 		player.setNoGravity(state.noGravity);
 		player.tickCount = state.tickCount;
 		state.abilities.restore(player.getAbilities());
-		player.setDeltaMovement(state.deltaMovement);
-		player.fallDistance = state.fallDistance;
+		if (state.recoveredDeadState) {
+			normalizeRecoveredDeathState(player);
+		} else {
+			player.setDeltaMovement(state.deltaMovement);
+			player.fallDistance = state.fallDistance;
+		}
 		return true;
 	}
 
@@ -953,7 +1275,7 @@ public final class AccountAuthSystem {
 	 */
 	public static void rewriteLimboPersistentState(ServerPlayer player, ValueOutput output) {
 		if (player == null || output == null) return;
-		LimboState state = LIMBO.get(player.getUUID());
+		LimboState state = LIMBO.get(player);
 		if (state == null) return;
 		output.store("Pos", Vec3.CODEC, new Vec3(state.x, state.y, state.z));
 		output.store("Rotation", Vec2.CODEC, new Vec2(state.yaw, state.pitch));
@@ -983,8 +1305,7 @@ public final class AccountAuthSystem {
 		String language = locale.startsWith("rpr") ? "rpr" : locale.startsWith("uk") ? "uk" : locale.startsWith("ja") ? "ja" : locale.startsWith("ru") ? "ru" : "en";
 		return switch (language) {
 			case "rpr" -> switch (key) {
-				case "prompt_new" -> "Придумайте пароль и введите его въ чатъ";
-				case "prompt_login" -> "Введите пароль въ чатъ";
+				case "prompt_new", "prompt_login" -> "Введите пароль";
 				case "success_created" -> "Пароль сохранёнъ. Входъ подтверждёнъ.";
 				case "success_login" -> "Входъ подтверждёнъ.";
 				case "success_changed" -> "Пароль измѣнёнъ.";
@@ -994,8 +1315,7 @@ public final class AccountAuthSystem {
 				default -> "Ошибка авторизаціи.";
 			};
 			case "uk" -> switch (key) {
-				case "prompt_new" -> "Придумайте пароль і введіть його в чат";
-				case "prompt_login" -> "Введіть пароль у чат";
+				case "prompt_new", "prompt_login" -> "Введіть пароль";
 				case "success_created" -> "Пароль збережено. Вхід підтверджено.";
 				case "success_login" -> "Вхід підтверджено.";
 				case "success_changed" -> "Пароль змінено.";
@@ -1005,8 +1325,7 @@ public final class AccountAuthSystem {
 				default -> "Помилка авторизації.";
 			};
 			case "ja" -> switch (key) {
-				case "prompt_new" -> "パスワードを決めてチャットに入力してください";
-				case "prompt_login" -> "パスワードをチャットに入力してください";
+				case "prompt_new", "prompt_login" -> "パスワードを入力";
 				case "success_created" -> "パスワードを保存しました。認証が完了しました。";
 				case "success_login" -> "認証が完了しました。";
 				case "success_changed" -> "パスワードを変更しました。";
@@ -1016,8 +1335,7 @@ public final class AccountAuthSystem {
 				default -> "認証エラーです。";
 			};
 			case "ru" -> switch (key) {
-				case "prompt_new" -> "Придумайте пароль и введите его в чат";
-				case "prompt_login" -> "Введите пароль в чат";
+				case "prompt_new", "prompt_login" -> "Введите пароль";
 				case "success_created" -> "Пароль сохранён. Вход подтверждён.";
 				case "success_login" -> "Вход подтверждён.";
 				case "success_changed" -> "Пароль изменён.";
@@ -1027,8 +1345,7 @@ public final class AccountAuthSystem {
 				default -> "Ошибка авторизации.";
 			};
 			default -> switch (key) {
-				case "prompt_new" -> "Choose a password and enter it in chat";
-				case "prompt_login" -> "Enter your password in chat";
+				case "prompt_new", "prompt_login" -> "Enter password";
 				case "success_created" -> "Password saved. You are authenticated.";
 				case "success_login" -> "You are authenticated.";
 				case "success_changed" -> "Password changed.";
@@ -1149,6 +1466,30 @@ public final class AccountAuthSystem {
 		}
 	}
 
+	private static final class SingleChunkTrackingView implements ChunkTrackingView {
+		private final ChunkPos center;
+
+		private SingleChunkTrackingView(ChunkPos center) { this.center = center; }
+
+		@Override
+		public boolean contains(int x, int z, boolean includeNeighbors) {
+			return x == center.x && z == center.z;
+		}
+
+		@Override
+		public void forEach(java.util.function.Consumer<ChunkPos> consumer) { consumer.accept(center); }
+
+		@Override
+		public boolean equals(Object other) {
+			return other instanceof SingleChunkTrackingView view && center.equals(view.center);
+		}
+
+		@Override
+		public int hashCode() { return center.hashCode(); }
+	}
+
+	private record AuthenticationReturnTarget(ServerLevel level, Vec3 position, Vec2 angle) { }
+
 	private record FailureState(long windowStartedAt, int count) { }
 
 	private record AbilityState(
@@ -1158,6 +1499,12 @@ public final class AccountAuthSystem {
 		private static AbilityState capture(Abilities abilities) {
 			return new AbilityState(abilities.invulnerable, abilities.flying, abilities.mayfly, abilities.instabuild,
 					abilities.mayBuild, abilities.getFlyingSpeed(), abilities.getWalkingSpeed());
+		}
+
+		private static AbilityState recoveredFor(ServerPlayer player) {
+			boolean creative = player.isCreative();
+			boolean spectator = player.isSpectator();
+			return new AbilityState(creative || spectator, spectator, creative || spectator, creative, true, 0.05F, 0.1F);
 		}
 
 		private void restore(Abilities abilities) {
@@ -1177,6 +1524,13 @@ public final class AccountAuthSystem {
 
 	private record LimboState(
 			ServerLevel level, double x, double y, double z, float yaw, float pitch,
-			boolean noGravity, int tickCount, AbilityState abilities, Vec3 deltaMovement, double fallDistance
-	) { }
+			boolean noGravity, int tickCount, AbilityState abilities, Vec3 deltaMovement, double fallDistance,
+			boolean recoveredDeadState
+	) {
+		private LimboState withTarget(ServerLevel targetLevel, Vec3 position, float targetYaw, float targetPitch, boolean deadRecovery) {
+			return new LimboState(targetLevel, position.x, position.y, position.z, targetYaw, targetPitch,
+					noGravity, tickCount, abilities, deadRecovery ? Vec3.ZERO : deltaMovement,
+					deadRecovery ? 0.0D : fallDistance, deadRecovery || recoveredDeadState);
+		}
+	}
 }

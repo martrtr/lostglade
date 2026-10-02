@@ -38,6 +38,6 @@ public class Lg2Client implements ClientModInitializer {
 		RendererBotClientAudioCapture.register();
 		RendererBotClientVideoRecording.register();
 		new Lg2RaceClient().onInitializeClient();
-		LostgladeClientSettings.registerOptionsScreen();
+		LostgladeClientSettings.registerSettingsKeyBinding();
 	}
 }

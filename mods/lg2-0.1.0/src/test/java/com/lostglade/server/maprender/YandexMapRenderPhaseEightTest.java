@@ -124,11 +124,10 @@ public final class YandexMapRenderPhaseEightTest {
 		require(scheduler.contains("activeTiles.add(candidate.key())"), "parallel dispatch must reserve each selected tile before choosing the next worker");
 		require(jobs.contains("hasActiveJobForWorker(worker.playerUuid())"), "each GPU client must remain limited to one active map scene");
 		require(config.contains("yandexMapRendererMaxGlobalInFlight = 32"), "default distributed pool must allow many simultaneous clients");
-		require(clientSettings.contains("mapRendererMode = MapRendererMode.ALWAYS"), "ordinary Lostglade clients must join the map worker pool by default");
-		require(clientSettings.contains("value.mapRendererMode = MapRendererMode.ALWAYS")
-				&& clientSettings.contains("mapRendererModeConfigured"),
-				"existing implicit OFF defaults must migrate once while preserving later explicit choices");
-		require(client.contains("mode == LostgladeClientSettings.MapRendererMode.IDLE_ONLY"), "FPS and idle gates must be scoped to IDLE_ONLY mode");
+		require(clientSettings.contains("DEFAULT_RENDER_BUDGET_PERCENT = 100"), "ordinary Lostglade clients must contribute render capacity by default");
+		require(clientSettings.contains("maxMapJobsPerMinute") && clientSettings.contains("maxParallelCaptures"),
+				"camera and map work must derive from one shared percentage setting");
+		require(client.contains("RendererBotClientCapture.hasActiveCameraWork()"), "camera work must take priority over map jobs");
 	}
 
 	private static int count(String haystack, String needle) {

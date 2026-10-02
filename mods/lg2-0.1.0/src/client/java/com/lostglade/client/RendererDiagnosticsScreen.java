@@ -66,13 +66,8 @@ final class RendererDiagnosticsScreen extends Screen {
                 + " | ошибок " + snapshot.cameraFailed(), left, y, 0xAFAFAF);
         y += 15;
 
-        String mapMode = switch (LostgladeClientSettings.mapRendererMode()) {
-            case OFF -> "OFF";
-            case IDLE_ONLY -> "IDLE_ONLY";
-            case ALWAYS -> "ALWAYS";
-        };
         YandexMapRenderClient.WorkerStatus worker = YandexMapRenderClient.status();
-        graphics.drawString(this.font, "Карты: " + mapMode + " | " + (worker.eligible() ? "eligible" : "not eligible")
+        graphics.drawString(this.font, "Общий ресурс: " + LostgladeClientSettings.renderBudgetPercent() + "% | Карты: " + (worker.eligible() ? "готовы" : "недоступны")
                 + " | " + YandexMapRenderClient.displayStatusReason(), left, y, 0xE6E6E6);
         y += 12;
         graphics.drawString(this.font, "  offers " + snapshot.mapOffers() + " | accepted " + snapshot.mapAccepted()

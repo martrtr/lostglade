@@ -1,6 +1,7 @@
 package com.lostglade.client;
 
 import com.lostglade.network.RendererBotPayloads;
+import com.lostglade.client.maprender.YandexMapRenderClient;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -53,6 +54,17 @@ public final class RendererBotVolunteerClient {
 		LostgladeClientSettings.setCameraRendererEnabled(enabled);
 		RendererBotClientCapture.onVolunteerPreferenceChanged(enabled);
 		RendererBotClientVideoRecording.onVolunteerPreferenceChanged(enabled);
+		sendRendererHello();
+		YandexMapRenderClient.requestCapabilityRefresh();
+	}
+
+	/** Applies a changed shared render budget without discarding its percentage. */
+	public static void onRenderBudgetChanged(boolean previouslyEnabled) {
+		boolean enabled = LostgladeClientSettings.isRenderContributionEnabled();
+		if (previouslyEnabled != enabled) {
+			RendererBotClientCapture.onVolunteerPreferenceChanged(enabled);
+			RendererBotClientVideoRecording.onVolunteerPreferenceChanged(enabled);
+		}
 		sendRendererHello();
 	}
 

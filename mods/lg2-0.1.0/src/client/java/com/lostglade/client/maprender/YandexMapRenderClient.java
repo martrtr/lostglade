@@ -2,6 +2,7 @@ package com.lostglade.client.maprender;
 
 import com.lostglade.Lg2;
 import com.lostglade.client.LostgladeClientSettings;
+import com.lostglade.client.RendererBotClientCapture;
 import com.lostglade.client.RendererBotClientMode;
 import com.lostglade.client.RendererClientDiagnostics;
 import com.lostglade.network.YandexMapRenderPayloads;
@@ -94,16 +95,16 @@ public final class YandexMapRenderClient {
 		Minecraft client = Minecraft.getInstance();
 		long generation = REFRESH_GENERATION.incrementAndGet();
 		boolean dedicated = RendererBotClientMode.isEnabled();
-		LostgladeClientSettings.MapRendererMode mode = dedicated
-				? LostgladeClientSettings.MapRendererMode.ALWAYS
-				: LostgladeClientSettings.mapRendererMode();
-		boolean enabled = dedicated || mode != LostgladeClientSettings.MapRendererMode.OFF;
+		// The server protocol accepts ALWAYS/IDLE_ONLY. Priority is enforced
+		// locally before accepting and advancing a map job.
+		String mode = "ALWAYS";
+		boolean enabled = dedicated || LostgladeClientSettings.isRenderContributionEnabled();
 		YandexMapShaderGuard.Compatibility shader = YandexMapShaderGuard.inspect();
 		lastShaderCompatible = shader.compatible();
 		if (!enabled) {
 			localStatusReason = "disabled-by-client";
 			send(new YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload(
-					YandexMapRenderPayloads.PROTOCOL_VERSION, false, mode.name(), shader.compatible(), "",
+				YandexMapRenderPayloads.PROTOCOL_VERSION, false, mode, shader.compatible(), "",
 					MapRenderProfile.CURRENT.tilePixels(), YandexMapResourceProfileFingerprint.clientBuildFingerprint()
 			));
 			return;
@@ -111,7 +112,7 @@ public final class YandexMapRenderClient {
 		if (!shader.compatible()) {
 			localStatusReason = shader.reason();
 			send(new YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload(
-					YandexMapRenderPayloads.PROTOCOL_VERSION, true, mode.name(), false, "",
+				YandexMapRenderPayloads.PROTOCOL_VERSION, true, mode, false, "",
 					MapRenderProfile.CURRENT.tilePixels(), YandexMapResourceProfileFingerprint.clientBuildFingerprint()
 			));
 			return;
@@ -128,7 +129,7 @@ public final class YandexMapRenderClient {
 						localStatusReason = "resource-profile-error";
 						Lg2.LOGGER.warn("Failed to build Yandex map worker resource profile", throwable);
 						send(new YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload(
-								YandexMapRenderPayloads.PROTOCOL_VERSION, true, mode.name(), false, "",
+							YandexMapRenderPayloads.PROTOCOL_VERSION, true, mode, false, "",
 								MapRenderProfile.CURRENT.tilePixels(), YandexMapResourceProfileFingerprint.clientBuildFingerprint()
 						));
 						return;
@@ -137,7 +138,7 @@ public final class YandexMapRenderClient {
 					send(new YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload(
 							YandexMapRenderPayloads.PROTOCOL_VERSION,
 							true,
-							mode.name(),
+							mode,
 							true,
 							resourceProfileHash,
 							MapRenderProfile.CURRENT.tilePixels(),
@@ -201,15 +202,11 @@ public final class YandexMapRenderClient {
 		YandexMapRenderPayloads.MapWorkerCapabilitiesC2SPayload capabilities = lastCapabilities;
 		if (capabilities == null || capabilities.mapProtocolVersion() != YandexMapRenderPayloads.PROTOCOL_VERSION) return "capability-not-ready";
 		if (!RendererBotClientMode.isEnabled()) {
-			LostgladeClientSettings.MapRendererMode mode = LostgladeClientSettings.mapRendererMode();
-			if (mode == LostgladeClientSettings.MapRendererMode.OFF) return "disabled-by-client";
-			if (mode == LostgladeClientSettings.MapRendererMode.IDLE_ONLY) {
-				if (client.getFps() > 0 && client.getFps() < LostgladeClientSettings.mapRendererMinFps()) return "fps-below-threshold";
-				if (!volunteerClientIdle(client)) return "client-not-idle";
-			}
+			if (!LostgladeClientSettings.isRenderContributionEnabled()) return "disabled-by-client";
+			if (RendererBotClientCapture.hasActiveCameraWork()) return "camera-work-has-priority";
 			long now = System.currentTimeMillis();
 			while (!acceptedVolunteerJobs.isEmpty() && now - acceptedVolunteerJobs.peekFirst() >= 60_000L) acceptedVolunteerJobs.removeFirst();
-			if (acceptedVolunteerJobs.size() >= Math.max(1, LostgladeClientSettings.mapRendererMaxJobsPerMinute())) return "client-rate-limit";
+			if (acceptedVolunteerJobs.size() >= LostgladeClientSettings.maxMapJobsPerMinute()) return "client-rate-limit";
 			acceptedVolunteerJobs.addLast(now);
 		}
 		return null;
@@ -326,6 +323,11 @@ public final class YandexMapRenderClient {
 
 		ActiveJob job = activeJob;
 		if (job == null || !job.ready || job.renderer == null || job.resultSubmitted) {
+			return;
+		}
+		// Camera work always owns the common budget. Keep the map scene warm and
+		// resume it as soon as the last camera task has completed.
+		if (!RendererBotClientMode.isEnabled() && RendererBotClientCapture.hasActiveCameraWork()) {
 			return;
 		}
 		if (System.currentTimeMillis() > job.expiresAtEpochMs + 120_000L) {

@@ -75,12 +75,28 @@ public final class ServerTabPacketSystem {
 		if (!AccountAuthSystem.isAuthenticated(receiver)) return true;
 		ServerPlayer onlinePlayer = server.getPlayerList().getPlayer(entry.profileId());
 		if (onlinePlayer != null) {
-			return RendererBotPresenceSystem.shouldHideFromPlayerList(onlinePlayer)
+			boolean preannounced = AccountAuthSystem.isPresencePreannounced(entry.profileId());
+			boolean hiddenByAuthentication = !AccountAuthSystem.isPresenceVisible(onlinePlayer) && !preannounced;
+			return hiddenByAuthentication
+					|| ServerRaceSystem.isMilkMouseActive(onlinePlayer)
 					|| SeasonStartSystem.shouldHidePlayerFrom(receiver, onlinePlayer);
 		}
 
 		GameProfile profile = entry.profile();
 		return profile != null && RendererBotPresenceSystem.isRendererBotName(profile.name());
+	}
+
+	/** Sends the profile before entity spawn without making the player visible in the tab list. */
+	public static ClientboundPlayerInfoUpdatePacket createUnlistedPlayerInitializingPacket(ServerPlayer player) {
+		ClientboundPlayerInfoUpdatePacket original = ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(List.of(player));
+		List<ClientboundPlayerInfoUpdatePacket.Entry> entries = new ArrayList<>(original.entries().size());
+		for (ClientboundPlayerInfoUpdatePacket.Entry entry : original.entries()) {
+			entries.add(new ClientboundPlayerInfoUpdatePacket.Entry(
+					entry.profileId(), entry.profile(), false, entry.latency(), entry.gameMode(), entry.displayName(),
+					entry.showHat(), entry.listOrder(), entry.chatSession()
+			));
+		}
+		return buildMutablePacket(original, entries);
 	}
 
 	private static ClientboundPlayerInfoUpdatePacket buildMutablePacket(

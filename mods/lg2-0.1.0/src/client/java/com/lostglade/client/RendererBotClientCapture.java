@@ -293,6 +293,13 @@ public final class RendererBotClientCapture {
 		}
 	}
 
+	/** True while camera photos, streams, or recordings need the shared GPU. */
+	public static boolean hasActiveCameraWork() {
+		return hasPendingCameraCapture()
+				|| hasActiveLiveStream()
+				|| RendererBotClientVideoRecording.hasActiveRecording();
+	}
+
 	private static boolean hasActiveLiveStream() {
 		synchronized (LOCK) {
 			return !LIVE_STREAM_SESSIONS.isEmpty();

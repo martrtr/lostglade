@@ -118,6 +118,7 @@
 		"PlayerContainerMenuAccessor",
 		"PlayerListAccountAuthAccessor",
 		"PlayerListAccountAuthMixin",
+		"PrepareSpawnTaskAccountAuthMixin",
 		"ListPlayersCommandAccountAuthMixin",
 		"PlayerNecromancerEraMiningMixin",
 		"PlayerListRendererBotSystemMessageMixin",
