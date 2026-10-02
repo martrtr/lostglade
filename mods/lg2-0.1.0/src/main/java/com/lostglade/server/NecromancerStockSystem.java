@@ -680,9 +680,17 @@ public final class NecromancerStockSystem {
 		return maxMana <= 0.0D ? 0.0F : (float) Math.max(0.0D, Math.min(1.0D, mana / maxMana));
 	}
 
+	public static boolean isManaBossBar(ServerPlayer player, UUID bossBarId) {
+		if (player == null || bossBarId == null) return false;
+		ServerBossEvent bar = MANA_BARS.get(player.getUUID());
+		return bar != null && bar.getId().equals(bossBarId);
+	}
+
 	private static void hideManaBar(ServerPlayer player) {
-		ServerBossEvent bar = MANA_BARS.remove(player.getUUID());
-		if (bar != null) bar.removeAllPlayers();
+		ServerBossEvent bar = MANA_BARS.get(player.getUUID());
+		if (bar == null) return;
+		bar.removeAllPlayers();
+		MANA_BARS.remove(player.getUUID(), bar);
 	}
 
 	private static ServerBossEvent createManaBar() {
@@ -732,8 +740,7 @@ public final class NecromancerStockSystem {
 		restoreActionGameMode(player);
 		HELD_ACTIONS.remove(player.getUUID());
 		ACTION_CHARGE_DEADLINES.remove(player.getUUID());
-		ServerBossEvent bar = MANA_BARS.remove(player.getUUID());
-		if (bar != null) bar.removeAllPlayers();
+		hideManaBar(player);
 	}
 
 	private static void removeModifier(AttributeInstance attribute, Identifier id) {

@@ -651,7 +651,7 @@
       "enabled": true,
       "id": "ancient_ukr",
       "displayName": "Древний укр",
-      "ownerNickname": "",
+      "ownerNickname": "Rajas_YT",
       "description": "Сочетает клинки, дым, поиск ценностей и опасные долги.",
       "attack": {
         "enabled": true,
@@ -710,7 +710,7 @@
       "enabled": true,
       "id": "orthodox",
       "displayName": "Православный",
-      "ownerNickname": "Rajas_YT",
+      "ownerNickname": "",
       "description": "Использует божественные способности, доступность которых зависит от совершённых грехов.",
       "attack": {
         "enabled": true,

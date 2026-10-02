@@ -43,7 +43,7 @@ public final class NecromancerDefenseSystem {
 	private static final DustParticleOptions BLACK_WAVE_DEPTH = new DustParticleOptions(0x080808, 1.35F);
 	private static final DustParticleOptions NECRO_DUST = new DustParticleOptions(0x32113F, 0.85F);
 	private static final DustParticleOptions DARK_SOUL_DUST = new DustParticleOptions(0x54206F, 0.85F);
-	private static final DustParticleOptions SOUL_DUST = new DustParticleOptions(0x42BFA8, 0.62F);
+	private static final DustParticleOptions RED_SOUL_DUST = new DustParticleOptions(0xD62F2F, 0.62F);
 	private static final List<DefensePulse> ACTIVE_PULSES = new ArrayList<>();
 
 	private NecromancerDefenseSystem() {
@@ -231,10 +231,10 @@ public final class NecromancerDefenseSystem {
 					level.sendParticles(DARK_SOUL_DUST, x, y, z, 1, 0.03D, 0.04D, 0.03D, 0.002D);
 				}
 				if (paletteIndex == 2 || paletteIndex == 14) {
-					level.sendParticles(SOUL_DUST, x, y, z, 1, 0.025D, 0.035D, 0.025D, 0.002D);
+					level.sendParticles(RED_SOUL_DUST, x, y, z, 1, 0.025D, 0.035D, 0.025D, 0.002D);
 				}
 				if (paletteIndex == 5) {
-					level.sendParticles(ParticleTypes.SCULK_SOUL, x, y, z, 1, 0.02D, 0.03D, 0.02D, 0.001D);
+					level.sendParticles(ParticleTypes.CRIMSON_SPORE, x, y, z, 1, 0.02D, 0.03D, 0.02D, 0.001D);
 				}
 				if (paletteIndex == 11) {
 					level.sendParticles(ParticleTypes.REVERSE_PORTAL, x, y, z, 1, 0.025D, 0.035D, 0.025D, 0.004D);

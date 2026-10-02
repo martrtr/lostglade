@@ -27,8 +27,8 @@ def rendererBotServerProp = providers.systemProperty("lg2.rendererBotServer").or
 def cameraMediaCacheRoot = file("${serverRootDir}/cache/lg2-camera").canonicalFile
 // Keep the normal development profile explicit, while letting the VPS service
 // set a bounded heap for the server and the renderer bot independently.
-def serverXmsProp = providers.systemProperty("lg2.serverXms").orElse("8G")
-def serverXmxProp = providers.systemProperty("lg2.serverXmx").orElse("8G")
+def serverXmsProp = providers.systemProperty("lg2.serverXms").orElse("1G")
+def serverXmxProp = providers.systemProperty("lg2.serverXmx").orElse("4G")
 def rendererBotXmsProp = providers.systemProperty("lg2.rendererBotXms").orElse("4G")
 def rendererBotXmxProp = providers.systemProperty("lg2.rendererBotXmx").orElse("4G")
 // GLFW's GLX path is not available in every otherwise-valid Xwayland/Xorg

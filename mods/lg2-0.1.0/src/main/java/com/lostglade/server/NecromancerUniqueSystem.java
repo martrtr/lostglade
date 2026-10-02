@@ -84,7 +84,7 @@ public final class NecromancerUniqueSystem {
 	private static final int SPIRIT_FLIGHT_TICKET_FLAGS =
 			TicketType.FLAG_LOADING | TicketType.FLAG_SIMULATION | TicketType.FLAG_KEEP_DIMENSION_ACTIVE;
 	private static final DustParticleOptions NECRO_DUST = new DustParticleOptions(0x32113F, 0.85F);
-	private static final DustParticleOptions SOUL_DUST = new DustParticleOptions(0x42BFA8, 0.62F);
+	private static final DustParticleOptions RED_SOUL_DUST = new DustParticleOptions(0xD62F2F, 0.62F);
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Map<UUID, SpiritState> STATES = new LinkedHashMap<>();
 	private static final Map<UUID, RuntimeSpirit> RUNTIME = new HashMap<>();
@@ -258,7 +258,7 @@ public final class NecromancerUniqueSystem {
 		if (runtime.spirit.distanceToSqr(item) <= 0.9D * 0.9D) {
 			runtime.carriedItem = item.getItem().copy();
 			item.discard();
-			level.sendParticles(SOUL_DUST, target.x, target.y, target.z, 12, 0.18D, 0.18D, 0.18D, 0.015D);
+			level.sendParticles(RED_SOUL_DUST, target.x, target.y, target.z, 12, 0.18D, 0.18D, 0.18D, 0.015D);
 			level.playSound(null, target.x, target.y, target.z, SoundEvents.VEX_AMBIENT, SoundSource.NEUTRAL, 0.45F, 1.25F);
 			beginReturn(runtime);
 			commandSpirit(runtime, ownerDeliveryPoint(owner));
@@ -667,14 +667,14 @@ public final class NecromancerUniqueSystem {
 			level.sendParticles(ParticleTypes.REVERSE_PORTAL, position.x, position.y, position.z, 1, 0.08D, 0.08D, 0.08D, 0.01D);
 		}
 		if (now % 4L == 0L) {
-			level.sendParticles(ParticleTypes.SCULK_SOUL, position.x, position.y, position.z, 1, 0.04D, 0.04D, 0.04D, 0.002D);
+			level.sendParticles(ParticleTypes.CRIMSON_SPORE, position.x, position.y, position.z, 1, 0.04D, 0.04D, 0.04D, 0.002D);
 		}
 	}
 
 	private static void spawnAppearance(ServerLevel level, Vec3 position) {
 		level.sendParticles(NECRO_DUST, position.x, position.y + 0.5D, position.z, 38, 0.65D, 0.8D, 0.65D, 0.035D);
-		level.sendParticles(SOUL_DUST, position.x, position.y + 0.5D, position.z, 22, 0.5D, 0.7D, 0.5D, 0.02D);
-		level.sendParticles(ParticleTypes.SCULK_SOUL, position.x, position.y + 0.4D, position.z, 14, 0.45D, 0.65D, 0.45D, 0.015D);
+		level.sendParticles(RED_SOUL_DUST, position.x, position.y + 0.5D, position.z, 22, 0.5D, 0.7D, 0.5D, 0.02D);
+		level.sendParticles(ParticleTypes.CRIMSON_SPORE, position.x, position.y + 0.4D, position.z, 14, 0.45D, 0.65D, 0.45D, 0.015D);
 		level.sendParticles(ParticleTypes.REVERSE_PORTAL, position.x, position.y + 0.4D, position.z, 18, 0.5D, 0.65D, 0.5D, 0.025D);
 		level.playSound(null, position.x, position.y, position.z, SoundEvents.VEX_AMBIENT, SoundSource.PLAYERS, 0.85F, 0.68F);
 		level.playSound(null, position.x, position.y, position.z, SoundEvents.VEX_CHARGE, SoundSource.PLAYERS, 0.55F, 0.72F);

@@ -4,6 +4,7 @@ import com.lostglade.Lg2;
 import com.lostglade.config.RaceConfig.PlayerRaceConfig;
 import com.lostglade.config.RaceConfig.RaceAbilityConfig;
 import com.lostglade.config.RaceConfig.RaceAbilitySlot;
+import eu.pb4.polymer.core.api.item.PolymerItemUtils;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.ChatFormatting;
@@ -13,6 +14,8 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.FontDescription;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -24,28 +27,30 @@ import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 
 import java.util.Optional;
+import java.util.List;
+
+import xyz.nucleoid.packettweaker.PacketContext;
 
 public final class NecromancerShnyagaSystem {
 	private static final String RACE_ID = "necromancer";
 	private static final int MENU_ROWS = 3;
-	// User-facing chest slots 12, 14 and 16 (container indices are zero-based).
-	private static final int COMBAT_SLOT = 11;
-	private static final int WORK_SLOT = 13;
-	private static final int VITAL_SLOT = 15;
 	private static final double DEFAULT_TIER_ONE_COST = 100.0D;
 	private static final double DEFAULT_TIER_TWO_COST = 200.0D;
 	private static final double DEFAULT_TIER_THREE_COST = 300.0D;
@@ -56,18 +61,13 @@ public final class NecromancerShnyagaSystem {
 	private static final String MENU_GLYPH = "\uebc0";
 	private static final FontDescription MENU_FONT = new FontDescription.Resource(
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_shnyaga_menu"));
-	private static final Identifier COMBAT_MODEL = Identifier.fromNamespaceAndPath(
-			Lg2.MOD_ID, "gui/necromancer_trans_combat");
-	private static final Identifier WORK_MODEL = Identifier.fromNamespaceAndPath(
-			Lg2.MOD_ID, "gui/necromancer_trans_work");
-	private static final Identifier VITAL_MODEL = Identifier.fromNamespaceAndPath(
-			Lg2.MOD_ID, "gui/necromancer_trans_vital");
+	private static final Identifier INVISIBLE_BUTTON_MODEL = Identifier.fromNamespaceAndPath(
+			Lg2.MOD_ID, "gui/button/invisible");
 	private static final Identifier ABSORPTION_CAPACITY_ID = Identifier.fromNamespaceAndPath(
 			Lg2.MOD_ID, "necromancer_shnyaga_absorption_capacity");
 	private static final DustParticleOptions BLACK_DUST = new DustParticleOptions(0x000000, 1.15F);
 	private static final DustParticleOptions NECRO_DUST = new DustParticleOptions(0x32113F, 0.85F);
 	private static final DustParticleOptions DARK_SOUL_DUST = new DustParticleOptions(0x54206F, 0.85F);
-	private static final DustParticleOptions SOUL_DUST = new DustParticleOptions(0x42BFA8, 0.62F);
 
 	private NecromancerShnyagaSystem() {
 	}
@@ -117,7 +117,7 @@ public final class NecromancerShnyagaSystem {
 		player.addEffect(new MobEffectInstance(mode.primaryEffect, durationTicks, amplifier));
 		player.addEffect(new MobEffectInstance(mode.secondaryEffect, durationTicks, amplifier));
 		grantAbsorption(player, ability, tier);
-		spawnActivationRings(player);
+		spawnActivationRings(player, mode);
 		player.level().playSound(
 				null,
 				player.getX(),
@@ -131,7 +131,7 @@ public final class NecromancerShnyagaSystem {
 		return true;
 	}
 
-	private static void spawnActivationRings(ServerPlayer player) {
+	private static void spawnActivationRings(ServerPlayer player, TransMode mode) {
 		if (!(player.level() instanceof ServerLevel level)) return;
 		AABB bounds = player.getBoundingBox();
 		double radius = Math.max(bounds.getXsize(), bounds.getZsize()) * 0.5D + 0.18D;
@@ -151,10 +151,10 @@ public final class NecromancerShnyagaSystem {
 					level.sendParticles(DARK_SOUL_DUST, x, y, z, 1, 0.01D, 0.01D, 0.01D, 0.001D);
 				}
 				if (index % 8 == ring * 2) {
-					level.sendParticles(SOUL_DUST, x, y, z, 1, 0.008D, 0.008D, 0.008D, 0.001D);
+					level.sendParticles(mode.particle, x, y, z, 1, 0.008D, 0.008D, 0.008D, 0.001D);
 				}
 				if (index % 10 == ring) {
-					level.sendParticles(ParticleTypes.SCULK_SOUL, x, y, z, 1, 0.005D, 0.005D, 0.005D, 0.001D);
+					level.sendParticles(mode.particle, x, y, z, 1, 0.005D, 0.005D, 0.005D, 0.001D);
 				}
 				if (index % 12 == ring * 2) {
 					level.sendParticles(ParticleTypes.REVERSE_PORTAL, x, y, z, 1, 0.008D, 0.008D, 0.008D, 0.003D);
@@ -227,14 +227,12 @@ public final class NecromancerShnyagaSystem {
 	}
 
 	private static Component menuTitle(boolean hasPack) {
-		if (!hasPack) return Component.literal("\u0411\u043b\u0430\u0433\u043e\u0441\u043b\u043e\u0432\u0435\u043d\u0438\u0435 \u0434\u0443\u0448");
+		if (!hasPack) return Component.empty();
 		MutableComponent title = Component.empty();
 		title.append(Component.literal(TITLE_SHIFT).withStyle(style -> style.withColor(0xFFFFFF).withItalic(false)));
 		title.append(Component.literal(MENU_GLYPH).withStyle(style -> style
 				.withColor(0xFFFFFF).withItalic(false).withFont(MENU_FONT).withShadowColor(0x00000000)));
 		title.append(Component.literal(TITLE_RESET).withStyle(style -> style.withColor(0xFFFFFF).withItalic(false)));
-		title.append(Component.literal("\u0411\u043b\u0430\u0433\u043e\u0441\u043b\u043e\u0432\u0435\u043d\u0438\u0435 \u0434\u0443\u0448")
-				.withStyle(style -> style.withColor(0xD6BD86).withItalic(false)));
 		return title;
 	}
 
@@ -245,13 +243,29 @@ public final class NecromancerShnyagaSystem {
 			case VITAL -> Items.GLISTERING_MELON_SLICE;
 		};
 		ItemStack stack = new ItemStack(hasPack ? Items.PAPER : fallback);
-		if (hasPack) stack.set(DataComponents.ITEM_MODEL, mode.model);
+		if (hasPack) {
+			stack.set(DataComponents.ITEM_MODEL, INVISIBLE_BUTTON_MODEL);
+		}
 		int tier = affordableTier(player, ability);
 		String title = tier > 0 ? mode.title + " " + romanTier(tier) : mode.title;
 		stack.set(DataComponents.CUSTOM_NAME, Component.literal(title)
-				.withStyle(style -> style.withColor(mode.color).withItalic(false).withBold(true)));
-		stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
+				.withStyle(style -> style
+						.withColor(mode.color)
+						.withItalic(false)
+						.withBold(true)
+						.withStrikethrough(tier <= 0)));
+		if (!hasPack) stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
 		return stack;
+	}
+
+	private static TransMode modeForSlot(int slotId) {
+		if (slotId < 0 || slotId >= MENU_ROWS * 9) return null;
+		return switch (slotId % 9) {
+			case 0, 1, 2 -> TransMode.WORK;
+			case 3, 4, 5 -> TransMode.COMBAT;
+			case 6, 7, 8 -> TransMode.VITAL;
+			default -> null;
+		};
 	}
 
 	private static String romanTier(int tier) {
@@ -266,42 +280,92 @@ public final class NecromancerShnyagaSystem {
 		return Double.isFinite(value) && value > 0.0D ? value : fallback;
 	}
 
+	private static void hideInventoryVisuals(ServerPlayer player, AbstractContainerMenu menu) {
+		sendInventoryVisuals(player, menu, true);
+		syncHeldEquipmentVisuals(player, true);
+	}
+
+	private static void restoreInventoryVisuals(ServerPlayer player, AbstractContainerMenu menu) {
+		if (player != null) {
+			AbstractContainerMenu targetMenu = player.containerMenu;
+			if (targetMenu == null || targetMenu == menu) targetMenu = player.inventoryMenu;
+			if (targetMenu != null) sendInventoryVisuals(player, targetMenu, false);
+		}
+		syncHeldEquipmentVisuals(player, false);
+	}
+
+	private static void sendInventoryVisuals(ServerPlayer player, AbstractContainerMenu menu, boolean hide) {
+		if (player == null || menu == null) return;
+		Inventory inventory = player.getInventory();
+		PacketContext.NotNullWithPlayer context = PacketContext.create(player);
+		int stateId = menu.incrementStateId();
+		for (int menuSlot = 0; menuSlot < menu.slots.size(); menuSlot++) {
+			Slot slot = menu.getSlot(menuSlot);
+			if (slot.container != inventory) continue;
+			ItemStack visual = hide
+					? ItemStack.EMPTY
+					: toClientVisualStack(inventory.getItem(slot.getContainerSlot()).copy(), context);
+			player.connection.send(new ClientboundContainerSetSlotPacket(
+					menu.containerId,
+					stateId,
+					menuSlot,
+					visual
+			));
+		}
+	}
+
+	private static void syncHeldEquipmentVisuals(ServerPlayer player, boolean hide) {
+		if (player == null) return;
+		PacketContext.NotNullWithPlayer context = PacketContext.create(player);
+		ItemStack mainHand = hide ? ItemStack.EMPTY : toClientVisualStack(player.getMainHandItem().copy(), context);
+		ItemStack offHand = hide ? ItemStack.EMPTY : toClientVisualStack(player.getOffhandItem().copy(), context);
+		player.connection.send(new ClientboundSetEquipmentPacket(
+				player.getId(),
+				List.of(
+						com.mojang.datafixers.util.Pair.of(EquipmentSlot.MAINHAND, mainHand),
+						com.mojang.datafixers.util.Pair.of(EquipmentSlot.OFFHAND, offHand)
+				)
+		));
+	}
+
+	private static ItemStack toClientVisualStack(ItemStack stack, PacketContext.NotNullWithPlayer context) {
+		if (stack == null || stack.isEmpty()) return ItemStack.EMPTY;
+		ItemStack clientStack = PolymerItemUtils.getClientItemStack(stack, context);
+		return clientStack.isEmpty() ? stack.copy() : clientStack.copy();
+	}
+
 	private enum TransMode {
 		COMBAT(
 				"\u0411\u043e\u0435\u0432\u043e\u0439 \u0442\u0440\u0430\u043d\u0441",
-				0xFF655F,
-				COMBAT_MODEL,
+				0xFF2D2D,
 				MobEffects.STRENGTH,
 				MobEffects.SPEED),
 		WORK(
 				"\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0442\u0440\u0430\u043d\u0441",
-				0x70E39A,
-				WORK_MODEL,
+				0x2F6BFF,
 				MobEffects.HASTE,
 				MobEffects.NIGHT_VISION),
 		VITAL(
 				"\u0416\u0438\u0432\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0439 \u0442\u0440\u0430\u043d\u0441",
-				0xFFD66F,
-				VITAL_MODEL,
+				0x7CFF33,
 				MobEffects.REGENERATION,
 				MobEffects.RESISTANCE);
 
 		private final String title;
 		private final int color;
-		private final Identifier model;
+		private final DustParticleOptions particle;
 		private final net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> primaryEffect;
 		private final net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> secondaryEffect;
 
 		TransMode(
 				String title,
 				int color,
-				Identifier model,
 				net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> primaryEffect,
 				net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> secondaryEffect
 		) {
 			this.title = title;
 			this.color = color;
-			this.model = model;
+			this.particle = new DustParticleOptions(color, 0.62F);
 			this.primaryEffect = primaryEffect;
 			this.secondaryEffect = secondaryEffect;
 		}
@@ -332,20 +396,15 @@ public final class NecromancerShnyagaSystem {
 			RaceAbilityConfig ability = eligibleAbility(this.viewer);
 			this.buttons.clearContent();
 			if (ability == null) return;
-			this.buttons.setItem(COMBAT_SLOT, button(this.viewer, ability, TransMode.COMBAT, hasPack));
-			this.buttons.setItem(WORK_SLOT, button(this.viewer, ability, TransMode.WORK, hasPack));
-			this.buttons.setItem(VITAL_SLOT, button(this.viewer, ability, TransMode.VITAL, hasPack));
+			for (int slotId = 0; slotId < MENU_ROWS * 9; slotId++) {
+				this.buttons.setItem(slotId, button(this.viewer, ability, modeForSlot(slotId), hasPack));
+			}
 		}
 
 		@Override
 		public void clicked(int slotId, int button, ClickType clickType, Player player) {
 			if (clickType != ClickType.PICKUP && clickType != ClickType.QUICK_MOVE && clickType != ClickType.SWAP) return;
-			TransMode mode = switch (slotId) {
-				case COMBAT_SLOT -> TransMode.COMBAT;
-				case WORK_SLOT -> TransMode.WORK;
-				case VITAL_SLOT -> TransMode.VITAL;
-				default -> null;
-			};
+			TransMode mode = modeForSlot(slotId);
 			if (mode != null && activate(this.viewer, mode)) this.viewer.closeContainer();
 		}
 
@@ -357,6 +416,24 @@ public final class NecromancerShnyagaSystem {
 		@Override
 		public boolean stillValid(Player player) {
 			return player == this.viewer && player.isAlive() && isEligible(this.viewer);
+		}
+
+		@Override
+		public void broadcastChanges() {
+			super.broadcastChanges();
+			hideInventoryVisuals(this.viewer, this);
+		}
+
+		@Override
+		public void broadcastFullState() {
+			super.broadcastFullState();
+			hideInventoryVisuals(this.viewer, this);
+		}
+
+		@Override
+		public void removed(Player player) {
+			super.removed(player);
+			restoreInventoryVisuals(this.viewer, this);
 		}
 	}
 }
