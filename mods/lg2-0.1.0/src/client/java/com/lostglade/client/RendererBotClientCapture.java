@@ -126,11 +126,16 @@ public final class RendererBotClientCapture {
 
 	private static void beginCapture(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, Minecraft client) {
 		long now = System.currentTimeMillis();
-		RendererBotShadowWorldManager.hideEntityFromSession(payload.renderSessionId(), payload.hiddenEntityUuid());
 		synchronized (LOCK) {
 			PENDING_CAPTURES.put(payload.requestId(), new PendingCapture(payload, now));
 		}
 		RendererClientDiagnostics.cameraPhotoAccepted(payload.requestId());
+		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
+			sendFailure(payload, "Volunteer renderer disabled by client");
+			clearPendingCapture(payload.requestId());
+			return;
+		}
+		RendererBotShadowWorldManager.hideEntityFromSession(payload.renderSessionId(), payload.hiddenEntityUuid());
 		CapturedFrame cached = latestFrame;
 		if (cached != null && cached.matches(payload) && cached.capturedAtMillis() + RECENT_FRAME_TTL_MS >= now) {
 			Lg2.LOGGER.info("Renderer bot reusing hot cached frame for {}", payload.requestId());
@@ -167,6 +172,11 @@ public final class RendererBotClientCapture {
 			));
 		}
 		RendererClientDiagnostics.cameraLiveStarted(payload.streamId());
+		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
+			sendLiveFailure(payload, "Volunteer renderer disabled by client");
+			clearLiveStreamSession(payload.streamId());
+			return;
+		}
 		hideLiveStreamCameraCarriers(payload);
 		Lg2.LOGGER.info(
 				"Renderer bot started live stream {} at {} fps {}x{} (render {}x{}, warmup={})",
@@ -205,6 +215,10 @@ public final class RendererBotClientCapture {
 		}
 		synchronized (LOCK) {
 			PENDING_ITEM_ICONS.put(payload.requestId(), new PendingItemIcon(payload, System.currentTimeMillis()));
+		}
+		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
+			sendItemIconFailure(payload, "Volunteer renderer disabled by client");
+			clearPendingItemIcon(payload.requestId());
 		}
 	}
 
@@ -286,6 +300,9 @@ public final class RendererBotClientCapture {
 	}
 
 	private static void dispatchReadyItemIconRender(Minecraft client) {
+		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
+			return;
+		}
 		if (client == null || client.gameRenderer == null || RendererBotOffscreenWorldRenderer.isOffscreenRenderActive()) {
 			return;
 		}
@@ -388,6 +405,9 @@ public final class RendererBotClientCapture {
 	}
 
 	private static boolean dispatchReadyRenders(Minecraft client, long nowNanos) {
+		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
+			return false;
+		}
 		if (client == null || client.level == null || RendererBotOffscreenWorldRenderer.isOffscreenRenderActive()) {
 			return false;
 		}
@@ -1221,6 +1241,33 @@ public final class RendererBotClientCapture {
 			}
 			session.markFrameInFlight(nowNanos);
 			return true;
+		}
+	}
+
+	public static void onVolunteerPreferenceChanged(boolean enabled) {
+		if (enabled || RendererBotClientMode.isEnabled()) return;
+		List<PendingCapture> captures;
+		List<LiveStreamSession> streams;
+		List<PendingItemIcon> itemIcons;
+		synchronized (LOCK) {
+			captures = List.copyOf(PENDING_CAPTURES.values());
+			streams = List.copyOf(LIVE_STREAM_SESSIONS.values());
+			itemIcons = List.copyOf(PENDING_ITEM_ICONS.values());
+		}
+		for (PendingCapture capture : captures) {
+			if (capture == null) continue;
+			sendFailure(capture.payload(), "Volunteer renderer disabled by client");
+			clearPendingCapture(capture.payload().requestId());
+		}
+		for (LiveStreamSession stream : streams) {
+			if (stream == null) continue;
+			sendLiveFailure(stream.payload(), "Volunteer renderer disabled by client");
+			clearLiveStreamSession(stream.payload().streamId());
+		}
+		for (PendingItemIcon itemIcon : itemIcons) {
+			if (itemIcon == null) continue;
+			sendItemIconFailure(itemIcon.payload(), "Volunteer renderer disabled by client");
+			clearPendingItemIcon(itemIcon.payload().requestId());
 		}
 	}
 

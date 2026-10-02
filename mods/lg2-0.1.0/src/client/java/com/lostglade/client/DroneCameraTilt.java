@@ -61,10 +61,12 @@ public final class DroneCameraTilt {
 
 	/** Applies a known drone bank to any camera, including a static off-screen camera. */
 	public static void applyBank(Camera camera, float bankRadians) {
-		if (camera == null || bankRadians == 0.0F) {
+		if (camera == null || bankRadians == 0.0F || !LostgladeClientSettings.isDroneTiltEnabled()) {
 			return;
 		}
-		camera.rotation().rotateZ(bankRadians);
+		float scaledBank = bankRadians * LostgladeClientSettings.droneTiltStrength();
+		if (scaledBank == 0.0F) return;
+		camera.rotation().rotateZ(scaledBank);
 		CameraPositionInvoker vectors = (CameraPositionInvoker) camera;
 		new org.joml.Vector3f(0.0F, 0.0F, -1.0F).rotate(camera.rotation(), vectors.lg2$getForwards());
 		new org.joml.Vector3f(0.0F, 1.0F, 0.0F).rotate(camera.rotation(), vectors.lg2$getUp());

@@ -48,14 +48,21 @@ public final class RendererBotVolunteerClient {
 		}
 	}
 
+	public static void setVolunteerRendererEnabled(boolean enabled) {
+		if (RendererBotClientMode.isEnabled()) return;
+		LostgladeClientSettings.setCameraRendererEnabled(enabled);
+		RendererBotClientCapture.onVolunteerPreferenceChanged(enabled);
+		RendererBotClientVideoRecording.onVolunteerPreferenceChanged(enabled);
+		sendRendererHello();
+	}
+
 	private static void onClientTick(Minecraft client) {
 		while (TOGGLE.consumeClick()) {
 			if (RendererBotClientMode.isEnabled()) {
 				return;
 			}
 			boolean enabled = !LostgladeClientSettings.isCameraRendererEnabled();
-			LostgladeClientSettings.setCameraRendererEnabled(enabled);
-			sendRendererHello();
+			setVolunteerRendererEnabled(enabled);
 			if (client != null && client.player != null) {
 				client.player.displayClientMessage(Component.translatable(
 						enabled ? "message.lg2.camera_renderer_volunteer.enabled" : "message.lg2.camera_renderer_volunteer.disabled"
