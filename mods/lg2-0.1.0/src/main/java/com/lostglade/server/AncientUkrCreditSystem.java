@@ -140,7 +140,8 @@ public final class AncientUkrCreditSystem {
             loaded = false;
         });
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-                server.execute(() -> onPlayerJoined(server, handler.player)));
+                AccountAuthSystem.runWhenAuthenticated(handler.player,
+                        () -> server.execute(() -> onPlayerJoined(server, handler.player))));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             CLIENT_OBJECTIVES.remove(handler.player.getUUID());
             REPAYMENTS.remove(handler.player.getUUID());
@@ -314,7 +315,7 @@ public final class AncientUkrCreditSystem {
         loaded = true;
         accrueMissedHours(server, currentHour);
         save(server);
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) onPlayerJoined(server, player);
+        for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) onPlayerJoined(server, player);
         Lg2.LOGGER.info("Loaded Ancient Ukr credit state for {} borrowers", store.borrowers.size());
     }
 
@@ -685,7 +686,7 @@ public final class AncientUkrCreditSystem {
         long now = System.currentTimeMillis();
         CollectorTerms terms = collectorTerms();
         boolean changed = false;
-        for (ServerPlayer owner : server.getPlayerList().getPlayers()) {
+        for (ServerPlayer owner : AccountAuthSystem.authenticatedPlayers(server)) {
             BorrowerState borrower = store.borrowers.get(owner.getUUID().toString());
             if (borrower == null || !isAncientUkr(owner) || !hasCollectorThresholdDebt(borrower)) {
                 if (borrower != null && borrower.nextCollectorVisitEpochMillis != 0L) {
@@ -840,7 +841,7 @@ public final class AncientUkrCreditSystem {
     }
 
     private static void syncAllOnlineBorrowers(MinecraftServer server) {
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+        for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
             if (store.borrowers.containsKey(player.getUUID().toString()) || CLIENT_OBJECTIVES.containsKey(player.getUUID())) {
                 syncScoreboard(player);
             }

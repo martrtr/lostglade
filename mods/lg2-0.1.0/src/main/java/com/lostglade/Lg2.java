@@ -99,6 +99,7 @@ public class Lg2 implements ModInitializer {
 		Lg2Config.load();
 		SeasonStartConfig.load();
 		CameraMediaCache.initialize(FabricLoader.getInstance().getGameDir());
+		AccountAuthSystem.preflightServerProperties();
 		RendererBotProcessSystem.preflightServerProperties();
 		RaceConfig.load();
 		PolymerResourcePackUtils.addModAssets(MOD_ID);

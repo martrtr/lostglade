@@ -233,7 +233,7 @@ public final class ServerStabilitySystem {
 
 			Set<UUID> online = new HashSet<>();
 
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				online.add(player.getUUID());
 				spawnStabilityPotionParticles(player);
 
@@ -498,7 +498,7 @@ public final class ServerStabilitySystem {
 	}
 
 	private static void playStabilitySiren(MinecraftServer server, long nowTick) {
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.connection == null || RendererBotPresenceSystem.isRendererBot(player)) {
 				continue;
 			}
@@ -515,7 +515,7 @@ public final class ServerStabilitySystem {
 
 	private static void stopStabilitySiren(MinecraftServer server) {
 		if (server != null && stabilitySirenStartedTick != Long.MIN_VALUE) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				if (player != null && player.connection != null) {
 					player.connection.send(new ClientboundStopSoundPacket(STABILITY_SIREN_SOUND_ID, SoundSource.AMBIENT));
 				}
@@ -561,7 +561,7 @@ public final class ServerStabilitySystem {
 	}
 
 	private static void kickPlayersForNonpayment(MinecraftServer server) {
-		for (ServerPlayer player : new ArrayList<>(server.getPlayerList().getPlayers())) {
+		for (ServerPlayer player : new ArrayList<>(AccountAuthSystem.authenticatedPlayers(server))) {
 			if (player != null && player.connection != null) {
 				player.connection.disconnect(NONPAYMENT_DISCONNECT_REASON);
 			}

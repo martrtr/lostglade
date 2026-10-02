@@ -82,7 +82,9 @@ public final class CameraAnimatedMapPlaybackSystem {
 			persistenceServer = server;
 			loadPersistedPlacedVideos(server);
 		});
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> server.execute(() -> markViewerJoined((ServerPlayer) handler.player, server)));
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+				AccountAuthSystem.runWhenAuthenticated(handler.player,
+						() -> server.execute(() -> markViewerJoined((ServerPlayer) handler.player, server))));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> server.execute(() -> clearViewerRuntimeState(handler.player.getUUID())));
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			savePersistedPlacedVideos(server);
@@ -178,7 +180,7 @@ public final class CameraAnimatedMapPlaybackSystem {
 	}
 
 	private static void tickHeldVideoPreviews(MinecraftServer server, Map<PlaybackKey, Boolean> usedSessions, long gameTime) {
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			tickHeldVideoPreview(player, player.getMainHandItem(), usedSessions, gameTime);
 			tickHeldVideoPreview(player, player.getOffhandItem(), usedSessions, gameTime);
 		}

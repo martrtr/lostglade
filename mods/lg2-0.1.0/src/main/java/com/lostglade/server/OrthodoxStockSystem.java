@@ -72,7 +72,7 @@ public final class OrthodoxStockSystem {
 
 	private static void tick(MinecraftServer server) {
 		if (server == null) return;
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (getStockAbility(player) == null) {
 				clearPlayer(server, player);
 				continue;
@@ -252,7 +252,7 @@ public final class OrthodoxStockSystem {
 
 	private static void clearAll(MinecraftServer server) {
 		if (server != null) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) clearPlayer(server, player);
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) clearPlayer(server, player);
 		}
 		List<LightKey> lightKeys = List.copyOf(MANAGED_LIGHTS.keySet());
 		PLAYER_LIGHTS.clear();

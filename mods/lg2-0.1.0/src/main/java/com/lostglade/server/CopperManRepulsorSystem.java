@@ -185,12 +185,14 @@ private static final Map<UUID, Long> ACTIVE_SHOOT_ANIMATIONS = new ConcurrentHas
 				onPlayerDeath(newPlayer);
 			}
 		});
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> server.execute(() -> {
-			RepulsorState state = state(handler.player);
-			state.mode = SAVED_MODES.getOrDefault(handler.player.getUUID(), state.mode);
-			state.hudDirty = true;
-			updateHud(handler.player, state, true);
-		}));
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+				AccountAuthSystem.runWhenAuthenticated(handler.player, () -> server.execute(() -> {
+					RepulsorState state = state(handler.player);
+					state.mode = SAVED_MODES.getOrDefault(handler.player.getUUID(), state.mode);
+					state.hudDirty = true;
+					updateHud(handler.player, state, true);
+				}))
+		);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			RepulsorState state = STATES.get(handler.player.getUUID());
 			if (state != null) {
@@ -432,7 +434,7 @@ private static final Map<UUID, Long> ACTIVE_SHOOT_ANIMATIONS = new ConcurrentHas
 		if (nowTick % 40L == 0L) {
 			PROCESSED_NATURAL_LIGHTNING_HITS.entrySet().removeIf(entry -> entry.getValue() < nowTick);
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			RepulsorState state = state(player);
 			syncAirTriggerEntity(player, state);
 			if (state.mode == RepulsorMode.AUTOMATIC

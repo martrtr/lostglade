@@ -2741,7 +2741,7 @@ public final class RocketLaunchEventSystem {
 			return;
 		}
 		Holder<SoundEvent> sound = BuiltInRegistries.SOUND_EVENT.wrapAsHolder(SoundEvents.GENERIC_EXPLODE.value());
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.connection == null) {
 				continue;
 			}

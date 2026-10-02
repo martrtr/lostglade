@@ -161,7 +161,7 @@ public final class PuroSanStockSystem {
 		}
 		long nowTick = server.overworld().getGameTime();
 		Set<UUID> online = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			online.add(player.getUUID());
 			RaceAbilityConfig ability = getStockAbility(player);
 			if (ability == null) {
@@ -611,7 +611,7 @@ public final class PuroSanStockSystem {
 
 	private static void clearAll(MinecraftServer server) {
 		if (server != null) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				clearPlayerState(player);
 			}
 		}

@@ -532,7 +532,7 @@ public final class StartupRaceAbilitySystem {
 			int amplifier = Math.min(127, balloons.size() - 1);
 			BALLOON_JUMP_BOOST.ensure(target, amplifier);
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!balloonsByTarget.containsKey(player.getUUID())) {
 				BALLOON_JUMP_BOOST.clear(player);
 			}
@@ -543,7 +543,7 @@ public final class StartupRaceAbilitySystem {
 		if (server == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.isAlive() && player.level() instanceof ServerLevel) {
 				ensureAttachedBalloonVisuals(server, player);
 			}

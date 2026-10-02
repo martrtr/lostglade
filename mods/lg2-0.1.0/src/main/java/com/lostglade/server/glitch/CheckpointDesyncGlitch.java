@@ -1,5 +1,7 @@
 package com.lostglade.server.glitch;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.google.gson.JsonObject;
 import com.lostglade.config.GlitchConfig;
 import com.lostglade.server.ServerBackroomsSystem;
@@ -113,7 +115,7 @@ public final class CheckpointDesyncGlitch implements RespawnGlitchHandler {
 
 	private static Map<SpawnPointKey, SpawnTarget> collectUniqueForeignSpawnTargets(MinecraftServer server, ServerPlayer respawnedPlayer) {
 		Map<SpawnPointKey, SpawnTarget> uniqueTargets = new LinkedHashMap<>();
-		for (ServerPlayer candidate : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer candidate : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (candidate.getUUID().equals(respawnedPlayer.getUUID())) {
 				continue;
 			}

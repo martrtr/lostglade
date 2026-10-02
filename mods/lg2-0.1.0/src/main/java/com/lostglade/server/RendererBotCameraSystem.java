@@ -1679,7 +1679,7 @@ public final class RendererBotCameraSystem {
 		// admission path in lg2.json. Volunteers are preferred, leaving the hidden
 		// renderer client as a transparent fallback for the Contabo VPS.
 		if (Lg2Config.get().cameraRendererAllowPlayerVolunteers) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				BotHandshake handshake = READY_BOTS.get(player.getUUID());
 				if (handshake == null || !handshake.volunteerRenderer()
 						|| !ServerPlayNetworking.canSend(player, RendererBotPayloads.RendererBotCaptureRequestS2CPayload.TYPE)) {
@@ -1694,7 +1694,7 @@ public final class RendererBotCameraSystem {
 		}
 
 		String trimmedName = configuredName.trim();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (!player.getScoreboardName().equalsIgnoreCase(trimmedName)) {
 				continue;
 			}
@@ -1896,7 +1896,7 @@ public final class RendererBotCameraSystem {
 		if (bot != null && hasActiveVideoRecording(bot.getUUID())) {
 			return false;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null
 					|| !player.isAlive()
 					|| DroneSystem.isCameraBlockedByDroneControl(player)
@@ -1949,7 +1949,7 @@ public final class RendererBotCameraSystem {
 			return;
 		}
 		Set<String> desiredOwnerKeys = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null) {
 				continue;
 			}
@@ -2830,7 +2830,7 @@ public final class RendererBotCameraSystem {
 		}
 
 		if (!videoRecordingActive && server.getPlayerList() != null) {
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				if (player == null
 						|| !player.isAlive()
 						|| DroneSystem.isCameraBlockedByDroneControl(player)

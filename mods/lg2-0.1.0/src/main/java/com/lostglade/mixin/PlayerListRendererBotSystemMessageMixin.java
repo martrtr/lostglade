@@ -1,6 +1,6 @@
 package com.lostglade.mixin;
 
-import com.lostglade.server.RendererBotPresenceSystem;
+import com.lostglade.server.AccountAuthSystem;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.PlayerList;
@@ -15,7 +15,7 @@ import java.util.function.Function;
 public abstract class PlayerListRendererBotSystemMessageMixin {
 	@Inject(method = "broadcastSystemMessage(Lnet/minecraft/network/chat/Component;Z)V", at = @At("HEAD"), cancellable = true)
 	private void lg2$suppressRendererBotSystemMessage(Component message, boolean overlay, CallbackInfo ci) {
-		if (RendererBotPresenceSystem.shouldSuppressRendererBotSystemMessage(message)) {
+		if (AccountAuthSystem.shouldSuppressPresenceSystemMessage(message)) {
 			ci.cancel();
 		}
 	}
@@ -30,7 +30,7 @@ public abstract class PlayerListRendererBotSystemMessageMixin {
 			Function<ServerPlayer, Component> transformer,
 			boolean overlay,
 			CallbackInfo ci) {
-		if (RendererBotPresenceSystem.shouldSuppressRendererBotSystemMessage(message)) {
+		if (AccountAuthSystem.shouldSuppressPresenceSystemMessage(message)) {
 			ci.cancel();
 		}
 	}

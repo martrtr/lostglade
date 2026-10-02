@@ -1,5 +1,7 @@
 package com.lostglade.server.glitch;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
@@ -320,7 +322,7 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 
 	private static List<ServerPlayer> collectEnderChestTargets(MinecraftServer server) {
 		List<ServerPlayer> targets = new ArrayList<>();
-		for (ServerPlayer target : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer target : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (target.isSpectator() || !target.isAlive() || ServerBackroomsSystem.isInBackrooms(target)) {
 				continue;
 			}

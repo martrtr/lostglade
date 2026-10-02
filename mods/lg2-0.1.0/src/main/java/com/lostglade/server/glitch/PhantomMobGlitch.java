@@ -1,5 +1,7 @@
 package com.lostglade.server.glitch;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.google.common.collect.ImmutableMultimap;
 import com.google.gson.JsonObject;
 import com.lostglade.Lg2;
@@ -460,7 +462,7 @@ public final class PhantomMobGlitch implements ServerGlitchHandler {
 		}
 
 		List<ServerPlayer> candidates = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null || !player.isAlive() || player.isSpectator() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}
@@ -812,7 +814,7 @@ public final class PhantomMobGlitch implements ServerGlitchHandler {
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.isSpectator() || !player.isAlive() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}

@@ -163,6 +163,10 @@ final class ServerTabIntegrationTabImpl {
 			rendererBotVanishIntegration = new VanishIntegration(Lg2.MOD_ID) {
 				@Override
 				public boolean canSee(TabPlayer viewer, TabPlayer target) {
+					Object rawViewer = viewer == null ? null : viewer.getPlayer();
+					if (rawViewer instanceof ServerPlayer viewerPlayer && !AccountAuthSystem.isAuthenticated(viewerPlayer)) {
+						return false;
+					}
 					return !isHidden(target);
 				}
 

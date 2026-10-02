@@ -223,7 +223,7 @@ public final class OrthodoxAttackSystem {
 
 	private static void updateViews(MinecraftServer server, DivineGazeSession session, ServerPlayer target) {
 		if (target != null) {
-			for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer viewer : AccountAuthSystem.authenticatedPlayers(server)) {
 				if (viewer.level() != target.level()) continue;
 				double dx = viewer.getX() - target.getX();
 				double dz = viewer.getZ() - target.getZ();

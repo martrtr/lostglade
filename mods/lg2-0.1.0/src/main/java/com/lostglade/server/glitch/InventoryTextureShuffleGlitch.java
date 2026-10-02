@@ -1,5 +1,7 @@
 package com.lostglade.server.glitch;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.google.gson.JsonObject;
 import com.lostglade.config.GlitchConfig;
 import com.lostglade.server.ServerBackroomsSystem;
@@ -518,7 +520,7 @@ public final class InventoryTextureShuffleGlitch implements ServerGlitchHandler 
 			return;
 		}
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			boolean inventoryChanged = false;
 			Inventory inventory = player.getInventory();
 			for (int slot = 0; slot < PLAYER_INVENTORY_SLOT_COUNT; slot++) {
@@ -609,7 +611,7 @@ public final class InventoryTextureShuffleGlitch implements ServerGlitchHandler 
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
 		List<ServerPlayer> result = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player.isSpectator()
 					|| !player.isAlive()
 					|| ServerBackroomsSystem.isInBackrooms(player)

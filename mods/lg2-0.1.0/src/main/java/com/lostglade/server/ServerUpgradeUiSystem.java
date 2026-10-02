@@ -216,12 +216,13 @@ public final class ServerUpgradeUiSystem {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			loadState(server);
 			UpgradeUiConfig.load();
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 				ItRecipeBookSystem.syncPlayerRecipeBook(player);
 			}
 		});
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				server.execute(() -> ItRecipeBookSystem.syncPlayerRecipeBook(handler.player))
+				AccountAuthSystem.runWhenAuthenticated(handler.player,
+						() -> server.execute(() -> ItRecipeBookSystem.syncPlayerRecipeBook(handler.player)))
 		);
 		ServerLifecycleEvents.SERVER_STOPPING.register(ServerUpgradeUiSystem::saveState);
 		ServerTickEvents.END_SERVER_TICK.register(ServerUpgradeUiSystem::tickAnimatedErasTitles);
@@ -2189,7 +2190,7 @@ public final class ServerUpgradeUiSystem {
 		}
 
 		UpgradeUiConfig.ConfigData config = UpgradeUiConfig.get();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID playerId = player.getUUID();
 			tickPendingLockCursorRestore(player);
 			if (!(player.containerMenu instanceof UpgradeMenu menu)) {

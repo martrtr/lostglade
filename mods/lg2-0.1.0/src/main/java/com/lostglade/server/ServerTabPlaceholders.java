@@ -54,7 +54,7 @@ final class ServerTabPlaceholders {
 		if (server == null) {
 			return;
 		}
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			refreshHeader(server, player);
 		}
 	}

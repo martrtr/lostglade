@@ -227,13 +227,13 @@ public final class ServerGlitchSystem {
 	}
 
 	private static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
+		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
 		return handleBroadcastedPlayerMessage(message, sender, params, true);
 	}
 
 	private static boolean onAllowCommandMessage(PlayerChatMessage message, CommandSourceStack source, ChatType.Bound params) {
-		if (source == null || !(source.getEntity() instanceof ServerPlayer sender)) {
-			return true;
-		}
+		if (source == null || !(source.getEntity() instanceof ServerPlayer sender)) return true;
+		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
 		return handleBroadcastedPlayerMessage(message, sender, params, false);
 	}
 

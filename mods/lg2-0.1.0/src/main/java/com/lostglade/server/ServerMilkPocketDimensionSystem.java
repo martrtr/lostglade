@@ -148,7 +148,8 @@ public final class ServerMilkPocketDimensionSystem {
 		ServerLifecycleEvents.SERVER_STOPPING.register(ServerMilkPocketDimensionSystem::saveState);
 		ServerTickEvents.END_SERVER_TICK.register(ServerMilkPocketDimensionSystem::tickServer);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
-				server.execute(() -> queueJoinExit((ServerPlayer) handler.player, server.getTickCount())));
+				AccountAuthSystem.runWhenAuthenticated(handler.player,
+						() -> server.execute(() -> queueJoinExit((ServerPlayer) handler.player, server.getTickCount()))));
 		UseBlockCallback.EVENT.register(ServerMilkPocketDimensionSystem::onUseBlock);
 		PlayerBlockBreakEvents.BEFORE.register(ServerMilkPocketDimensionSystem::beforeBlockBreak);
 
@@ -875,7 +876,7 @@ public final class ServerMilkPocketDimensionSystem {
 		}
 
 		Set<UUID> onlinePlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			UUID playerId = player.getUUID();
 			onlinePlayers.add(playerId);
 			if (FIRST_LANDING_FALL_PROTECTED_PLAYERS.contains(playerId) && player.onGround()) {
@@ -957,7 +958,7 @@ public final class ServerMilkPocketDimensionSystem {
 
 		long nowTick = server.getTickCount();
 		Set<UUID> onlinePlayers = new HashSet<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null) {
 				continue;
 			}

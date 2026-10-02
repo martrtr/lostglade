@@ -9,6 +9,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.status.ServerStatus;
 import net.minecraft.server.MinecraftServer;
@@ -22,6 +23,9 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Team;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -74,15 +78,28 @@ public final class RendererBotPresenceSystem {
 	}
 
 	public static boolean isRendererBot(ServerPlayer player) {
-		return player != null && isRendererBotName(player.getScoreboardName());
+		return player != null && player.connection != null
+				&& isRendererBotConnection(player.getScoreboardName(), player.connection.getRemoteAddress());
+	}
+
+	public static boolean isRendererBotConnection(String rawName, Connection connection) {
+		return connection != null && isRendererBotConnection(rawName, connection.getRemoteAddress());
+	}
+
+	private static boolean isRendererBotConnection(String rawName, SocketAddress remoteAddress) {
+		if (!isRendererBotName(rawName)) return false;
+		if (!(remoteAddress instanceof InetSocketAddress socketAddress)) return false;
+		InetAddress address = socketAddress.getAddress();
+		return address != null && address.isLoopbackAddress();
 	}
 
 	public static boolean shouldHideFromPlayerList(ServerPlayer player) {
-		return isRendererBot(player) || ServerRaceSystem.isMilkMouseActive(player);
+		return !AccountAuthSystem.isPresenceVisible(player)
+				|| ServerRaceSystem.isMilkMouseActive(player);
 	}
 
 	public static boolean isRendererBotNameAndId(NameAndId entry) {
-		return entry != null && isRendererBotName(entry.name());
+		return entry != null && ONLINE_BOT_IDS.contains(entry.id());
 	}
 
 	public static int getOnlineRendererBotCount() {
@@ -102,7 +119,8 @@ public final class RendererBotPresenceSystem {
 	}
 
 	public static ServerStatus sanitizeStatus(ServerStatus original) {
-		if (original == null || ONLINE_BOT_IDS.isEmpty()) {
+		int pendingAuth = AccountAuthSystem.getPendingAuthenticationCount();
+		if (original == null || (ONLINE_BOT_IDS.isEmpty() && pendingAuth == 0)) {
 			return original;
 		}
 
@@ -117,13 +135,13 @@ public final class RendererBotPresenceSystem {
 		if (!sample.isEmpty()) {
 			filteredSample = new ArrayList<>(sample.size());
 			for (NameAndId entry : sample) {
-				if (!isRendererBotNameAndId(entry)) {
+				if (!isRendererBotNameAndId(entry) && !AccountAuthSystem.isPendingAuthentication(entry.id())) {
 					filteredSample.add(entry);
 				}
 			}
 		}
 
-		int adjustedOnline = Math.max(0, players.online() - ONLINE_BOT_IDS.size());
+		int adjustedOnline = Math.max(0, players.online() - ONLINE_BOT_IDS.size() - pendingAuth);
 		if (adjustedOnline == players.online() && filteredSample == sample) {
 			return original;
 		}
@@ -215,25 +233,6 @@ public final class RendererBotPresenceSystem {
 	public static boolean isRendererBotName(String rawName) {
 		String configured = configuredBotName();
 		return configured != null && rawName != null && configured.equals(rawName.trim().toLowerCase(Locale.ROOT));
-	}
-
-	public static boolean shouldSuppressRendererBotSystemMessage(Component message) {
-		if (message == null) {
-			return false;
-		}
-
-		String configuredName = configuredBotName();
-		if (configuredName == null) {
-			return false;
-		}
-
-		String debugValue = message.toString().toLowerCase(Locale.ROOT);
-		if (!debugValue.contains("multiplayer.player.joined") && !debugValue.contains("multiplayer.player.left")) {
-			return false;
-		}
-
-		String plainValue = message.getString().toLowerCase(Locale.ROOT);
-		return plainValue.contains(configuredName) || debugValue.contains(configuredName);
 	}
 
 	private static LiteralArgumentBuilder<CommandSourceStack> rendererBotStatusCommand(String rootLiteral) {

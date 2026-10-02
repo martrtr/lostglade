@@ -1,5 +1,7 @@
 package com.lostglade.server.glitch;
 
+import com.lostglade.server.AccountAuthSystem;
+
 import com.google.gson.JsonObject;
 import com.lostglade.Lg2;
 import com.lostglade.config.GlitchConfig;
@@ -335,7 +337,7 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			if (player == null || !player.isAlive() || player.isSpectator() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}

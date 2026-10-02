@@ -799,7 +799,7 @@ public final class MonitorScreenSystem {
 		}
 
 		Map<ScreenRuntimeKey, UiPoint> nextCursors = new HashMap<>();
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			DebugAimTarget target = findDebugAimTarget(player);
 			if (target != null) {
 				nextCursors.put(target.runtimeKey(), target.point());

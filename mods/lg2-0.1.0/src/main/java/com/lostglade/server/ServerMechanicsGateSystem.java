@@ -642,7 +642,7 @@ public final class ServerMechanicsGateSystem {
 			return;
 		}
 
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			sanitizeIllegalInventory(player);
 		}
 	}
