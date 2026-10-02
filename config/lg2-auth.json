@@ -5,6 +5,12 @@
       "createdAt": "2026-09-30T07:48:27.441351937Z",
       "premiumUuid": "9009332d-532e-4492-9a3d-7f21f3639f17",
       "offlinePasswordAllowed": false
+    },
+    "rajas_yt": {
+      "trustedIps": [],
+      "createdAt": "2026-10-01T20:35:50.882905700Z",
+      "premiumUuid": "7ecbe746-51f6-4498-8c30-28839a8bdd3b",
+      "offlinePasswordAllowed": false
     }
   }
 }

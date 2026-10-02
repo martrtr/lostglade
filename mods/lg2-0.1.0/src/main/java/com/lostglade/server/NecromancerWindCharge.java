@@ -45,7 +45,7 @@ final class NecromancerWindCharge extends WindCharge {
 		Vec3 movement = getDeltaMovement();
 		Vec3 trailCenter = position().subtract(movement.scale(0.28D));
 		level.sendParticles(DARK_SOUL_DUST, trailCenter.x, trailCenter.y, trailCenter.z, 3, 0.12D, 0.12D, 0.12D, 0.008D);
-		level.sendParticles(ParticleTypes.SCULK_SOUL, trailCenter.x, trailCenter.y, trailCenter.z, 1, 0.08D, 0.08D, 0.08D, 0.006D);
+		level.sendParticles(ParticleTypes.CRIMSON_SPORE, trailCenter.x, trailCenter.y, trailCenter.z, 1, 0.08D, 0.08D, 0.08D, 0.006D);
 		if (tickCount % 2 == 0) {
 			level.sendParticles(ParticleTypes.REVERSE_PORTAL, trailCenter.x, trailCenter.y, trailCenter.z, 2, 0.10D, 0.10D, 0.10D, 0.01D);
 		}

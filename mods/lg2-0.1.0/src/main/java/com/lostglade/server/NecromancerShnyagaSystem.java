@@ -42,10 +42,6 @@ import java.util.Optional;
 public final class NecromancerShnyagaSystem {
 	private static final String RACE_ID = "necromancer";
 	private static final int MENU_ROWS = 3;
-	// User-facing chest slots 12, 14 and 16 (container indices are zero-based).
-	private static final int COMBAT_SLOT = 11;
-	private static final int WORK_SLOT = 13;
-	private static final int VITAL_SLOT = 15;
 	private static final double DEFAULT_TIER_ONE_COST = 100.0D;
 	private static final double DEFAULT_TIER_TWO_COST = 200.0D;
 	private static final double DEFAULT_TIER_THREE_COST = 300.0D;
@@ -56,18 +52,13 @@ public final class NecromancerShnyagaSystem {
 	private static final String MENU_GLYPH = "\uebc0";
 	private static final FontDescription MENU_FONT = new FontDescription.Resource(
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_shnyaga_menu"));
-	private static final Identifier COMBAT_MODEL = Identifier.fromNamespaceAndPath(
-			Lg2.MOD_ID, "gui/necromancer_trans_combat");
-	private static final Identifier WORK_MODEL = Identifier.fromNamespaceAndPath(
-			Lg2.MOD_ID, "gui/necromancer_trans_work");
-	private static final Identifier VITAL_MODEL = Identifier.fromNamespaceAndPath(
-			Lg2.MOD_ID, "gui/necromancer_trans_vital");
+	private static final Identifier INVISIBLE_BUTTON_MODEL = Identifier.fromNamespaceAndPath(
+			Lg2.MOD_ID, "gui/button/invisible");
 	private static final Identifier ABSORPTION_CAPACITY_ID = Identifier.fromNamespaceAndPath(
 			Lg2.MOD_ID, "necromancer_shnyaga_absorption_capacity");
 	private static final DustParticleOptions BLACK_DUST = new DustParticleOptions(0x000000, 1.15F);
 	private static final DustParticleOptions NECRO_DUST = new DustParticleOptions(0x32113F, 0.85F);
 	private static final DustParticleOptions DARK_SOUL_DUST = new DustParticleOptions(0x54206F, 0.85F);
-	private static final DustParticleOptions SOUL_DUST = new DustParticleOptions(0x42BFA8, 0.62F);
 
 	private NecromancerShnyagaSystem() {
 	}
@@ -117,7 +108,7 @@ public final class NecromancerShnyagaSystem {
 		player.addEffect(new MobEffectInstance(mode.primaryEffect, durationTicks, amplifier));
 		player.addEffect(new MobEffectInstance(mode.secondaryEffect, durationTicks, amplifier));
 		grantAbsorption(player, ability, tier);
-		spawnActivationRings(player);
+		spawnActivationRings(player, mode);
 		player.level().playSound(
 				null,
 				player.getX(),
@@ -131,7 +122,7 @@ public final class NecromancerShnyagaSystem {
 		return true;
 	}
 
-	private static void spawnActivationRings(ServerPlayer player) {
+	private static void spawnActivationRings(ServerPlayer player, TransMode mode) {
 		if (!(player.level() instanceof ServerLevel level)) return;
 		AABB bounds = player.getBoundingBox();
 		double radius = Math.max(bounds.getXsize(), bounds.getZsize()) * 0.5D + 0.18D;
@@ -151,10 +142,10 @@ public final class NecromancerShnyagaSystem {
 					level.sendParticles(DARK_SOUL_DUST, x, y, z, 1, 0.01D, 0.01D, 0.01D, 0.001D);
 				}
 				if (index % 8 == ring * 2) {
-					level.sendParticles(SOUL_DUST, x, y, z, 1, 0.008D, 0.008D, 0.008D, 0.001D);
+					level.sendParticles(mode.particle, x, y, z, 1, 0.008D, 0.008D, 0.008D, 0.001D);
 				}
 				if (index % 10 == ring) {
-					level.sendParticles(ParticleTypes.SCULK_SOUL, x, y, z, 1, 0.005D, 0.005D, 0.005D, 0.001D);
+					level.sendParticles(mode.particle, x, y, z, 1, 0.005D, 0.005D, 0.005D, 0.001D);
 				}
 				if (index % 12 == ring * 2) {
 					level.sendParticles(ParticleTypes.REVERSE_PORTAL, x, y, z, 1, 0.008D, 0.008D, 0.008D, 0.003D);
@@ -227,14 +218,12 @@ public final class NecromancerShnyagaSystem {
 	}
 
 	private static Component menuTitle(boolean hasPack) {
-		if (!hasPack) return Component.literal("\u0411\u043b\u0430\u0433\u043e\u0441\u043b\u043e\u0432\u0435\u043d\u0438\u0435 \u0434\u0443\u0448");
+		if (!hasPack) return Component.empty();
 		MutableComponent title = Component.empty();
 		title.append(Component.literal(TITLE_SHIFT).withStyle(style -> style.withColor(0xFFFFFF).withItalic(false)));
 		title.append(Component.literal(MENU_GLYPH).withStyle(style -> style
 				.withColor(0xFFFFFF).withItalic(false).withFont(MENU_FONT).withShadowColor(0x00000000)));
 		title.append(Component.literal(TITLE_RESET).withStyle(style -> style.withColor(0xFFFFFF).withItalic(false)));
-		title.append(Component.literal("\u0411\u043b\u0430\u0433\u043e\u0441\u043b\u043e\u0432\u0435\u043d\u0438\u0435 \u0434\u0443\u0448")
-				.withStyle(style -> style.withColor(0xD6BD86).withItalic(false)));
 		return title;
 	}
 
@@ -245,13 +234,25 @@ public final class NecromancerShnyagaSystem {
 			case VITAL -> Items.GLISTERING_MELON_SLICE;
 		};
 		ItemStack stack = new ItemStack(hasPack ? Items.PAPER : fallback);
-		if (hasPack) stack.set(DataComponents.ITEM_MODEL, mode.model);
+		if (hasPack) {
+			stack.set(DataComponents.ITEM_MODEL, INVISIBLE_BUTTON_MODEL);
+		}
 		int tier = affordableTier(player, ability);
 		String title = tier > 0 ? mode.title + " " + romanTier(tier) : mode.title;
 		stack.set(DataComponents.CUSTOM_NAME, Component.literal(title)
 				.withStyle(style -> style.withColor(mode.color).withItalic(false).withBold(true)));
-		stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
+		if (!hasPack) stack.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
 		return stack;
+	}
+
+	private static TransMode modeForSlot(int slotId) {
+		if (slotId < 0 || slotId >= MENU_ROWS * 9) return null;
+		return switch (slotId % 9) {
+			case 0, 1, 2 -> TransMode.WORK;
+			case 3, 4, 5 -> TransMode.COMBAT;
+			case 6, 7, 8 -> TransMode.VITAL;
+			default -> null;
+		};
 	}
 
 	private static String romanTier(int tier) {
@@ -269,39 +270,35 @@ public final class NecromancerShnyagaSystem {
 	private enum TransMode {
 		COMBAT(
 				"\u0411\u043e\u0435\u0432\u043e\u0439 \u0442\u0440\u0430\u043d\u0441",
-				0xFF655F,
-				COMBAT_MODEL,
+				0xFF2D2D,
 				MobEffects.STRENGTH,
 				MobEffects.SPEED),
 		WORK(
 				"\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0442\u0440\u0430\u043d\u0441",
-				0x70E39A,
-				WORK_MODEL,
+				0x2F6BFF,
 				MobEffects.HASTE,
 				MobEffects.NIGHT_VISION),
 		VITAL(
 				"\u0416\u0438\u0432\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0439 \u0442\u0440\u0430\u043d\u0441",
-				0xFFD66F,
-				VITAL_MODEL,
+				0x7CFF33,
 				MobEffects.REGENERATION,
 				MobEffects.RESISTANCE);
 
 		private final String title;
 		private final int color;
-		private final Identifier model;
+		private final DustParticleOptions particle;
 		private final net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> primaryEffect;
 		private final net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> secondaryEffect;
 
 		TransMode(
 				String title,
 				int color,
-				Identifier model,
 				net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> primaryEffect,
 				net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> secondaryEffect
 		) {
 			this.title = title;
 			this.color = color;
-			this.model = model;
+			this.particle = new DustParticleOptions(color, 0.62F);
 			this.primaryEffect = primaryEffect;
 			this.secondaryEffect = secondaryEffect;
 		}
@@ -332,20 +329,15 @@ public final class NecromancerShnyagaSystem {
 			RaceAbilityConfig ability = eligibleAbility(this.viewer);
 			this.buttons.clearContent();
 			if (ability == null) return;
-			this.buttons.setItem(COMBAT_SLOT, button(this.viewer, ability, TransMode.COMBAT, hasPack));
-			this.buttons.setItem(WORK_SLOT, button(this.viewer, ability, TransMode.WORK, hasPack));
-			this.buttons.setItem(VITAL_SLOT, button(this.viewer, ability, TransMode.VITAL, hasPack));
+			for (int slotId = 0; slotId < MENU_ROWS * 9; slotId++) {
+				this.buttons.setItem(slotId, button(this.viewer, ability, modeForSlot(slotId), hasPack));
+			}
 		}
 
 		@Override
 		public void clicked(int slotId, int button, ClickType clickType, Player player) {
 			if (clickType != ClickType.PICKUP && clickType != ClickType.QUICK_MOVE && clickType != ClickType.SWAP) return;
-			TransMode mode = switch (slotId) {
-				case COMBAT_SLOT -> TransMode.COMBAT;
-				case WORK_SLOT -> TransMode.WORK;
-				case VITAL_SLOT -> TransMode.VITAL;
-				default -> null;
-			};
+			TransMode mode = modeForSlot(slotId);
 			if (mode != null && activate(this.viewer, mode)) this.viewer.closeContainer();
 		}
 

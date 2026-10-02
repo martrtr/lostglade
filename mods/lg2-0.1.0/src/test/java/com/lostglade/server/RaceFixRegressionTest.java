@@ -16,7 +16,40 @@ public final class RaceFixRegressionTest {
 		helmetsKeepTheirArmor();
 		markDefenseTimerUsesWholeSeconds();
 		manaUsesNativeBossBar();
+		visualAssetsKeepAuthoredDimensions();
+		necromancerShnyagaUsesFullColumnZones();
 		System.out.println("Race fixes: swimming, bidirectional latency, FIFO, lossless overflow and helmet attributes passed");
+	}
+
+	private static void necromancerShnyagaUsesFullColumnZones() throws Exception {
+		var method = NecromancerShnyagaSystem.class.getDeclaredMethod("modeForSlot", int.class);
+		method.setAccessible(true);
+		String[] columns = {"WORK", "WORK", "WORK", "COMBAT", "COMBAT", "COMBAT", "VITAL", "VITAL", "VITAL"};
+		int[] colors = {0x2F6BFF, 0x2F6BFF, 0x2F6BFF, 0xFF2D2D, 0xFF2D2D, 0xFF2D2D, 0x7CFF33, 0x7CFF33, 0x7CFF33};
+		for (int slot = 0; slot < 27; slot++) {
+			Object mode = method.invoke(null, slot);
+			check(mode != null && mode.toString().equals(columns[slot % 9]), "wrong shnyaga mode at slot " + (slot + 1));
+			var color = mode.getClass().getDeclaredField("color");
+			color.setAccessible(true);
+			check(color.getInt(mode) == colors[slot % 9], "wrong shnyaga color at slot " + (slot + 1));
+		}
+		check(method.invoke(null, -1) == null && method.invoke(null, 27) == null, "shnyaga accepts slots outside its menu");
+		var romanTier = NecromancerShnyagaSystem.class.getDeclaredMethod("romanTier", int.class);
+		romanTier.setAccessible(true);
+		check(romanTier.invoke(null, 1).equals("I") && romanTier.invoke(null, 2).equals("II")
+				&& romanTier.invoke(null, 3).equals("III"), "shnyaga tier names changed");
+	}
+
+	private static void visualAssetsKeepAuthoredDimensions() throws Exception {
+		var assets = java.nio.file.Path.of("src/main/resources/assets");
+		var eye = javax.imageio.ImageIO.read(assets.resolve("lg2/textures/item/orthodox_divine_eye.png").toFile());
+		check(eye.getWidth() == 64 && eye.getHeight() == 64, "wrong Orthodox eye texture dimensions");
+		var menu = javax.imageio.ImageIO.read(assets.resolve("lg2/textures/font/necromancer_shnyaga_menu.png").toFile());
+		check(menu.getWidth() == 176 && menu.getHeight() == 204, "wrong necromancer shnyaga dimensions");
+		var font = com.google.gson.JsonParser.parseString(java.nio.file.Files.readString(
+				assets.resolve("lg2/font/necromancer_shnyaga_menu.json"))).getAsJsonObject();
+		check(font.getAsJsonArray("providers").get(0).getAsJsonObject().get("height").getAsInt() == 204,
+				"necromancer shnyaga texture is scaled instead of rendered pixel-perfect");
 	}
 
 	private static void manaUsesNativeBossBar() throws Exception {
@@ -35,6 +68,13 @@ public final class RaceFixRegressionTest {
 				&& bitmap.getAsJsonArray("chars").get(0).getAsString().equals("\uea00"), "frame needs exactly one glyph");
 		var frame = javax.imageio.ImageIO.read(assets.resolve("lg2/textures/font/necromancer_mana_bar.png").toFile());
 		check(frame.getWidth() == 218 && frame.getHeight() == 66, "frame became a fill atlas");
+		int firstVisibleX = frame.getWidth();
+		for (int y = 0; y < frame.getHeight(); y++) {
+			for (int x = 0; x < frame.getWidth(); x++) {
+				if ((frame.getRGB(x, y) >>> 24) != 0) firstVisibleX = Math.min(firstVisibleX, x);
+			}
+		}
+		check(firstVisibleX == 2, "mana frame is not shifted four pixels left");
 		for (String name : List.of("white_background", "white_progress")) {
 			var sprite = javax.imageio.ImageIO.read(assets.resolve("minecraft/textures/gui/sprites/boss_bar/" + name + ".png").toFile());
 			check(sprite.getWidth() == 182 && sprite.getHeight() == 5, "wrong native bossbar dimensions");
