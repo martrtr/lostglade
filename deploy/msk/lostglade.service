@@ -1,0 +1,20 @@
+[Unit]
+Description=Lostglade Fabric server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lostglade
+Group=lostglade
+WorkingDirectory=/srv/lostglade/current
+ExecStart=/srv/lostglade/current/deploy/msk/run-server.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=90
+LimitNOFILE=1048576
+TasksMax=4096
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

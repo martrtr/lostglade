@@ -1,0 +1,43 @@
+name: Deploy production release
+
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lostglade-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build exact release archive
+        run: ./deploy/msk/assemble-release.sh "$GITHUB_SHA"
+
+      - name: Install password SSH client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Pin production host key
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' '31.77.251.51 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE29NPxt+faXVeimIsvhugMSID2FXIYvB+hlgDhXa1c+' > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/known_hosts
+
+      - name: Upload and activate this commit
+        env:
+          SSHPASS: ${{ secrets.MSK_SSH_PASSWORD }}
+          RELEASE_ID: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          archive="dist/lostglade-${RELEASE_ID}.tar.gz"
+          sshpass -e scp -o StrictHostKeyChecking=yes "$archive" "root@31.77.251.51:/srv/lostglade/incoming/${RELEASE_ID}.tar.gz"
+          sshpass -e ssh -o StrictHostKeyChecking=yes root@31.77.251.51 "lostglade-activate-release ${RELEASE_ID}"
