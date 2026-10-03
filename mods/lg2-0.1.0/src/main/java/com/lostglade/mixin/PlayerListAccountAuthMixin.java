@@ -4,6 +4,7 @@ import com.lostglade.server.AccountAuthSystem;
 import net.minecraft.network.Connection;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.server.players.NameAndId;
 import net.minecraft.server.players.PlayerList;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -35,6 +36,19 @@ public abstract class PlayerListAccountAuthMixin {
 	@Inject(method = "remove", at = @At("RETURN"))
 	private void lg2$clearAuthenticationStateOnlyAfterVanillaSave(ServerPlayer player, CallbackInfo ci) {
 		AccountAuthSystem.onPlayerRemoved(player);
+	}
+
+	@Inject(method = "isWhiteListed", at = @At("RETURN"), cancellable = true)
+	private void lg2$allowWhitelistedNameAcrossHybridUuid(NameAndId profile, CallbackInfoReturnable<Boolean> cir) {
+		if (cir.getReturnValueZ() || profile == null || profile.name() == null) return;
+
+		PlayerList self = (PlayerList) (Object) this;
+		for (String whitelistedName : self.getWhiteListNames()) {
+			if (whitelistedName != null && whitelistedName.equalsIgnoreCase(profile.name())) {
+				cir.setReturnValue(true);
+				return;
+			}
+		}
 	}
 
 	@Inject(method = "getPlayerNamesArray", at = @At("RETURN"), cancellable = true)
