@@ -73,11 +73,21 @@ done < <(find "${repo_dir}/libraries" -type f -name '*.jar' -print0 | LC_ALL=C s
 
 # Every top-level JAR is an intentional server mod. The locally built Seamless
 # Frames compatibility JAR contains "lg2" in its *file name*, but is not the
-# Lostglade mod and is intentionally included. Verify the actual Fabric id.
+# Lostglade mod and is intentionally included. Voice Chat is pinned separately
+# below so releases cannot silently regress to the stale repository copy.
 shopt -s nullglob
 for mod_jar in "${repo_dir}"/mods/*.jar; do
+  case "$(basename "${mod_jar}")" in
+    voicechat-fabric-1.21.11-*.jar) continue ;;
+  esac
   install -m 0644 "${mod_jar}" "${stage_dir}/mods/$(basename "${mod_jar}")"
 done
+
+voicechat_file='voicechat-fabric-1.21.11-2.6.22.jar'
+voicechat_url='https://cdn.modrinth.com/data/9eGKb6K1/versions/CN53keBo/voicechat-fabric-1.21.11-2.6.22.jar'
+voicechat_sha512='dab29df8577b220e1c2ad97b784c5acb837501c8ba42d83205c085f44b4a6df75bce2477b8c2c7905285d248fd2d195b3dc77f169cb11a226dc2965e23f5859a'
+curl -fsSL --retry 3 --retry-delay 2 "${voicechat_url}" -o "${stage_dir}/mods/${voicechat_file}"
+printf '%s  %s\n' "${voicechat_sha512}" "${stage_dir}/mods/${voicechat_file}" | sha512sum -c -
 
 lg2_server_jar="${repo_dir}/mods/lg2-0.1.0/build/libs/lg2-1.0.0.jar"
 [[ -f "${lg2_server_jar}" ]] || { echo "LG2 server jar is missing: ${lg2_server_jar}" >&2; exit 1; }
