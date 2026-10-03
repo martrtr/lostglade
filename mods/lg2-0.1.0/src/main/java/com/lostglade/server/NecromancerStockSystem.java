@@ -97,6 +97,7 @@ public final class NecromancerStockSystem {
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_stock_block_reach");
 	private static final Identifier ENTITY_REACH_MODIFIER_ID =
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_stock_entity_reach");
+	private static final String MANAGED_GLOWING_TAG = "lg2_necromancer_glowing";
 	private static final String MANA_BAR_FRAME = "\uea00";
 	private static final FontDescription MANA_BAR_FONT = new FontDescription.Resource(
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_mana_bar")
@@ -107,7 +108,6 @@ public final class NecromancerStockSystem {
 	private static final Map<UUID, Long> ACTION_CHARGE_DEADLINES = new HashMap<>();
 	private static final Map<UUID, GameType> ACTION_LOCK_PREVIOUS_GAME_TYPES = new HashMap<>();
 	private static final Map<UUID, ServerBossEvent> MANA_BARS = new HashMap<>();
-	private static final Map<UUID, Boolean> ORIGINAL_GLOWING = new HashMap<>();
 	private static boolean dirty;
 
 	private NecromancerStockSystem() {
@@ -567,7 +567,7 @@ public final class NecromancerStockSystem {
 	}
 
 	private static void syncGlowing(ServerPlayer player) {
-		ORIGINAL_GLOWING.putIfAbsent(player.getUUID(), player.hasGlowingTag());
+		player.addTag(MANAGED_GLOWING_TAG);
 		if (!player.hasGlowingTag()) player.setGlowingTag(true);
 	}
 
@@ -731,8 +731,10 @@ public final class NecromancerStockSystem {
 		removeModifier(player.getAttribute(Attributes.BLOCK_INTERACTION_RANGE), BLOCK_REACH_MODIFIER_ID);
 		removeModifier(player.getAttribute(Attributes.ENTITY_INTERACTION_RANGE), ENTITY_REACH_MODIFIER_ID);
 		if (player.getHealth() > player.getMaxHealth()) player.setHealth(player.getMaxHealth());
-		Boolean originalGlowing = ORIGINAL_GLOWING.remove(player.getUUID());
-		if (originalGlowing != null) player.setGlowingTag(originalGlowing);
+		if (player.getTags().contains(MANAGED_GLOWING_TAG)) {
+			player.setGlowingTag(false);
+			player.removeTag(MANAGED_GLOWING_TAG);
+		}
 		clearRuntimeState(player);
 	}
 
@@ -799,7 +801,6 @@ public final class NecromancerStockSystem {
 		HELD_ACTIONS.clear();
 		ACTION_CHARGE_DEADLINES.clear();
 		ACTION_LOCK_PREVIOUS_GAME_TYPES.clear();
-		ORIGINAL_GLOWING.clear();
 	}
 
 	private static Path statePath(MinecraftServer server) {

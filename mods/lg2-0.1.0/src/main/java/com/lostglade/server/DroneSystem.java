@@ -50,7 +50,6 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.FontDescription;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.RemoteChatSession;
 import net.minecraft.network.protocol.Packet;
@@ -369,16 +368,6 @@ public final class DroneSystem {
 	private static final int DRONE_HUD_ATTITUDE_LABEL_FRAME_COUNT = 39;
 	private static final int DRONE_HUD_BANK_GLYPH_BASE = 0xE800;
 	private static final int DRONE_HUD_BANK_FRAME_COUNT = 13;
-	private static final int DRONE_HUD_GLITCH_IDLE_GLYPH_BASE = 0xE600;
-	private static final int DRONE_HUD_GLITCH_IDLE_FRAME_COUNT = 32;
-	private static final int DRONE_HUD_GLITCH_BURST_GLYPH_BASE = 0xE860;
-	private static final int DRONE_HUD_GLITCH_BURST_FRAME_COUNT = 6;
-	private static final long DRONE_HUD_GLITCH_IDLE_FRAME_TICKS = 1L;
-	private static final int DRONE_HUD_GLITCH_TILES_PER_FRAME = 8;
-	private static final String DRONE_HUD_GLITCH_ROW_REWIND_GLYPH = "\uE890";
-	private static final FontDescription DRONE_HUD_GLITCH_FONT = new FontDescription.Resource(
-			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "drone_glitch")
-	);
 	private static final String DRONE_HUD_BAR_OVERLAP_GLYPH = "\uE944";
 	private static final String DRONE_HUD_CENTER_GLYPH_REWIND = "\uE940\uE94B\uE946";
 	private static final String DRONE_HUD_HEADING_DIGIT_REWIND = "\uE940\uE94C\uE947";
@@ -450,9 +439,6 @@ public final class DroneSystem {
 	private static final Map<UUID, DroneControlSession> ACTIVE_SESSIONS = new HashMap<>();
 	private static final Map<UUID, ServerBossEvent> PLAYER_DRONE_HUDS = new HashMap<>();
 	private static final Map<UUID, Component> PLAYER_DRONE_HUD_TITLES = new HashMap<>();
-	private static final Map<UUID, ServerBossEvent> PLAYER_DRONE_GLITCH_OVERLAYS = new HashMap<>();
-	private static final Map<UUID, ServerBossEvent> PLAYER_DRONE_GLITCH_BURSTS = new HashMap<>();
-	private static final Map<UUID, Long> PLAYER_DRONE_GLITCH_BURST_START_TICKS = new HashMap<>();
 	// Once a HUD has begun closing, its UUID must never be recreated by a late
 	// ServerBossEvent update. The set lives until the player disconnects; every
 	// new HUD event has a fresh UUID.
@@ -613,9 +599,6 @@ public final class DroneSystem {
 			ACTIVE_SESSIONS.clear();
 			PLAYER_DRONE_HUDS.clear();
 			PLAYER_DRONE_HUD_TITLES.clear();
-			PLAYER_DRONE_GLITCH_OVERLAYS.clear();
-			PLAYER_DRONE_GLITCH_BURSTS.clear();
-			PLAYER_DRONE_GLITCH_BURST_START_TICKS.clear();
 			CLOSING_DRONE_HUD_BOSS_BARS.clear();
 			INPUTS.clear();
 			CONTROLLERS_BY_DRONE.clear();
@@ -1524,8 +1507,6 @@ public final class DroneSystem {
 		recoverOrphanedControlledOperators(server);
 		recoverPlayersWithStaleDronePassenger(server);
 		processPendingPostControlClientResync(server);
-		tickDroneHudGlitchOverlays(server);
-		tickDroneHudGlitchBursts(server);
 	}
 
 	private static void updateDroneChunkTickets(MinecraftServer server) {
@@ -5794,14 +5775,12 @@ public final class DroneSystem {
 		if (ServerBossBarVisibilitySystem.refreshDroneHudOverlay(player)) {
 			ServerStabilitySystem.clearSpacerHudOverlayTitle(player);
 			hideDroneHudOverlayEvent(player);
-			showDroneHudGlitchOverlay(player);
 			return;
 		}
 
 		if (ServerStabilitySystem.setSpacerHudOverlayTitle(player, title)) {
 			ServerBossBarVisibilitySystem.clearDroneHudOverlay(player);
 			hideDroneHudOverlayEvent(player);
-			showDroneHudGlitchOverlay(player);
 			return;
 		}
 
@@ -5817,7 +5796,6 @@ public final class DroneSystem {
 			ServerStabilitySystem.reorderHudBelowExternalBossBar(player);
 			ServerBossBarVisibilitySystem.reorderTrackedBossBarsBelowReservedHud(player);
 		}
-		showDroneHudGlitchOverlay(player);
 	}
 
 	private static ServerBossEvent createDroneHudOverlay() {
@@ -5839,7 +5817,6 @@ public final class DroneSystem {
 			return;
 		}
 		PLAYER_DRONE_HUD_TITLES.remove(player.getUUID());
-		hideDroneHudGlitchOverlay(player);
 		ServerStabilitySystem.clearSpacerHudOverlayTitle(player);
 		ServerBossBarVisibilitySystem.clearDroneHudOverlay(player);
 		hideDroneHudOverlayEvent(player);
@@ -5885,165 +5862,11 @@ public final class DroneSystem {
 		return styleDroneHudOverlay(Component.literal(buildDroneHudCenterGlyphText(session)));
 	}
 
-	private static Component buildDroneHudGlitchBurstTitle(int frame) {
-		int boundedFrame = net.minecraft.util.Mth.clamp(frame, 0, DRONE_HUD_GLITCH_BURST_FRAME_COUNT - 1);
-		return buildDroneHudGlitchTitle(DRONE_HUD_GLITCH_BURST_GLYPH_BASE + boundedFrame * DRONE_HUD_GLITCH_TILES_PER_FRAME);
-	}
-
-	private static Component buildDroneHudGlitchIdleTitle(ServerPlayer player) {
-		long gameTime = player == null || player.level() == null ? 0L : player.level().getGameTime();
-		int frame = (int) Math.floorMod(
-				gameTime / DRONE_HUD_GLITCH_IDLE_FRAME_TICKS,
-				DRONE_HUD_GLITCH_IDLE_FRAME_COUNT
-		);
-		int firstTileGlyph = DRONE_HUD_GLITCH_IDLE_GLYPH_BASE + frame * DRONE_HUD_GLITCH_TILES_PER_FRAME;
-		if (!isControlledDroneSubmerged(player)) {
-			return buildDroneHudGlitchTitle(firstTileGlyph);
-		}
-		// Use the exact same high-density frames as the drone-destruction burst,
-		// cycling them while submerged instead of showing the light idle noise.
-		int burstFrame = (int) Math.floorMod(gameTime, DRONE_HUD_GLITCH_BURST_FRAME_COUNT);
-		return buildDroneHudGlitchBurstTitle(burstFrame);
-	}
-
-	private static Component buildDroneHudGlitchTitle(int... firstTileGlyphs) {
-		if (firstTileGlyphs == null || firstTileGlyphs.length == 0) {
-			return Component.empty();
-		}
-		StringBuilder glyphs = new StringBuilder((DRONE_HUD_GLITCH_TILES_PER_FRAME + 2) * firstTileGlyphs.length);
-		for (int frameIndex = 0; frameIndex < firstTileGlyphs.length; frameIndex++) {
-			if (frameIndex > 0) {
-				// Each tile frame ends one full screen-width to the right. Rewind before
-				// drawing the next frame so both occupy the same HUD area.
-				glyphs.append(DRONE_HUD_GLITCH_ROW_REWIND_GLYPH);
-			}
-			int firstTileGlyph = firstTileGlyphs[frameIndex];
-			for (int tile = 0; tile < DRONE_HUD_GLITCH_TILES_PER_FRAME / 2; tile++) {
-				glyphs.append((char) (firstTileGlyph + tile));
-			}
-			glyphs.append(DRONE_HUD_GLITCH_ROW_REWIND_GLYPH);
-			for (int tile = DRONE_HUD_GLITCH_TILES_PER_FRAME / 2; tile < DRONE_HUD_GLITCH_TILES_PER_FRAME; tile++) {
-				glyphs.append((char) (firstTileGlyph + tile));
-			}
-		}
-		return styleDroneHudGlitch(Component.literal(glyphs.toString()));
-	}
-
-	private static boolean isControlledDroneSubmerged(ServerPlayer player) {
-		Entity root = resolveControlledDroneRoot(player);
-		return root != null
-				&& root.level() instanceof ServerLevel level
-				&& boxIntersectsFluid(level, root.getBoundingBox(), FluidTags.WATER);
-	}
-
 	private static Component styleDroneHudOverlay(Component component) {
 		return component.copy().withStyle(style -> style
 				.withColor(DRONE_HUD_VALUE_COLOR)
 				.withItalic(false)
 				.withShadowColor(0x00000000));
-	}
-
-	private static Component styleDroneHudGlitch(Component component) {
-		return component.copy().withStyle(style -> style
-				.withColor(DRONE_HUD_VALUE_COLOR)
-				.withItalic(false)
-				.withFont(DRONE_HUD_GLITCH_FONT)
-				.withShadowColor(0x00000000));
-	}
-
-	private static void showDroneHudGlitchOverlay(ServerPlayer player) {
-		if (player == null || player.connection == null) {
-			return;
-		}
-		ServerBossEvent overlay = PLAYER_DRONE_GLITCH_OVERLAYS.computeIfAbsent(player.getUUID(), id -> createDroneHudOverlay());
-		overlay.setName(buildDroneHudGlitchIdleTitle(player));
-		overlay.setProgress(0.0F);
-		overlay.setVisible(true);
-		if (!overlay.getPlayers().contains(player)) {
-			overlay.addPlayer(player);
-			ServerStabilitySystem.reorderHudBelowExternalBossBar(player);
-			ServerBossBarVisibilitySystem.reorderTrackedBossBarsBelowReservedHud(player);
-		}
-	}
-
-	private static void hideDroneHudGlitchOverlay(ServerPlayer player) {
-		if (player == null) {
-			return;
-		}
-		UUID playerId = player.getUUID();
-		ServerBossEvent overlay = PLAYER_DRONE_GLITCH_OVERLAYS.get(playerId);
-		if (overlay != null) {
-			markDroneHudBossBarClosing(player, overlay);
-			overlay.removePlayer(player);
-		}
-		PLAYER_DRONE_GLITCH_OVERLAYS.remove(playerId, overlay);
-	}
-
-	private static void tickDroneHudGlitchOverlays(MinecraftServer server) {
-		if (server == null || PLAYER_DRONE_GLITCH_OVERLAYS.isEmpty()) {
-			return;
-		}
-		for (Map.Entry<UUID, ServerBossEvent> entry : new ArrayList<>(PLAYER_DRONE_GLITCH_OVERLAYS.entrySet())) {
-			ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
-			ServerBossEvent overlay = entry.getValue();
-			if (player == null || overlay == null || !overlay.getPlayers().contains(player)) {
-				PLAYER_DRONE_GLITCH_OVERLAYS.remove(entry.getKey(), overlay);
-				continue;
-			}
-			overlay.setName(buildDroneHudGlitchIdleTitle(player));
-		}
-	}
-
-	private static void startDroneHudGlitchBurst(ServerPlayer player) {
-		if (player == null || player.connection == null || player.level() == null) {
-			return;
-		}
-		stopDroneHudGlitchBurst(player);
-		ServerBossEvent burst = createDroneHudOverlay();
-		// Register the bar before sending its ADD packet.  The bossbar bridge must
-		// recognise it as HUD rather than briefly treating it as a real bossbar.
-		PLAYER_DRONE_GLITCH_BURSTS.put(player.getUUID(), burst);
-		burst.setName(buildDroneHudGlitchBurstTitle(0));
-		burst.setVisible(true);
-		burst.addPlayer(player);
-		PLAYER_DRONE_GLITCH_BURST_START_TICKS.put(player.getUUID(), player.level().getGameTime());
-		ServerStabilitySystem.reorderHudBelowExternalBossBar(player);
-		ServerBossBarVisibilitySystem.reorderTrackedBossBarsBelowReservedHud(player);
-	}
-
-	private static void stopDroneHudGlitchBurst(ServerPlayer player) {
-		if (player == null) {
-			return;
-		}
-		UUID playerId = player.getUUID();
-		PLAYER_DRONE_GLITCH_BURST_START_TICKS.remove(playerId);
-		ServerBossEvent burst = PLAYER_DRONE_GLITCH_BURSTS.get(playerId);
-		if (burst != null) {
-			markDroneHudBossBarClosing(player, burst);
-			burst.removePlayer(player);
-		}
-		PLAYER_DRONE_GLITCH_BURSTS.remove(playerId, burst);
-	}
-
-	private static void tickDroneHudGlitchBursts(MinecraftServer server) {
-		if (server == null || PLAYER_DRONE_GLITCH_BURST_START_TICKS.isEmpty()) {
-			return;
-		}
-		for (Map.Entry<UUID, Long> entry : new ArrayList<>(PLAYER_DRONE_GLITCH_BURST_START_TICKS.entrySet())) {
-			ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
-			ServerBossEvent burst = PLAYER_DRONE_GLITCH_BURSTS.get(entry.getKey());
-			if (player == null || burst == null || player.level() == null) {
-				PLAYER_DRONE_GLITCH_BURST_START_TICKS.remove(entry.getKey());
-				PLAYER_DRONE_GLITCH_BURSTS.remove(entry.getKey());
-				continue;
-			}
-			long elapsed = player.level().getGameTime() - entry.getValue();
-			if (elapsed >= DRONE_HUD_GLITCH_BURST_FRAME_COUNT) {
-				stopDroneHudGlitchBurst(player);
-				continue;
-			}
-			burst.setName(buildDroneHudGlitchBurstTitle((int) elapsed));
-		}
 	}
 
 	public static Component getHudOverlayTitle(ServerPlayer player) {
@@ -6093,12 +5916,7 @@ public final class DroneSystem {
 		if (hud != null && hud.getId().equals(bossBarId)) {
 			return true;
 		}
-		ServerBossEvent overlay = PLAYER_DRONE_GLITCH_OVERLAYS.get(player.getUUID());
-		if (overlay != null && overlay.getId().equals(bossBarId)) {
-			return true;
-		}
-		ServerBossEvent burst = PLAYER_DRONE_GLITCH_BURSTS.get(player.getUUID());
-		return burst != null && burst.getId().equals(bossBarId);
+		return false;
 	}
 
 	/**
@@ -6262,7 +6080,6 @@ public final class DroneSystem {
 			return false;
 		}
 
-		stopDroneHudGlitchBurst(player);
 		stopControlling(player, false);
 		POST_CONTROL_MOVE_SUPPRESSED_UNTIL_TICK.remove(player.getUUID());
 		CameraVideoRecordingSystem.stopForDroneControl(player);
@@ -6429,9 +6246,6 @@ public final class DroneSystem {
 			NEXT_DRONE_SOUND_TICK.remove(session.droneUuid());
 		}
 		clearDroneHud(player, session, true);
-		if (notify) {
-			startDroneHudGlitchBurst(player);
-		}
 		restoreControlledOperatorClientState(player);
 		if (droneRemainsAfterControlStop) {
 			rebuildReleasedDroneVisualEntitiesForOperator(player, root);

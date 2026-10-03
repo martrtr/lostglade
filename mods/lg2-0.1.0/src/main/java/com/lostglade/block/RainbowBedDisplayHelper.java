@@ -70,7 +70,7 @@ public final class RainbowBedDisplayHelper {
 		if (display == null) {
 			display = createDisplay(level, footPos, brown);
 		}
-		configureDisplay(display, footPos, headPos, facing, brown);
+		configureDisplay(level, display, footPos, headPos, facing, brown);
 	}
 
 	public static void ensureDisplay(ServerLevel level, BlockPos pos, BlockState state) {
@@ -114,7 +114,7 @@ public final class RainbowBedDisplayHelper {
 		return display;
 	}
 
-	private static void configureDisplay(Display.ItemDisplay display, BlockPos footPos, BlockPos headPos, Direction facing, boolean brown) {
+	private static void configureDisplay(ServerLevel level, Display.ItemDisplay display, BlockPos footPos, BlockPos headPos, Direction facing, boolean brown) {
 		Vec3 center = Vec3.atCenterOf(footPos).add(Vec3.atCenterOf(headPos)).scale(0.5D);
 		display.setPos(center.x, center.y, center.z);
 		// Special bed item models face opposite to the placed bed block direction,

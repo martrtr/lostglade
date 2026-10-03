@@ -16,12 +16,8 @@ import net.minecraft.world.level.ScheduledTickAccess;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.entity.BlockEntityTicker;
-import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BedPart;
 import xyz.nucleoid.packettweaker.PacketContext;
 
 public final class RainbowBedBlock extends BedBlock implements PolymerBlock {
@@ -105,24 +101,6 @@ public final class RainbowBedBlock extends BedBlock implements PolymerBlock {
 	public void destroy(net.minecraft.world.level.LevelAccessor level, BlockPos pos, BlockState state) {
 		removeDisplay(level, pos, state);
 		super.destroy(level, pos, state);
-	}
-
-	@Override
-	@SuppressWarnings("unchecked")
-	public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> blockEntityType) {
-		if (blockEntityType != BlockEntityType.BED) {
-			return null;
-		}
-		return (BlockEntityTicker<T>) RainbowBedBlock::tickRainbowBed;
-	}
-
-	private static void tickRainbowBed(Level level, BlockPos pos, BlockState state, BlockEntity blockEntity) {
-		if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)
-				|| state.getValue(PART) != BedPart.FOOT
-				|| (serverLevel.getGameTime() + pos.asLong()) % 20L != 0L) {
-			return;
-		}
-		RainbowBedDisplayHelper.ensureDisplay(serverLevel, pos, state);
 	}
 
 	private static void removeDisplay(LevelReader level, BlockPos pos, BlockState state) {

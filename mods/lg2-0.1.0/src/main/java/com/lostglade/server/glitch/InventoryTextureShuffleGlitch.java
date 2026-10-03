@@ -56,6 +56,10 @@ public final class InventoryTextureShuffleGlitch implements ServerGlitchHandler 
 	private static final Set<Integer> FULL_INVENTORY_SLOTS = buildFullInventorySlotSet();
 	private static final Map<UUID, ActiveShuffleState> ACTIVE_STATES = new HashMap<>();
 
+	public static boolean isActiveFor(ServerPlayer player) {
+		return player != null && ACTIVE_STATES.containsKey(player.getUUID());
+	}
+
 	@Override
 	public String id() {
 		return "inventory_texture_shuffle";
