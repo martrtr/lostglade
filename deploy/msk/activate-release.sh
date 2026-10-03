@@ -47,7 +47,7 @@ tar -xzf "${archive_path}" -C "${temporary_dir}"
 for required in \
   fabric-server-launch.jar \
   server.jar \
-  server.properties \
+  server.properties.template \
   deploy/msk/run-server.sh \
   libraries/net/fabricmc/fabric-loader/0.18.4/fabric-loader-0.18.4.jar; do
   [[ -f "${temporary_dir}/${required}" ]] || { echo "Release lacks ${required}" >&2; exit 1; }
@@ -72,6 +72,10 @@ mkdir -p \
   "${data_dir}/polymer" \
   "${data_dir}/config/tab"
 
+# The committed template is authoritative for each release. Vanilla owns the
+# generated timestamp in the runtime copy, so it belongs in data, not release.
+install -m 0644 "${temporary_dir}/server.properties.template" "${data_dir}/server.properties"
+
 # Vanilla, Fabric, Polymer and TAB create these at runtime. Keep them out of
 # immutable releases alongside world/player state, so a release directory is
 # exactly the verified archive plus symlinks to persistent state.
@@ -82,6 +86,7 @@ for item in \
   .fabric \
   versions \
   polymer \
+  server.properties \
   usercache.json \
   whitelist.json \
   banned-ips.json \

@@ -25,9 +25,13 @@ copy_file() {
 
 # Minecraft/Fabric runtime. No sources, Gradle cache, world or local runtime
 # state is copied.
-for path in eula.txt server.jar fabric-server-launch.jar fabric-server-launcher.properties server.properties; do
+for path in eula.txt server.jar fabric-server-launch.jar fabric-server-launcher.properties; do
   copy_file "${path}"
 done
+# Vanilla rewrites the timestamp comment in server.properties on every start.
+# Package it as a checked template; activation copies it to persistent runtime
+# state and links the expected server.properties name back into the release.
+install -D -m 0644 "${repo_dir}/server.properties" "${stage_dir}/server.properties.template"
 
 # Both Mojang's server JAR and Fabric's thin launcher reference these exact
 # Maven artifacts via their manifests. They are runtime dependencies, not a

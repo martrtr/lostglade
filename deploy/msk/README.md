@@ -6,7 +6,7 @@ This is the production deployment path for `31.77.251.51` (Debian 13, 12 vCPU,
 ## What a release contains
 
 - Fabric launcher, Minecraft server JAR, their required Maven runtime
-  libraries, EULA and `server.properties`;
+  libraries, EULA and a checked `server.properties` template;
 - every top-level server mod JAR except a JAR whose Fabric id is `lg2`;
 - an explicit list of settings for those mods;
 - the small systemd and activation scripts needed at runtime.
