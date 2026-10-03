@@ -16,6 +16,27 @@ export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
 export XDG_RUNTIME_DIR='/tmp/lostglade-renderer-xdg'
 install -d -m 0700 "${XDG_RUNTIME_DIR}"
 
+# The renderer runs through llvmpipe on the VPS. Keep its normal game loop
+# bounded and avoid decoding player webcams in this technical client.
+if [[ -f "${game_dir}/options.txt" ]]; then
+  sed -i 's/^maxFps:.*/maxFps:30/' "${game_dir}/options.txt"
+fi
+if [[ -f "${game_dir}/config/webcam/client.json" ]]; then
+  python3 - "${game_dir}/config/webcam/client.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding='utf-8') as handle:
+    data = json.load(handle)
+data['show_webcams'] = False
+data['webcam_enabled'] = False
+with open(path, 'w', encoding='utf-8') as handle:
+    json.dump(data, handle, indent=2)
+    handle.write('\n')
+PY
+fi
+
 Xvfb "${display}" -screen 0 1280x720x24 +extension GLX -nolisten tcp &
 xvfb_pid=$!
 cleanup() {
