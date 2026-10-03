@@ -18,7 +18,6 @@ def rendererBotTemplateDir = file("${serverRootDir}/run-renderer-bot")
 def rendererBotRunDir = file("${buildDir}/dev-runtime/renderer-bot").canonicalFile
 def skinRestorerJars = fileTree(dir: "${serverRootDir}/mods", include: "skinrestorer-*.jar")
 def tabJars = fileTree(dir: "${serverRootDir}/mods", include: "TAB*.jar")
-def voicechatJars = fileTree(dir: "${serverRootDir}/mods", include: "voicechat-fabric-*.jar")
 def webcamJars = fileTree(dir: "${serverRootDir}/mods", include: "webcam-fabric-*.jar")
 def skinRestorerNestedLibDir = file("${buildDir}/skinrestorer-libs")
 def skinRestorerJavaClientJars = fileTree(dir: skinRestorerNestedLibDir, include: "java-client-*.jar")
@@ -32,16 +31,11 @@ def serverXmxProp = providers.systemProperty("lg2.serverXmx").orElse("4G")
 def rendererBotXmsProp = providers.systemProperty("lg2.rendererBotXms").orElse("4G")
 def rendererBotXmxProp = providers.systemProperty("lg2.rendererBotXmx").orElse("4G")
 // GLFW's GLX path is not available in every otherwise-valid Xwayland/Xorg
-// session.  Keep this an explicit launcher argument so the renderer bot can
+// session. Keep this an explicit launcher argument so the renderer bot can
 // consistently select its EGL context path when requested by the server.
 def rendererBotHeadlessProp = providers.systemProperty("lg2.rendererBotHeadless").orElse("false")
 
 repositories {
-	// Add repositories to retrieve artifacts from in here.
-	// You should only use this when depending on other mods because
-	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
-	// for more information about repositories.
 	maven {
 		name = "Nucleoid"
 		url = "https://maven.nucleoid.xyz/"
@@ -62,9 +56,6 @@ loom {
 	mods {
 		"lg2" {
 			sourceSet sourceSets.main
-			// The renderer bot is a client run of this same mod.  Its capture
-			// pipeline loads shaders from src/client/resources, so those resources
-			// must be present on the development client classpath as well.
 			sourceSet sourceSets.client
 		}
 	}
@@ -103,24 +94,22 @@ loom {
 }
 
 dependencies {
-	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings loom.officialMojangMappings()
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	// Optional at runtime: this only supplies the config-screen API when the
-	// player has Mod Menu installed.
 	modCompileOnly "maven.modrinth:modmenu:${project.modmenu_version}"
 	modImplementation "eu.pb4:polymer-core:${project.polymer_version}"
 	modImplementation "eu.pb4:polymer-blocks:${project.polymer_version}"
 	modImplementation "eu.pb4:polymer-resource-pack:${project.polymer_version}"
 	modImplementation files(skinRestorerJars)
 	compileOnly files(tabJars)
-	modCompileOnly files(voicechatJars)
+	// Pin the same stable SVC release used by production. Do not compile or run
+	// clients against the stale top-level mods/ copy; that was the source of a
+	// silent 2.6.12 vs 2.6.22 split between development/client and production.
+	modCompileOnly "maven.modrinth:9eGKb6K1:CN53keBo"
+	modRuntimeOnly "maven.modrinth:9eGKb6K1:CN53keBo"
 	modCompileOnly files(webcamJars)
-	modRuntimeOnly files(voicechatJars)
 	modRuntimeOnly files(webcamJars)
 	implementation files(
 			"libs/flow-math-1.0.3.jar",
@@ -128,7 +117,6 @@ dependencies {
 	)
 	runtimeOnly files(skinRestorerJavaClientJars)
 	modRuntimeOnly files("${serverRootDir}/mods/cardinal-components-api-${project.cardinal_components_version}.jar")
-	
 }
 
 tasks.register("prepareRendererBotClientRunDir", Copy) {
@@ -170,7 +158,6 @@ tasks.register("prepareDevResourcePack", Sync) {
 	from(layout.projectDirectory.dir("src/main/resources/assets")) {
 		into("assets")
 	}
-	// Resource-pack overrides (e.g. lang keys for pack users) must win over base assets.
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 	into(polymerSourceAssetsDir)
 	includeEmptyDirs = true
@@ -188,7 +175,6 @@ tasks.matching { it.name == "runRendererBotClient" }.configureEach {
 
 processResources {
 	inputs.property "version", project.version
-
 	filesMatching("fabric.mod.json") {
 		expand "version": inputs.properties.version
 	}
@@ -203,11 +189,9 @@ tasks.named("test", Test) {
 	dependsOn(tasks.named("extractSkinRestorerNestedLibraries"))
 }
 
-// All runtime classpaths consume the extracted SkinRestorer client library.
 tasks.withType(JavaExec).configureEach {
 	dependsOn(tasks.named("extractSkinRestorerNestedLibraries"))
 }
-
 
 tasks.register("runOrthodoxLightSyncTest", JavaExec) {
 	group = "verification"
@@ -298,7 +282,6 @@ tasks.register("runYandexMapRenderPhaseOneTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
-
 tasks.register("runYandexMapRenderPhaseTwoTest", JavaExec) {
 	group = "verification"
 	description = "Runs Yandex map renderer Phase 2 worker capability/profile checks."
@@ -306,7 +289,6 @@ tasks.register("runYandexMapRenderPhaseTwoTest", JavaExec) {
 	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseTwoTest"
 	dependsOn(tasks.named("testClasses"))
 }
-
 
 tasks.register("runYandexMapRenderPhaseThreeTest", JavaExec) {
 	group = "verification"
@@ -316,7 +298,6 @@ tasks.register("runYandexMapRenderPhaseThreeTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
-
 tasks.register("runYandexMapRenderPhaseFourTest", JavaExec) {
 	group = "verification"
 	description = "Runs Yandex map renderer Phase 4 isolated vanilla-render architecture checks."
@@ -324,7 +305,6 @@ tasks.register("runYandexMapRenderPhaseFourTest", JavaExec) {
 	mainClass = "com.lostglade.server.maprender.YandexMapRenderPhaseFourTest"
 	dependsOn(tasks.named("testClasses"))
 }
-
 
 tasks.register("runYandexMapRenderVerticalSliceTest", JavaExec) {
 	group = "verification"
@@ -405,24 +385,16 @@ tasks.named("check") {
 }
 
 java {
-	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
-	// if it is present.
-	// If you remove this line, sources will not be generated.
 	withSourcesJar()
-
 	sourceCompatibility = JavaVersion.VERSION_21
 	targetCompatibility = JavaVersion.VERSION_21
 }
 
 jar {
 	inputs.property "archivesName", project.base.archivesName
-
 	from("LICENSE") {
 		rename { "${it}_${inputs.properties.archivesName}"}
 	}
-
-	// The distributable lg2 jar is server-only. Client features are emitted by
-	// gameplayClientDevJar/remapGameplayClientJar below.
 	exclude(
 			"com/lostglade/Lg2Client.class",
 			"com/lostglade/client/**",
@@ -435,8 +407,6 @@ jar {
 	)
 }
 
-// Normal players receive one self-contained client companion: race UI, drone
-// tilt, and the GPU camera renderer. The regular lg2 jar stays server-only.
 def gameplayClientDevJar = tasks.register("gameplayClientDevJar", Jar) {
 	group = "build"
 	description = "Assembles the complete Lostglade client jar before remapping."
@@ -445,13 +415,7 @@ def gameplayClientDevJar = tasks.register("gameplayClientDevJar", Jar) {
 	archiveVersion.set(project.version.toString())
 	archiveClassifier.set("dev")
 	destinationDirectory.set(layout.buildDirectory.dir("devlibs"))
-	// The GPU capture implementation shares protocol, cache and palette classes
-	// with the server module. Include the compiled project output, but expose it
-	// through a client-only fabric.mod.json below, so it never becomes a server
-	// entrypoint when installed in Prism.
 	from(sourceSets.main.output) {
-		// Server datapacks reference blocks/features that a client companion never
-		// registers. Shipping them makes unrelated singleplayer worlds fail to load.
 		exclude("fabric.mod.json", "data/**")
 	}
 	from(sourceSets.client.output)
@@ -483,7 +447,6 @@ tasks.register("installGameplayClientJar", Sync) {
 	into(layout.projectDirectory.dir("client-mods"))
 }
 
-// configure the maven publication
 publishing {
 	publications {
 		create("mavenJava", MavenPublication) {
@@ -491,12 +454,6 @@ publishing {
 			from components.java
 		}
 	}
-
-	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
 	repositories {
-		// Add repositories to publish to here.
-		// Notice: This block does NOT have the same function as the block in the top level.
-		// The repositories here will be used for publishing your artifact, not for
-		// retrieving dependencies.
 	}
 }
