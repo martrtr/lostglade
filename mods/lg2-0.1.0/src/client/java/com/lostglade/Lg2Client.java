@@ -7,6 +7,7 @@ import com.lostglade.client.RendererBotShadowWorldManager;
 import com.lostglade.client.RendererBotClientVideoRecording;
 import com.lostglade.client.RendererBotVolunteerClient;
 import com.lostglade.client.LostgladeClientSettings;
+import com.lostglade.client.VoiceChatCompatibilityGuard;
 import com.lostglade.client.maprender.YandexMapRenderClient;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.client.MilkPocketVoidFadeClient;
@@ -24,6 +25,7 @@ public class Lg2Client implements ClientModInitializer {
 	public void onInitializeClient() {
 		Lg2Config.load();
 		LostgladeClientSettings.load();
+		VoiceChatCompatibilityGuard.register();
 		CameraMediaCache.initialize(FabricLoader.getInstance().getGameDir());
 		RendererBotPayloads.registerPayloadTypes();
 		YandexMapRenderPayloads.registerPayloadTypes();
