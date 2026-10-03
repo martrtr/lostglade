@@ -12,8 +12,9 @@ This is the production deployment path for `31.77.251.51` (Debian 13, 12 vCPU,
 - the small systemd and activation scripts needed at runtime.
 
 It never contains the LG2 source/build, LG2 configuration, worlds, player data,
-logs, caches, secrets, Gradle files or locally generated resource packs. World
-and player state live in `/srv/lostglade/data`, outside releases.
+logs, caches, secrets, Gradle files or locally generated resource packs. World,
+player state, Fabric's remap cache, downloaded vanilla runtime, Polymer pack and
+TAB's player caches live in `/srv/lostglade/data`, outside releases.
 
 The initial release therefore contains **no LG2 mod**. `seamless-itemframes`
 remains: its file name has an `-lg2` suffix only because it is the compatibility

@@ -63,8 +63,33 @@ if find "${temporary_dir}/config" -type f -name 'lg2*' -print -quit | grep -q .;
   exit 1
 fi
 
-mkdir -p "${data_dir}/world" "${data_dir}/logs" "${data_dir}/crash-reports"
-for item in world logs crash-reports usercache.json whitelist.json banned-ips.json banned-players.json; do
+mkdir -p \
+  "${data_dir}/world" \
+  "${data_dir}/logs" \
+  "${data_dir}/crash-reports" \
+  "${data_dir}/.fabric" \
+  "${data_dir}/versions" \
+  "${data_dir}/polymer" \
+  "${data_dir}/config/tab"
+
+# Vanilla, Fabric, Polymer and TAB create these at runtime. Keep them out of
+# immutable releases alongside world/player state, so a release directory is
+# exactly the verified archive plus symlinks to persistent state.
+for item in \
+  world \
+  logs \
+  crash-reports \
+  .fabric \
+  versions \
+  polymer \
+  usercache.json \
+  whitelist.json \
+  banned-ips.json \
+  banned-players.json \
+  ops.json \
+  config/tab/playerdata.yml \
+  config/tab/skincache.yml \
+  config/tab/users.yml; do
   ln -s "${data_dir}/${item}" "${temporary_dir}/${item}"
 done
 
