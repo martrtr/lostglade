@@ -15,6 +15,7 @@ import com.lostglade.server.ServerBackroomsBlockBreakSystem;
 import com.lostglade.server.ServerBackroomsStalkerSystem;
 import com.lostglade.server.BluetoothLinkSystem;
 import com.lostglade.server.RendererBotCameraSystem;
+import com.lostglade.server.RendererModAllowlist;
 import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.RendererBotProcessSystem;
 import com.lostglade.server.RainbowHarnessColorSystem;
@@ -135,6 +136,7 @@ public class Lg2 implements ModInitializer {
 		CameraVideoRecordingSystem.register();
 		CameraAnimatedMapPlaybackSystem.register();
 		DroneSystem.register();
+		RendererModAllowlist.register();
 		RendererBotCameraSystem.register();
 		RendererBotPresenceSystem.register();
 		RendererBotProcessSystem.register();

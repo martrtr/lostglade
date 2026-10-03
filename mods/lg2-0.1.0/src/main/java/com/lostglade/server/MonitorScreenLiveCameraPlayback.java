@@ -230,7 +230,10 @@ final class MonitorScreenLiveCameraPlayback {
 				boolean changed;
 				synchronized (state) {
 					boolean nextLoading = state.streamFrame == null;
-					String nextStatus = state.streamFrame == null ? "Нет активного клиента камеры" : state.statusText;
+					// Renderer availability is transient implementation state, not an
+					// error for the camera application. Keep the last frame when one
+					// exists; a new feed otherwise stays quietly in its loading view.
+					String nextStatus = state.streamFrame == null ? "" : state.statusText;
 					changed = state.loading != nextLoading || !Objects.equals(state.statusText, nextStatus);
 					state.loading = nextLoading;
 					state.statusText = nextStatus;
@@ -326,7 +329,7 @@ final class MonitorScreenLiveCameraPlayback {
 			boolean changed;
 			synchronized (state) {
 				boolean nextLoading = state.streamFrame == null;
-				String nextStatus = state.streamFrame == null ? "Нет активного клиента камеры" : state.statusText;
+				String nextStatus = state.streamFrame == null ? "" : state.statusText;
 				changed = state.loading != nextLoading || !Objects.equals(state.statusText, nextStatus);
 				state.loading = nextLoading;
 				state.statusText = nextStatus;
@@ -502,13 +505,33 @@ final class MonitorScreenLiveCameraPlayback {
 				return;
 			}
 			state.loading = state.streamFrame == null;
-			state.statusText = sanitizeMediaError(error);
+			String message = sanitizeMediaError(error);
+			// The app must not surface handoff/availability races from the render
+			// worker. They resolve automatically and would otherwise overwrite a
+			// valid camera view with a misleading error.
+			if (isRendererAvailabilityMessage(message)) {
+				if (state.streamFrame == null) {
+					state.statusText = "";
+				}
+			} else {
+				state.statusText = message;
+			}
 			state.version++;
 			shouldRender = true;
 		}
 		if (shouldRender && hasNearbyMediaViewer(server, key)) {
 			requestRuntimeRender(server, key);
 		}
+	}
+
+	private static boolean isRendererAvailabilityMessage(String message) {
+		if (message == null || message.isBlank()) {
+			return false;
+		}
+		String normalized = message.toLowerCase(java.util.Locale.ROOT);
+		return normalized.contains("клиент камеры")
+				|| normalized.contains("renderer client")
+				|| normalized.contains("active renderer");
 	}
 
 	static byte[][] splitRenderedTiles(byte[] pixels, int fullWidth, int fullHeight) {

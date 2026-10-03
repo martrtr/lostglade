@@ -6,6 +6,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.server.packs.repository.Pack;
 import net.minecraft.server.packs.repository.PackSource;
 
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -32,7 +35,32 @@ public final class RendererBotRenderEnvironmentGuard {
 			"polymer-networking", "polymer-registry-sync-manipulator", "polymer-resource-pack"
 	);
 
+	private static volatile Set<String> serverModIds = Set.of();
+	private static volatile boolean serverModManifestKnown;
+
 	private RendererBotRenderEnvironmentGuard() {
+	}
+
+	/** Starts a new play session before the server mod manifest arrives. */
+	public static void beginServerSession() {
+		serverModIds = Set.of();
+		serverModManifestKnown = false;
+	}
+
+	/** Accepts server mod IDs only; versions deliberately do not participate in admission. */
+	public static void setServerModIds(Collection<String> modIds) {
+		Set<String> normalized = new HashSet<>();
+		if (modIds != null) {
+			for (String id : modIds) {
+				if (id != null && !id.isBlank()) normalized.add(id.toLowerCase(Locale.ROOT));
+			}
+		}
+		serverModIds = Set.copyOf(normalized);
+		serverModManifestKnown = true;
+	}
+
+	public static boolean hasServerModManifest() {
+		return serverModManifestKnown;
 	}
 
 	public static Compatibility inspect(Minecraft client) {
@@ -67,11 +95,15 @@ public final class RendererBotRenderEnvironmentGuard {
 				if (pack.getPackSource() == PackSource.SERVER || id.startsWith("server/")) {
 					continue;
 				}
-				// Fabric is an engine-provided fixed pack containing assets supplied
-				// by the approved LG2 runtime, not a pack selected by the player.
-				// Fabric exposes each installed mod's built-in assets as a selected
-				// pack. A trusted runtime module is not a player resource pack.
-				if (!"vanilla".equals(id) && !"fabric".equals(id) && !isTrustedMod(id)) {
+				// Fabric exposes every mod's bundled resources through the selected
+				// pack repository. Those entries are not player resource packs, and
+				// rejecting them here made a valid server pack look like it was the
+				// cause of the block. Mod admission is enforced separately below.
+				// Locally selected folders/zips use the file/ namespace. Keep the
+				// two built-in alternate visual packs explicit as well.
+				if (id.startsWith("file/")
+						|| "programmer_art".equals(id)
+						|| "high_contrast".equals(id)) {
 					return id;
 				}
 			}
@@ -83,7 +115,11 @@ public final class RendererBotRenderEnvironmentGuard {
 	}
 
 	private static boolean isTrustedMod(String id) {
-		return id != null && (TRUSTED_MOD_IDS.contains(id) || id.startsWith("fabric-"));
+		if (id == null) return false;
+		String normalized = id.toLowerCase(Locale.ROOT);
+		return TRUSTED_MOD_IDS.contains(normalized)
+				|| normalized.startsWith("fabric-")
+				|| serverModIds.contains(normalized);
 	}
 
 	public record Compatibility(boolean compatible, String reason) {

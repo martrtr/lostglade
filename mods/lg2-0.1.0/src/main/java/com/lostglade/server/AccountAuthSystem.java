@@ -884,6 +884,10 @@ public final class AccountAuthSystem {
 		clearAuthTitle(player);
 		finalizePresence(player);
 		resyncGameplayState(player);
+		// The raw play JOIN happens while human players are still quarantined, so its
+		// custom renderer manifest packet is intentionally filtered. Send it again only
+		// after authentication is complete and the network quarantine has been lifted.
+		RendererModAllowlist.sendManifest(player);
 		runAfterAuthActions(player);
 		if (messageKey != null) authTitle(player, messageKey);
 		broadcastAuthenticatedJoin(player);

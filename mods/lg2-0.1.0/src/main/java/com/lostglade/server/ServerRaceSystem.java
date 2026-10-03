@@ -1628,6 +1628,10 @@ public final class ServerRaceSystem {
 		rebuildCache();
 		registerCommands();
 		ServerPlayNetworking.registerGlobalReceiver(Lg2Payloads.RaceAbilityC2SPayload.TYPE, (payload, context) -> {
+			if (payload.slot() == 4) {
+				toggleRaceIndicator(context.player());
+				return;
+			}
 			RaceAbilitySlot[] slots = {
 					RaceAbilitySlot.ATTACK,
 					RaceAbilitySlot.DEFENSE,
@@ -2371,6 +2375,13 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		if (player == null || !isMarkPotroshitelPlayer(player)) {
 			return 0;
 		}
+		return toggleMarkRageBar(player);
+	}
+
+	private static int toggleMarkRageBar(ServerPlayer player) {
+		if (player == null || !isMarkPotroshitelPlayer(player)) {
+			return 0;
+		}
 		UUID playerId = player.getUUID();
 		boolean hidden;
 		if (MARK_RAGE_BAR_HIDDEN.contains(playerId)) {
@@ -2707,6 +2718,20 @@ private static int togglePuroSanOverdriveBar(ServerPlayer player) {
 		startGenericAbilityCooldown(player, slot, ability);
 		Lg2.LOGGER.info("Player {} used race ability '{}' from race '{}'", player.getGameProfile().name(), ability.abilityId, race.id);
 		return 1;
+	}
+
+	/** Toggles only the indicator owned by the player's current race. */
+	private static int toggleRaceIndicator(ServerPlayer player) {
+		if (player == null) return 0;
+		String raceId = getRace(player).map(race -> sanitizePath(race.id)).orElse("");
+		return switch (raceId) {
+			case MARK_POTROSHITEL_RACE_ID -> toggleMarkRageBar(player);
+			case PURO_SAN_RACE_ID -> togglePuroSanOverdriveBar(player);
+			case NECROMANCER_RACE_ID -> NecromancerStockSystem.toggleManaBar(player);
+			case ORTHODOX_RACE_ID -> OrthodoxHolinessSystem.toggleBar(player);
+			case ANCIENT_UKR_RACE_ID -> AncientUkrCreditSystem.toggleCreditOverlay(player);
+			default -> 0;
+		};
 	}
 
 	private static int toggleAncientUkrCreditBarFromCommand(CommandContext<CommandSourceStack> context) {

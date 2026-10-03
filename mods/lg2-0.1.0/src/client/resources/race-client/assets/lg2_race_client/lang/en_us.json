@@ -1,8 +1,10 @@
 {
   "key.category.lg2.lostglade": "Lostglade",
+  "key.lg2.open_settings": "Lostglade settings",
   "key.lg2.race_menu": "Open race abilities menu",
   "key.lg2.race_attack": "Race ability: attack",
   "key.lg2.race_defense": "Race ability: defense",
   "key.lg2.race_ability": "Race ability: unique ability",
-  "key.lg2.race_shnyaga": "Race ability: shnyaga"
+  "key.lg2.race_shnyaga": "Race ability: shnyaga",
+  "key.lg2.race_toggle_indicator": "Toggle race indicator"
 }

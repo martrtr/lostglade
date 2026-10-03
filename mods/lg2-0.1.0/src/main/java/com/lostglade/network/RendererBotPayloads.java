@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RendererBotPayloads {
 	// Map-tile transport was removed from the renderer-bot protocol. Older clients
 	// must not accept this stream.
-	public static final int PROTOCOL_VERSION = 27;
+	public static final int PROTOCOL_VERSION = 28;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
 	private static final int MAX_HIDDEN_CAMERA_ENTITIES = 32;
@@ -44,6 +44,7 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playC2S().register(RendererBotLiveStreamFailureC2SPayload.TYPE, RendererBotLiveStreamFailureC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotItemIconFailureC2SPayload.TYPE, RendererBotItemIconFailureC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotAudioCaptureFailureC2SPayload.TYPE, RendererBotAudioCaptureFailureC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotServerModIdsS2CPayload.TYPE, RendererBotServerModIdsS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotCaptureRequestS2CPayload.TYPE, RendererBotCaptureRequestS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamStartS2CPayload.TYPE, RendererBotLiveStreamStartS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamPoseS2CPayload.TYPE, RendererBotLiveStreamPoseS2CPayload.STREAM_CODEC);
@@ -79,6 +80,42 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotHelloC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** Server mod identity manifest used only for renderer admission. Versions are intentionally omitted. */
+	public record RendererBotServerModIdsS2CPayload(List<String> modIds) implements CustomPacketPayload {
+		private static final int MAX_MOD_IDS = 4096;
+		private static final int MAX_MOD_ID_LENGTH = 128;
+		public static final Type<RendererBotServerModIdsS2CPayload> TYPE = new Type<>(id("renderer_bot_server_mod_ids"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotServerModIdsS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotServerModIdsS2CPayload::write, RendererBotServerModIdsS2CPayload::new);
+
+		public RendererBotServerModIdsS2CPayload {
+			modIds = modIds == null ? List.of() : List.copyOf(modIds);
+			if (modIds.size() > MAX_MOD_IDS) throw new IllegalArgumentException("Too many server mod ids");
+		}
+
+		public RendererBotServerModIdsS2CPayload(FriendlyByteBuf buffer) {
+			this(readModIds(buffer));
+		}
+
+		private static List<String> readModIds(FriendlyByteBuf buffer) {
+			int count = buffer.readVarInt();
+			if (count < 0 || count > MAX_MOD_IDS) throw new IllegalArgumentException("Invalid server mod-id count: " + count);
+			List<String> ids = new ArrayList<>(count);
+			for (int i = 0; i < count; i++) ids.add(buffer.readUtf(MAX_MOD_ID_LENGTH));
+			return ids;
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeVarInt(this.modIds.size());
+			for (String id : this.modIds) buffer.writeUtf(id, MAX_MOD_ID_LENGTH);
+		}
+
+		@Override
+		public Type<RendererBotServerModIdsS2CPayload> type() {
 			return TYPE;
 		}
 	}

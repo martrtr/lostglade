@@ -627,7 +627,8 @@ public final class NecromancerStockSystem {
 		return false;
 	}
 
-	private static int toggleManaBar(ServerPlayer player) {
+	/** Shared by /manabar and the optional client key binding. */
+	public static int toggleManaBar(ServerPlayer player) {
 		if (!isActive(player)) return 0;
 		RaceAbilityConfig config = config(player);
 		ManaState state = stateFor(player, maxMana(player, config));

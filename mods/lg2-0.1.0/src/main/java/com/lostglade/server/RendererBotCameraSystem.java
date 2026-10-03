@@ -124,7 +124,7 @@ public final class RendererBotCameraSystem {
 	private static final int SHADOW_REAR_VIEW_CHUNKS = 2;
 	private static final long LIVE_STREAM_STALE_MS = 1_500L;
 	private static final long LIVE_STREAM_REBALANCE_INTERVAL_MS = 1_000L;
-	private static final long LIVE_STREAM_TRANSFER_COOLDOWN_MS = 5_000L;
+	private static final long LIVE_STREAM_TRANSFER_COOLDOWN_MS = 15_000L;
 	private static final long ITEM_ICON_CAPTURE_TIMEOUT_MS = 30_000L;
 	private static final long AUDIO_CAPTURE_STALE_MS = 8_000L;
 	private static final long LIVE_STREAM_ORPHAN_CLEANUP_MS = 15_000L;
@@ -176,6 +176,12 @@ public final class RendererBotCameraSystem {
 
 	public static void register() {
 		ServerTickEvents.END_SERVER_TICK.register(RendererBotCameraSystem::tickVirtualCameraState);
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> server.execute(() -> {
+			ServerPlayer player = handler.player;
+			if (RendererBotPresenceSystem.isRendererBot(player) || AccountAuthSystem.isAuthenticated(player)) {
+				RendererModAllowlist.sendManifest(player);
+			}
+		}));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			UUID botUuid = handler.player.getUUID();
 			clearShadowSyncState(server, botUuid, false);
@@ -202,17 +208,21 @@ public final class RendererBotCameraSystem {
 					boolean dedicatedBot = rendererBotAccount && payload.volunteerRenderer();
 					boolean volunteer = payload.volunteerRenderer() && !rendererBotAccount
 							&& Lg2Config.get().cameraRendererAllowPlayerVolunteers;
-					READY_BOTS.put(context.player().getUUID(), new BotHandshake(
+					BotHandshake handshake = new BotHandshake(
 							context.player().getUUID(), context.player().getScoreboardName(), volunteer, dedicatedBot
-					));
-					Lg2.LOGGER.info(
-							"Renderer client '{}' registered: {}",
-							context.player().getScoreboardName(),
-							dedicatedBot ? "dedicated" : volunteer ? "volunteer" : "not admitted"
 					);
+					BotHandshake previous = READY_BOTS.put(context.player().getUUID(), handshake);
+					if (!handshake.equals(previous)) {
+						Lg2.LOGGER.info(
+								"Renderer client '{}' registered: {}",
+								context.player().getScoreboardName(),
+								dedicatedBot ? "dedicated" : volunteer ? "volunteer" : "not admitted"
+						);
+					}
 					// A zero GPU budget is an explicit opt-out. Move active screen feeds
-					// immediately instead of waiting for their stale-frame timeout.
-					if (!volunteer && !dedicatedBot) {
+					// immediately instead of waiting for their stale-frame timeout, but
+					// only once when an admitted renderer actually becomes unavailable.
+					if (previous != null && (previous.volunteerRenderer() || previous.dedicatedRenderer()) && !volunteer && !dedicatedBot) {
 						MinecraftServer server = context.player().level().getServer();
 						if (server != null) {
 							server.execute(() -> handoffLiveStreamsFromUnavailableRenderer(
@@ -745,16 +755,6 @@ public final class RendererBotCameraSystem {
 			return false;
 		}
 
-		ServerPlayer bot = selectLiveStreamRenderer(server);
-		if (bot == null) {
-			onFailure.accept("Нет активного клиента камеры");
-			return false;
-		}
-		if (!canBotRenderLevel(bot, level)) {
-			onFailure.accept("Клиент камеры не может рендерить этот мир");
-			return false;
-		}
-
 		// A live stream is rendered from explicit pose packets, not by making the
 		// client follow this entity.  It is therefore safe (and necessary) to
 		// remove the physical camera carrier from its shadow world.  Besides a
@@ -794,10 +794,33 @@ public final class RendererBotCameraSystem {
 		UUID existingStreamId = LIVE_STREAMS_BY_OWNER.get(ownerKey);
 		if (existingStreamId != null) {
 			ActiveLiveStream existing = ACTIVE_LIVE_STREAMS.get(existingStreamId);
-			if (canReuseLiveStream(existing, bot, desiredSpec)) {
+			ServerPlayer existingRenderer = existing == null
+					? null
+					: server.getPlayerList().getPlayer(existing.botUuid());
+			// Stream ownership is sticky. Repeated monitor refreshes must reuse the
+			// renderer that is already producing this owner instead of consulting
+			// the least-loaded selector again. Selecting first caused a 1<->2 load
+			// oscillation where the same screen was stopped and recreated on another
+			// client every refresh, producing severe video stutter.
+			if (canReuseLiveStream(existing, existingRenderer, desiredSpec)
+					&& canBotRenderLevel(existingRenderer, level)) {
 				return true;
 			}
-			stopLiveStreamInternal(existing, "Renderer bot live stream restarted", false);
+			if (existing != null) {
+				stopLiveStreamInternal(existing, "Renderer bot live stream restarted", false);
+			} else {
+				LIVE_STREAMS_BY_OWNER.remove(ownerKey, existingStreamId);
+			}
+		}
+
+		ServerPlayer bot = selectLiveStreamRenderer(server);
+		if (bot == null) {
+			onFailure.accept("Нет активного клиента камеры");
+			return false;
+		}
+		if (!canBotRenderLevel(bot, level)) {
+			onFailure.accept("Клиент камеры не может рендерить этот мир");
+			return false;
 		}
 
 		UUID streamId = UUID.randomUUID();
@@ -1602,7 +1625,11 @@ public final class RendererBotCameraSystem {
 			if (replacement == null) continue;
 			int sourceLoad = activeLiveStreamCount(sourceUuid);
 			int replacementLoad = activeLiveStreamCount(replacement.getUUID());
-			if (sourceLoad <= replacementLoad || !transferLiveStream(server, stream, replacement, "low live-stream FPS")) continue;
+			// A 2:1 transfer would only invert the imbalance to 1:2, so a slow
+			// renderer could bounce the same feed back and forth forever. Move a
+			// stream only when the transfer actually reduces the load difference.
+			if (sourceLoad - replacementLoad < 2
+					|| !transferLiveStream(server, stream, replacement, "low live-stream FPS")) continue;
 			Lg2.LOGGER.info(
 					"Renderer stream {} rebalanced after {}/{} fps on overloaded client",
 					stream.streamId().toString().substring(0, 8), Math.round(sourceFps), spec.targetFps()

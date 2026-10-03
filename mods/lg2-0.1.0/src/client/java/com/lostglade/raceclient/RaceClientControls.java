@@ -16,6 +16,7 @@ public final class RaceClientControls {
 	private static final KeyMapping DEFENSE = bind("key.lg2.race_defense", GLFW.GLFW_KEY_UNKNOWN);
 	private static final KeyMapping ABILITY = bind("key.lg2.race_ability", GLFW.GLFW_KEY_UNKNOWN);
 	private static final KeyMapping SHNYAGA = bind("key.lg2.race_shnyaga", GLFW.GLFW_KEY_UNKNOWN);
+	private static final KeyMapping TOGGLE_INDICATOR = bind("key.lg2.race_toggle_indicator", GLFW.GLFW_KEY_UNKNOWN);
 
 	private RaceClientControls() {
 	}
@@ -27,6 +28,7 @@ public final class RaceClientControls {
 			consumeAbility(DEFENSE, 1);
 			consumeAbility(ABILITY, 2);
 			consumeAbility(SHNYAGA, 3);
+			consumeRaceIndicator();
 		});
 	}
 
@@ -50,6 +52,15 @@ public final class RaceClientControls {
 	public static void useAbility(int slot) {
 		if (slot >= 0 && slot <= 3 && ClientPlayNetworking.canSend(RaceAbilityPayload.TYPE)) {
 			ClientPlayNetworking.send(new RaceAbilityPayload(slot));
+		}
+	}
+
+	/** The server resolves the current race and silently ignores races without an indicator. */
+	private static void consumeRaceIndicator() {
+		while (TOGGLE_INDICATOR.consumeClick()) {
+			if (ClientPlayNetworking.canSend(RaceAbilityPayload.TYPE)) {
+				ClientPlayNetworking.send(new RaceAbilityPayload(4));
+			}
 		}
 	}
 
