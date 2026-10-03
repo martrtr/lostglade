@@ -71,6 +71,7 @@ mkdir -p \
   "${data_dir}/versions" \
   "${data_dir}/polymer" \
   "${data_dir}/config/tab"
+install -d -o root -g lostglade -m 0750 "${server_root}/server-secrets"
 
 # The committed template is authoritative for each release. Vanilla owns the
 # generated timestamp in the runtime copy, so it belongs in data, not release.
@@ -97,6 +98,7 @@ for item in \
   config/tab/users.yml; do
   ln -s "${data_dir}/${item}" "${temporary_dir}/${item}"
 done
+ln -s "${server_root}/server-secrets" "${temporary_dir}/server-secrets"
 
 chown -R lostglade:lostglade "${temporary_dir}" "${data_dir}"
 mv -- "${temporary_dir}" "${release_dir}"

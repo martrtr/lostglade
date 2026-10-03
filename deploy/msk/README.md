@@ -15,6 +15,8 @@ It never contains the LG2 source/build, LG2 configuration, worlds, player data,
 logs, caches, secrets, Gradle files or locally generated resource packs. World,
 player state, Fabric's remap cache, downloaded vanilla runtime, Polymer pack and
 TAB's player caches live in `/srv/lostglade/data`, outside releases.
+Secrets live in `/srv/lostglade/server-secrets` and are linked into a release
+only at runtime; they are never included in an archive or Git.
 
 The initial release therefore contains **no LG2 mod**. `seamless-itemframes`
 remains: its file name has an `-lg2` suffix only because it is the compatibility
