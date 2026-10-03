@@ -84,6 +84,15 @@ public final class RaceAbilityScreen extends Screen {
 		return super.keyReleased(event);
 	}
 
+	@Override
+	public boolean mouseReleased(MouseButtonEvent event) {
+		if (this.minecraft != null && this.minecraft.options.keyQuickActions.matchesMouse(event)) {
+			this.finishHoldSelection();
+			return true;
+		}
+		return super.mouseReleased(event);
+	}
+
 	private void finishHoldSelection() {
 		if (this.finishingHold) return;
 		this.finishingHold = true;

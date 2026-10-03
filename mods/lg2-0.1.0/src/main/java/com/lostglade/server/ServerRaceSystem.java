@@ -1628,19 +1628,23 @@ public final class ServerRaceSystem {
 		rebuildCache();
 		registerCommands();
 		ServerPlayNetworking.registerGlobalReceiver(Lg2Payloads.RaceAbilityC2SPayload.TYPE, (payload, context) -> {
-			if (payload.slot() == 4) {
-				toggleRaceIndicator(context.player());
-				return;
-			}
-			RaceAbilitySlot[] slots = {
-					RaceAbilitySlot.ATTACK,
-					RaceAbilitySlot.DEFENSE,
-					RaceAbilitySlot.UNIQUE_ABILITY,
-					RaceAbilitySlot.SHNYAGA
-			};
-			if (payload.slot() >= 0 && payload.slot() < slots.length) {
-				useAbility(context.player(), slots[payload.slot()]);
-			}
+			MinecraftServer server = context.player().level().getServer();
+			if (server == null) return;
+			server.execute(() -> {
+				if (payload.slot() == 4) {
+					toggleRaceIndicator(context.player());
+					return;
+				}
+				RaceAbilitySlot[] slots = {
+						RaceAbilitySlot.ATTACK,
+						RaceAbilitySlot.DEFENSE,
+						RaceAbilitySlot.UNIQUE_ABILITY,
+						RaceAbilitySlot.SHNYAGA
+				};
+				if (payload.slot() >= 0 && payload.slot() < slots.length) {
+					useAbility(context.player(), slots[payload.slot()]);
+				}
+			});
 		});
 		ServerPlayNetworking.registerGlobalReceiver(Lg2Payloads.RaceAbilityStateRequestC2SPayload.TYPE, (payload, context) -> {
 			MinecraftServer server = context.player().level().getServer();

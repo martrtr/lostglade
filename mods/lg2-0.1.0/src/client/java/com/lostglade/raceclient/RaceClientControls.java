@@ -22,8 +22,11 @@ public final class RaceClientControls {
 	}
 
 	public static void register() {
-		renameVanillaQuickActions();
+		// ClientModInitializer can run before Minecraft.options exists. Try immediately,
+		// then retry from the client tick until the vanilla binding is actually rewritten.
+		renameVanillaQuickActions(Minecraft.getInstance());
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			renameVanillaQuickActions(client);
 			consumeAbility(ATTACK, 0);
 			consumeAbility(DEFENSE, 1);
 			consumeAbility(ABILITY, 2);
@@ -32,11 +35,12 @@ public final class RaceClientControls {
 		});
 	}
 
-	/** Reuse the vanilla key instead of registering a competing race-menu key. */
-	private static void renameVanillaQuickActions() {
-		Minecraft client = Minecraft.getInstance();
-		if (client == null || client.options == null) return;
-		KeyMappingAccessor quickActions = (KeyMappingAccessor) client.options.keyQuickActions;
+	/** Reuse vanilla Quick Actions as the Lostglade race-menu binding. */
+	private static void renameVanillaQuickActions(Minecraft client) {
+		if (client == null || client.options == null || client.options.keyQuickActions == null) return;
+		KeyMapping binding = client.options.keyQuickActions;
+		if ("key.lg2.race_menu".equals(binding.getName()) && CATEGORY.equals(binding.getCategory())) return;
+		KeyMappingAccessor quickActions = (KeyMappingAccessor) binding;
 		quickActions.lg2$setName("key.lg2.race_menu");
 		quickActions.lg2$setCategory(CATEGORY);
 	}
@@ -56,7 +60,7 @@ public final class RaceClientControls {
 	}
 
 	/** The server resolves the current race and silently ignores races without an indicator. */
-	private static void consumeRaceIndicator() {
+	public static void consumeRaceIndicator() {
 		while (TOGGLE_INDICATOR.consumeClick()) {
 			if (ClientPlayNetworking.canSend(RaceAbilityPayload.TYPE)) {
 				ClientPlayNetworking.send(new RaceAbilityPayload(4));

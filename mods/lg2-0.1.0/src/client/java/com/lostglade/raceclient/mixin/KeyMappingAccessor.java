@@ -5,7 +5,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
-/** Lets the race client present vanilla Quick Actions as its own key binding. */
+/** Lets the race client expose vanilla Quick Actions as the Lostglade race-menu binding. */
 @Mixin(KeyMapping.class)
 public interface KeyMappingAccessor {
 	@Mutable

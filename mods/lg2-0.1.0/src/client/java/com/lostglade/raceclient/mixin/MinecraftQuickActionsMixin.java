@@ -14,7 +14,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MinecraftQuickActionsMixin {
 	@Inject(method = "handleKeybinds", at = @At("HEAD"))
 	private void lg2RaceClient$replaceVanillaQuickActions(CallbackInfo callbackInfo) {
-		if (!LostgladeClientSettings.isRaceMenuEnabled() || !ClientPlayNetworking.canSend(RaceAbilityPayload.TYPE)) {
+		if (!ClientPlayNetworking.canSend(RaceAbilityPayload.TYPE)) {
+			return;
+		}
+		if (!LostgladeClientSettings.isRaceMenuEnabled()) {
 			return;
 		}
 		Minecraft client = (Minecraft) (Object) this;

@@ -166,6 +166,7 @@
 		"ServerPlayerGuidedBitcoinDropMixin",
 		"ServerPlayerBackroomsRespawnMixin",
 		"ServerPlayerMarkKillMixin",
+		"ServerPlayerGameModeAccountAuthInvoker",
 		"ServerPlayerGameModeCopperManRepulsorMixin",
 		"ServerPlayerGameModeNecromancerEraMixin",
 		"ServerPlayerGameModeNecromancerManaMixin",

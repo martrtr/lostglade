@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.lostglade.Lg2;
 import com.lostglade.mixin.PlayerListAccountAuthAccessor;
 import com.lostglade.mixin.ServerPlayerAccountAuthAccessor;
+import com.lostglade.mixin.ServerPlayerGameModeAccountAuthInvoker;
 import com.lostglade.network.Lg2Payloads;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -71,6 +72,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.portal.TeleportTransition;
 
 import javax.crypto.SecretKeyFactory;
@@ -502,7 +504,15 @@ public final class AccountAuthSystem {
 		// 1.21.11 keeps the terrain-loading screen open until this exact marker arrives.
 		// It carries no real-world data; all other game events remain quarantined.
 		if (packet instanceof ClientboundGameEventPacket gameEventPacket) {
-			return gameEventPacket.getEvent() == ClientboundGameEventPacket.LEVEL_CHUNKS_LOAD_START ? packet : null;
+			if (gameEventPacket.getEvent() == ClientboundGameEventPacket.LEVEL_CHUNKS_LOAD_START) return packet;
+			// Auth limbo is intentionally spectator-only. Permit exactly that game-mode update so
+			// the client cannot remain visually in survival while the server quarantines it as spectator.
+			if (isInLimbo(receiver)
+					&& gameEventPacket.getEvent() == ClientboundGameEventPacket.CHANGE_GAME_MODE
+					&& Float.compare(gameEventPacket.getParam(), GameType.SPECTATOR.getId()) == 0) {
+				return packet;
+			}
+			return null;
 		}
 		if (packet instanceof ClientboundPlayerAbilitiesPacket abilitiesPacket) {
 			boolean limboAbilities = abilitiesPacket.isInvulnerable()
@@ -1125,6 +1135,7 @@ public final class AccountAuthSystem {
 		}
 		LIMBO.put(player, state);
 		CONNECTED_HUMAN_SESSIONS.add(playerId);
+		applyLimboGameMode(player);
 		player.setNoGravity(true);
 		applyLimboAbilities(player);
 		player.resetFallDistance();
@@ -1144,17 +1155,17 @@ public final class AccountAuthSystem {
 			player.connection.disconnect(Component.literal("Authentication isolation failed. Please reconnect."));
 			return;
 		}
+		applyLimboGameMode(player);
 		player.setNoGravity(true);
 		applyLimboAbilities(player);
 		player.resetFallDistance();
 	}
 
 	private static LimboState captureReturnState(ServerPlayer player, AuthenticationReturnTarget target) {
-		AbilityState abilities = AbilityState.capture(player.getAbilities());
 		return new LimboState(
 				target.level(), target.position().x, target.position().y, target.position().z,
-				target.angle().x, target.angle().y, player.isNoGravity(), player.tickCount,
-				abilities, player.getDeltaMovement(), player.fallDistance, false
+				target.angle().x, target.angle().y, player.tickCount,
+				player.getDeltaMovement(), player.fallDistance, false
 		);
 	}
 
@@ -1190,8 +1201,6 @@ public final class AccountAuthSystem {
 		double x = player.getX();
 		double y = player.getY();
 		double z = player.getZ();
-		boolean noGravity = player.isNoGravity();
-		AbilityState abilities = AbilityState.capture(player.getAbilities());
 		Vec3 velocity = player.getDeltaMovement();
 		double fallDistance = player.fallDistance;
 
@@ -1205,15 +1214,13 @@ public final class AccountAuthSystem {
 			x = spawn.getX() + 0.5D;
 			y = spawn.getY() + 0.1D;
 			z = spawn.getZ() + 0.5D;
-			noGravity = false;
 			velocity = Vec3.ZERO;
 			fallDistance = 0.0D;
-			abilities = AbilityState.recoveredFor(player);
 			Lg2.LOGGER.warn("Recovered stale auth-limbo playerdata for {}; returning to overworld spawn", player.getScoreboardName());
 		}
 
-		return new LimboState(returnLevel, x, y, z, player.getYRot(), player.getXRot(), noGravity,
-				player.tickCount, abilities, velocity, fallDistance, false);
+		return new LimboState(returnLevel, x, y, z, player.getYRot(), player.getXRot(),
+				player.tickCount, velocity, fallDistance, false);
 	}
 
 	private static boolean leaveLimbo(ServerPlayer player, boolean restorePlayerPosition) {
@@ -1260,9 +1267,12 @@ public final class AccountAuthSystem {
 		}
 
 		// Restore the real gameplay state only after the cross-dimension transition succeeded.
-		player.setNoGravity(state.noGravity);
+		if (player.gameMode == null || player.gameMode.getGameModeForPlayer() != GameType.SURVIVAL) {
+			player.setGameMode(GameType.SURVIVAL);
+		}
+		player.setNoGravity(false);
 		player.tickCount = state.tickCount;
-		state.abilities.restore(player.getAbilities());
+		AbilityState.recoveredFor(GameType.SURVIVAL).restore(player.getAbilities());
 		if (state.recoveredDeadState) {
 			normalizeRecoveredDeathState(player);
 		} else {
@@ -1275,7 +1285,7 @@ public final class AccountAuthSystem {
 	/**
 	 * Auth limbo is a transport-only state and must never be persisted as the player's real state.
 	 * ServerPlayer.addAdditionalSaveData calls this at TAIL, after vanilla wrote Pos/Rotation/Dimension
-	 * and abilities, so these keys are atomically overwritten with the pre-limbo values.
+	 * and abilities, so these keys are atomically rewritten as normal survival gameplay state.
 	 */
 	public static void rewriteLimboPersistentState(ServerPlayer player, ValueOutput output) {
 		if (player == null || output == null) return;
@@ -1284,12 +1294,28 @@ public final class AccountAuthSystem {
 		output.store("Pos", Vec3.CODEC, new Vec3(state.x, state.y, state.z));
 		output.store("Rotation", Vec2.CODEC, new Vec2(state.yaw, state.pitch));
 		output.putString("Dimension", state.level.dimension().identifier().toString());
-		output.putBoolean("NoGravity", state.noGravity);
-		output.store("abilities", Abilities.Packed.CODEC, state.abilities.pack());
+		output.putInt("playerGameType", GameType.SURVIVAL.getId());
+		output.putBoolean("NoGravity", false);
+		output.store("abilities", Abilities.Packed.CODEC, AbilityState.recoveredFor(GameType.SURVIVAL).pack());
 		output.store("Motion", Vec3.CODEC, state.deltaMovement);
 		output.putDouble("fall_distance", state.fallDistance);
 	}
 
+
+	private static void applyLimboGameMode(ServerPlayer player) {
+		if (player == null || player.gameMode == null || player.gameMode.getGameModeForPlayer() == GameType.SPECTATOR) {
+			return;
+		}
+		GameType previous = player.gameMode.getGameModeForPlayer();
+		if (player.connection == null) {
+			// placeNewPlayer(HEAD) runs before vanilla assigns ServerGamePacketListenerImpl.
+			// ServerPlayer#setGameMode broadcasts a PlayerInfo packet and dereferences connection,
+			// so only mutate ServerPlayerGameMode's internal state during this pre-play phase.
+			((ServerPlayerGameModeAccountAuthInvoker) player.gameMode).lg2$setGameModeForPlayer(GameType.SPECTATOR, previous);
+			return;
+		}
+		player.setGameMode(GameType.SPECTATOR);
+	}
 
 	private static void applyLimboAbilities(ServerPlayer player) {
 		Abilities abilities = player.getAbilities();
@@ -1500,14 +1526,10 @@ public final class AccountAuthSystem {
 			boolean invulnerable, boolean flying, boolean mayfly, boolean instabuild, boolean mayBuild,
 			float flyingSpeed, float walkingSpeed
 	) {
-		private static AbilityState capture(Abilities abilities) {
-			return new AbilityState(abilities.invulnerable, abilities.flying, abilities.mayfly, abilities.instabuild,
-					abilities.mayBuild, abilities.getFlyingSpeed(), abilities.getWalkingSpeed());
-		}
-
-		private static AbilityState recoveredFor(ServerPlayer player) {
-			boolean creative = player.isCreative();
-			boolean spectator = player.isSpectator();
+		private static AbilityState recoveredFor(GameType gameType) {
+			GameType resolved = gameType == null ? GameType.SURVIVAL : gameType;
+			boolean creative = resolved == GameType.CREATIVE;
+			boolean spectator = resolved == GameType.SPECTATOR;
 			return new AbilityState(creative || spectator, spectator, creative || spectator, creative, true, 0.05F, 0.1F);
 		}
 
@@ -1528,12 +1550,11 @@ public final class AccountAuthSystem {
 
 	private record LimboState(
 			ServerLevel level, double x, double y, double z, float yaw, float pitch,
-			boolean noGravity, int tickCount, AbilityState abilities, Vec3 deltaMovement, double fallDistance,
-			boolean recoveredDeadState
+			int tickCount, Vec3 deltaMovement, double fallDistance, boolean recoveredDeadState
 	) {
 		private LimboState withTarget(ServerLevel targetLevel, Vec3 position, float targetYaw, float targetPitch, boolean deadRecovery) {
 			return new LimboState(targetLevel, position.x, position.y, position.z, targetYaw, targetPitch,
-					noGravity, tickCount, abilities, deadRecovery ? Vec3.ZERO : deltaMovement,
+					tickCount, deadRecovery ? Vec3.ZERO : deltaMovement,
 					deadRecovery ? 0.0D : fallDistance, deadRecovery || recoveredDeadState);
 		}
 	}
