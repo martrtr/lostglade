@@ -767,7 +767,7 @@
       "enabled": true,
       "id": "necromancer",
       "displayName": "Некромансер",
-      "ownerNickname": "Tin",
+      "ownerNickname": "TinAlex",
       "description": "Использует ману и духа, но имеет мало здоровья и не носит снаряжение.",
       "attack": {
         "enabled": true,
