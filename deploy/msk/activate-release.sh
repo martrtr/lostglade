@@ -19,6 +19,7 @@ data_dir="${server_root}/data"
 [[ -f "${archive_path}" ]] || { echo "Archive is missing: ${archive_path}" >&2; exit 1; }
 if [[ -e "${release_dir}" ]]; then
   if [[ -L "${server_root}/current" && "$(readlink -f "${server_root}/current")" == "${release_dir}" ]]; then
+    rm -f -- "${archive_path}"
     echo "Release ${release_id} is already active."
     exit 0
   fi

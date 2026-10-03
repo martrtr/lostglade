@@ -40,4 +40,4 @@ jobs:
           set -euo pipefail
           archive="dist/lostglade-${RELEASE_ID}.tar.gz"
           sshpass -e scp -o StrictHostKeyChecking=yes "$archive" "root@31.77.251.51:/srv/lostglade/incoming/${RELEASE_ID}.tar.gz"
-          sshpass -e ssh -o StrictHostKeyChecking=yes root@31.77.251.51 "lostglade-activate-release ${RELEASE_ID}"
+          sshpass -e ssh -o StrictHostKeyChecking=yes root@31.77.251.51 "lostglade-activate-release ${RELEASE_ID} && install -m 0755 /srv/lostglade/current/deploy/msk/activate-release.sh /usr/local/sbin/lostglade-activate-release"
