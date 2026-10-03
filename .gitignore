@@ -11,6 +11,8 @@
 /run/
 /run-bot/
 /mods/lg2-0.1.0/logs/
+/mods/nobedrock-src/.gradle/
+/mods/nobedrock-src/build/
 
 # Generated packs/artifacts
 /polymer/resource_pack.zip

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "nobedrock",
+  "version": "${version}",
+  "name": "NoBedrock",
+  "description": "Removes natural Overworld bedrock without changing Nether bedrock.",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.feisk73.nobedrock.Nobedrock"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.4",
+    "fabric-api": "*",
+    "minecraft": "1.21.11"
+  }
+}
