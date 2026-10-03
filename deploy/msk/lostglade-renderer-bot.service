@@ -1,0 +1,20 @@
+[Unit]
+Description=Lostglade local camera renderer bot
+After=lostglade.service
+Requires=lostglade.service
+PartOf=lostglade.service
+
+[Service]
+Type=simple
+User=lostglade
+Group=lostglade
+WorkingDirectory=/srv/lostglade/current/renderer-bot/game
+ExecStart=/srv/lostglade/current/deploy/msk/run-renderer-bot.sh
+Restart=always
+RestartSec=10
+TimeoutStopSec=45
+LimitNOFILE=1048576
+TasksMax=4096
+
+[Install]
+WantedBy=multi-user.target

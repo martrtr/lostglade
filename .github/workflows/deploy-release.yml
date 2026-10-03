@@ -13,12 +13,17 @@ concurrency:
 
 jobs:
   deploy:
+    timeout-minutes: 60
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: Build exact release archive
         run: ./deploy/msk/assemble-release.sh "$GITHUB_SHA"
@@ -39,5 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           archive="dist/lostglade-${RELEASE_ID}.tar.gz"
+          sshpass -e scp -o StrictHostKeyChecking=yes deploy/msk/activate-release.sh "root@31.77.251.51:/tmp/lostglade-activate-release-${RELEASE_ID}"
+          sshpass -e ssh -o StrictHostKeyChecking=yes root@31.77.251.51 "install -m 0755 /tmp/lostglade-activate-release-${RELEASE_ID} /usr/local/sbin/lostglade-activate-release && rm -f /tmp/lostglade-activate-release-${RELEASE_ID}"
           sshpass -e scp -o StrictHostKeyChecking=yes "$archive" "root@31.77.251.51:/srv/lostglade/incoming/${RELEASE_ID}.tar.gz"
           sshpass -e ssh -o StrictHostKeyChecking=yes root@31.77.251.51 "lostglade-activate-release ${RELEASE_ID} && install -m 0755 /srv/lostglade/current/deploy/msk/activate-release.sh /usr/local/sbin/lostglade-activate-release"

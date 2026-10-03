@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build a deliberately small, server-only release.  Do not turn this into an
+# Build a deliberately small production release.  Do not turn this into an
 # rsync of the repository: the allow-list below is the release contract.
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 release_id="${1:-$(git -C "${repo_dir}" rev-parse HEAD)}"
@@ -10,6 +10,34 @@ if [[ ! "${release_id}" =~ ^[0-9a-f]{40}$ ]]; then
   echo 'Release id must be a full lowercase Git commit SHA.' >&2
   exit 2
 fi
+
+# Produce release-mode server/client jars and Loom's exact client launch
+# metadata.  The renderer export below copies only the compiled runtime files
+# referenced by that metadata, never the Gradle project or its sources.
+(
+  cd "${repo_dir}/mods/lg2-0.1.0"
+  ./gradlew --no-daemon --console=plain \
+    prepareDevResourcePack build remapGameplayClientJar \
+    prepareRendererBotClientRunDir configureClientLaunch
+
+  # Loom creates an argfile only when a named run configuration is executed.
+  # Metadata is written before the client opens a window; a display/server is
+  # not needed for this bounded metadata-generation invocation.
+  renderer_argfile='build/loom-cache/argFiles/runRendererBotClient'
+  if [[ ! -f "${renderer_argfile}" ]]; then
+    set +e
+    timeout 45s ./gradlew --no-daemon --console=plain runRendererBotClient \
+      -Dlg2.rendererBot=true \
+      -Dlg2.rendererBotName=renderer-export \
+      -Dlg2.rendererBotServer=127.0.0.1:9 \
+      >/dev/null 2>&1
+    set -e
+    [[ -f "${renderer_argfile}" ]] || {
+      echo 'Loom did not produce renderer client launch metadata.' >&2
+      exit 1
+    }
+  fi
+)
 
 output_dir="${repo_dir}/dist"
 stage_dir="${output_dir}/lostglade-${release_id}"
@@ -32,6 +60,8 @@ done
 # Package it as a checked template; activation copies it to persistent runtime
 # state and links the expected server.properties name back into the release.
 install -D -m 0644 "${repo_dir}/server.properties" "${stage_dir}/server.properties.template"
+install -D -m 0644 "${repo_dir}/server-icon.png" "${stage_dir}/server-icon.png"
+install -D -m 0644 "${repo_dir}/whitelist.json" "${stage_dir}/whitelist.json.template"
 
 # Both Mojang's server JAR and Fabric's thin launcher reference these exact
 # Maven artifacts via their manifests. They are runtime dependencies, not a
@@ -46,16 +76,21 @@ done < <(find "${repo_dir}/libraries" -type f -name '*.jar' -print0 | LC_ALL=C s
 # Lostglade mod and is intentionally included. Verify the actual Fabric id.
 shopt -s nullglob
 for mod_jar in "${repo_dir}"/mods/*.jar; do
-  if unzip -p "${mod_jar}" fabric.mod.json 2>/dev/null | grep -Eq '"id"[[:space:]]*:[[:space:]]*"lg2"'; then
-    echo "Refusing to package the LG2 mod: ${mod_jar}" >&2
-    exit 1
-  fi
   install -m 0644 "${mod_jar}" "${stage_dir}/mods/$(basename "${mod_jar}")"
 done
 
-# Config is also an explicit allow-list. In particular, LG2 state, player
-# caches, skin cache, TAB users/playerdata, secrets and generated Polymer packs
-# never cross this boundary.
+lg2_server_jar="${repo_dir}/mods/lg2-0.1.0/build/libs/lg2-1.0.0.jar"
+[[ -f "${lg2_server_jar}" ]] || { echo "LG2 server jar is missing: ${lg2_server_jar}" >&2; exit 1; }
+install -m 0644 "${lg2_server_jar}" "${stage_dir}/mods/lg2-1.0.0.jar"
+
+python3 "${repo_dir}/deploy/msk/export-renderer-runtime.py" \
+  "${repo_dir}/mods/lg2-0.1.0" \
+  "${stage_dir}/renderer-bot" \
+  '/srv/lostglade/current/renderer-bot'
+
+# Config is also an explicit allow-list. Runtime state, player caches, skin
+# cache, TAB users/playerdata, secrets and generated Polymer packs never cross
+# this boundary. LG2 configs are seeded once and then preserved outside releases.
 config_files=(
   config/SeamlessFrames.conf
   config/SeamlessFrames.json
@@ -63,6 +98,14 @@ config_files=(
   config/chunky/config.json
   config/ferritecore.mixin.properties
   config/fsit.yml
+  config/lg2-auth.template.json
+  config/lg2-glitches.json
+  config/lg2-races.json
+  config/lg2-renderer-mod-allowlist.json
+  config/lg2-season-start.json
+  config/lg2-support.json
+  config/lg2-upgrades.json
+  config/lg2.json
   config/polymer/auto-host.json
   config/polymer/common.json
   config/polymer/resource-pack.json
@@ -82,14 +125,24 @@ config_files=(
 for path in "${config_files[@]}"; do
   copy_file "${path}"
 done
+mv "${stage_dir}/config/lg2-auth.template.json" "${stage_dir}/config/lg2-auth.json"
+
+while IFS= read -r -d '' file; do
+  relative_path="${file#"${repo_dir}/"}"
+  install -D -m 0644 "${file}" "${stage_dir}/${relative_path}"
+done < <(find "${repo_dir}/config/lg2-season-start" -type f -print0 | LC_ALL=C sort -z)
 
 for path in \
   deploy/msk/activate-release.sh \
   deploy/msk/lostglade.service \
   deploy/msk/provision-vps.sh \
-  deploy/msk/run-server.sh; do
+  deploy/msk/run-server.sh \
+  deploy/msk/run-renderer-bot.sh; do
   install -D -m 0755 "${repo_dir}/${path}" "${stage_dir}/${path}"
 done
+install -D -m 0644 \
+  "${repo_dir}/deploy/msk/lostglade-renderer-bot.service" \
+  "${stage_dir}/deploy/msk/lostglade-renderer-bot.service"
 
 printf '%s\n' "${release_id}" > "${stage_dir}/RELEASE_COMMIT"
 (

@@ -48,21 +48,18 @@ for required in \
   fabric-server-launch.jar \
   server.jar \
   server.properties.template \
+  server-icon.png \
+  whitelist.json.template \
   deploy/msk/run-server.sh \
+  deploy/msk/run-renderer-bot.sh \
+  renderer-bot/launch.cfg \
+  mods/lg2-1.0.0.jar \
   libraries/net/fabricmc/fabric-loader/0.18.4/fabric-loader-0.18.4.jar; do
   [[ -f "${temporary_dir}/${required}" ]] || { echo "Release lacks ${required}" >&2; exit 1; }
 done
-while IFS= read -r -d '' mod_jar; do
-  if unzip -p "${mod_jar}" fabric.mod.json 2>/dev/null | grep -Eq '"id"[[:space:]]*:[[:space:]]*"lg2"'; then
-    echo 'Release contains the LG2 mod and was rejected.' >&2
-    exit 1
-  fi
-done < <(find "${temporary_dir}/mods" -type f -name '*.jar' -print0)
-if find "${temporary_dir}/config" -type f -name 'lg2*' -print -quit | grep -q .; then
-  echo 'Release contains LG2 configuration and was rejected.' >&2
-  exit 1
-fi
-
+unzip -p "${temporary_dir}/mods/lg2-1.0.0.jar" fabric.mod.json 2>/dev/null \
+  | grep -Eq '"id"[[:space:]]*:[[:space:]]*"lg2"' \
+  || { echo 'Release has an invalid LG2 jar.' >&2; exit 1; }
 mkdir -p \
   "${data_dir}/world" \
   "${data_dir}/logs" \
@@ -70,12 +67,26 @@ mkdir -p \
   "${data_dir}/.fabric" \
   "${data_dir}/versions" \
   "${data_dir}/polymer" \
-  "${data_dir}/config/tab"
+  "${data_dir}/config/tab" \
+  "${data_dir}/config"
 install -d -o root -g lostglade -m 0750 "${server_root}/server-secrets"
 
 # The committed template is authoritative for each release. Vanilla owns the
 # generated timestamp in the runtime copy, so it belongs in data, not release.
 install -m 0644 "${temporary_dir}/server.properties.template" "${data_dir}/server.properties"
+install -m 0644 "${temporary_dir}/whitelist.json.template" "${data_dir}/whitelist.json"
+rm -f -- "${temporary_dir}/whitelist.json.template"
+
+# Authentication is stateful and stays private on the VPS. Other LG2 configs
+# are public release configuration and are replaced atomically with each release.
+source_path="${temporary_dir}/config/lg2-auth.json"
+persistent_path="${data_dir}/config/lg2-auth.json"
+[[ -f "${source_path}" ]] || { echo 'Release lacks LG2 auth config' >&2; exit 1; }
+if [[ ! -e "${persistent_path}" ]]; then
+  install -m 0640 "${source_path}" "${persistent_path}"
+fi
+rm -f -- "${source_path}"
+ln -s "${persistent_path}" "${temporary_dir}/config/lg2-auth.json"
 
 # Vanilla, Fabric, Polymer and TAB create these at runtime. Keep them out of
 # immutable releases alongside world/player state, so a release directory is
@@ -137,6 +148,11 @@ if [[ "${ready}" -ne 1 ]]; then
   journalctl -u lostglade.service --since "${started_at}" --no-pager -n 120 >&2 || true
   exit 1
 fi
+
+install -m 0644 "${release_dir}/deploy/msk/lostglade-renderer-bot.service" /etc/systemd/system/lostglade-renderer-bot.service
+systemctl daemon-reload
+systemctl enable lostglade-renderer-bot.service
+systemctl restart lostglade-renderer-bot.service
 
 rm -f -- "${archive_path}"
 
