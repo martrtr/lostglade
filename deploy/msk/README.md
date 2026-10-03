@@ -22,7 +22,7 @@ port prepared for this project; its Fabric mod id is `sframes`.
 
 ## Release process
 
-Push a commit to the protected `release` branch. GitHub Actions builds an
+Push a commit to the `release` branch. GitHub Actions builds an
 archive named after that exact commit, uploads it over SSH, and runs the host
 activation command. Activating a release verifies SHA-256 checksums, switches
 the `current` symlink atomically, waits for Minecraft's `Done (...)` startup
