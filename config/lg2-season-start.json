@@ -1,5 +1,5 @@
 {
-  "autoStartOnFirstLaunch": true,
+  "autoStartOnFirstLaunch": false,
   "boxHalfWidth": 35,
   "boxHalfDepth": 35,
   "boxHeight": 23,
