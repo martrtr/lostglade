@@ -1,6 +1,5 @@
 package com.lostglade.raceclient;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
@@ -10,7 +9,6 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.KeyMapping;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
@@ -43,66 +41,63 @@ public final class RaceAbilityScreen extends Screen {
 			Component.translatable("key.lg2.race_ability"), Component.translatable("key.lg2.race_shnyaga")
 	};
 
+	private final RaceActionButton[] actionButtons = new RaceActionButton[ICONS.length];
+	private int hoveredSlot = -1;
+	private boolean finishingHold;
+
 	public RaceAbilityScreen() {
 		super(Component.translatable("key.lg2.race_menu"));
 	}
 
 	@Override
 	protected void init() {
-		// Minecraft calls releaseAll() after constructing the screen and before
-		// init(). Refresh here, after that reset, so held movement is preserved.
-		KeyMapping.setAll();
 		int gridSize = BUTTON_SIZE * 2 + GAP;
 		int startX = (this.width - gridSize) / 2;
 		int startY = (this.height - gridSize) / 2;
 		for (int slot = 0; slot < ICONS.length; slot++) {
 			int x = startX + (slot % 2) * (BUTTON_SIZE + GAP);
 			int y = startY + (slot / 2) * (BUTTON_SIZE + GAP);
-			this.addRenderableWidget(new RaceActionButton(x, y, slot));
+			RaceActionButton button = new RaceActionButton(x, y, slot);
+			this.actionButtons[slot] = button;
+			this.addRenderableWidget(button);
 		}
 	}
 
 	@Override
 	public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		super.render(graphics, mouseX, mouseY, partialTick);
+		this.hoveredSlot = -1;
+		for (RaceActionButton button : this.actionButtons) {
+			if (button != null && RaceAbilityState.isUnlocked(button.slot) && button.isMouseOver(mouseX, mouseY)) {
+				this.hoveredSlot = button.slot;
+				break;
+			}
+		}
+	}
+
+	@Override
+	public boolean keyReleased(KeyEvent event) {
+		if (this.minecraft != null && this.minecraft.options.keyQuickActions.matches(event)) {
+			this.finishHoldSelection();
+			return true;
+		}
+		return super.keyReleased(event);
+	}
+
+	private void finishHoldSelection() {
+		if (this.finishingHold) return;
+		this.finishingHold = true;
+		if (this.hoveredSlot >= 0 && RaceAbilityState.isUnlocked(this.hoveredSlot)) {
+			RaceClientControls.useAbility(this.hoveredSlot);
+		}
+		if (this.minecraft != null && this.minecraft.screen == this) {
+			this.minecraft.setScreen(null);
+		}
 	}
 
 	@Override
 	public boolean isPauseScreen() {
 		return false;
-	}
-
-	/**
-	 * The vanilla keyboard handler intentionally stops updating game key mappings
-	 * whenever any screen is open.  This screen only consumes mouse input, so
-	 * forward/back/strafe/jump are mirrored into those mappings explicitly.
-	 */
-	@Override
-	public boolean keyPressed(KeyEvent event) {
-		if (isMovementKey(event)) {
-			KeyMapping.set(InputConstants.getKey(event), true);
-			return false;
-		}
-		return super.keyPressed(event);
-	}
-
-	@Override
-	public boolean keyReleased(KeyEvent event) {
-		if (isMovementKey(event)) {
-			KeyMapping.set(InputConstants.getKey(event), false);
-			return false;
-		}
-		return super.keyReleased(event);
-	}
-
-	private static boolean isMovementKey(KeyEvent event) {
-		var options = Minecraft.getInstance().options;
-		return options.keyUp.matches(event)
-				|| options.keyDown.matches(event)
-				|| options.keyLeft.matches(event)
-				|| options.keyRight.matches(event)
-				|| options.keyJump.matches(event)
-				|| options.keySprint.matches(event);
 	}
 
 	private static final class RaceActionButton extends AbstractWidget {

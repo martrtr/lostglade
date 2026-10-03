@@ -19,7 +19,11 @@ public abstract class MinecraftQuickActionsMixin {
 		}
 		Minecraft client = (Minecraft) (Object) this;
 		while (client.options.keyQuickActions.consumeClick()) {
-			RaceClientControls.openMenu(client);
+			// This is a hold menu, not a toggle. Ignore clicks that were already
+			// released before the client tick reached keybind handling.
+			if (client.options.keyQuickActions.isDown()) {
+				RaceClientControls.openMenu(client);
+			}
 		}
 	}
 }
