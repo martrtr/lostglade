@@ -43,7 +43,12 @@ tar -xzf "${archive_path}" -C "${temporary_dir}"
   echo 'Archive commit does not match requested release.' >&2
   exit 1
 }
-for required in fabric-server-launch.jar server.jar server.properties deploy/msk/run-server.sh; do
+for required in \
+  fabric-server-launch.jar \
+  server.jar \
+  server.properties \
+  deploy/msk/run-server.sh \
+  libraries/net/fabricmc/fabric-loader/0.18.4/fabric-loader-0.18.4.jar; do
   [[ -f "${temporary_dir}/${required}" ]] || { echo "Release lacks ${required}" >&2; exit 1; }
 done
 while IFS= read -r -d '' mod_jar; do

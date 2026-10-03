@@ -29,6 +29,14 @@ for path in eula.txt server.jar fabric-server-launch.jar fabric-server-launcher.
   copy_file "${path}"
 done
 
+# Both Mojang's server JAR and Fabric's thin launcher reference these exact
+# Maven artifacts via their manifests. They are runtime dependencies, not a
+# cache; without them Java cannot even load FabricServerLauncher.
+while IFS= read -r -d '' library; do
+  relative_path="${library#"${repo_dir}/"}"
+  install -D -m 0644 "${library}" "${stage_dir}/${relative_path}"
+done < <(find "${repo_dir}/libraries" -type f -name '*.jar' -print0 | LC_ALL=C sort -z)
+
 # Every top-level JAR is an intentional server mod. The locally built Seamless
 # Frames compatibility JAR contains "lg2" in its *file name*, but is not the
 # Lostglade mod and is intentionally included. Verify the actual Fabric id.
