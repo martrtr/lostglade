@@ -12,9 +12,9 @@
   "hide_nicknames": true,
   "display_self_webcam": true,
   "synced": {
-    "image_dimension": 360,
-    "mtu": 1100,
-    "bitrate": 500
+    "image_dimension": 320,
+    "mtu": 900,
+    "bitrate": 350
   },
   "messages": {
     "incompatible_mod_version": "Incompatible Webcam version. Your - %s, server's - %s"

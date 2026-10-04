@@ -21,7 +21,7 @@ public abstract class PlayerNecromancerEraMiningMixin {
 	)
 	private ItemStack lg2$useNecromancerEraSpeedTool(Inventory inventory, BlockState state) {
 		Player player = (Player) (Object) this;
-		if (player instanceof ServerPlayer serverPlayer) {
+		if (player instanceof ServerPlayer serverPlayer && !NecromancerStockSystem.isActive(serverPlayer)) {
 			ItemStack virtualTool = NecromancerStockSystem.virtualMiningSpeedTool(serverPlayer, state);
 			if (!virtualTool.isEmpty()) return virtualTool;
 		}
@@ -37,7 +37,7 @@ public abstract class PlayerNecromancerEraMiningMixin {
 	)
 	private ItemStack lg2$useNecromancerEraHarvestTool(Inventory inventory, BlockState state) {
 		Player player = (Player) (Object) this;
-		if (player instanceof ServerPlayer serverPlayer) {
+		if (player instanceof ServerPlayer serverPlayer && !NecromancerStockSystem.isActive(serverPlayer)) {
 			ItemStack virtualTool = NecromancerStockSystem.virtualMiningHarvestTool(serverPlayer, state);
 			if (!virtualTool.isEmpty()) return virtualTool;
 		}

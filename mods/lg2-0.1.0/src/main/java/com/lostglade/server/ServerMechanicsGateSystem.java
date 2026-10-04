@@ -78,7 +78,6 @@ public final class ServerMechanicsGateSystem {
 			Blocks.NOTE_BLOCK,
 			Blocks.DAYLIGHT_DETECTOR,
 			Blocks.TARGET,
-			Blocks.TRIPWIRE,
 			Blocks.TRIPWIRE_HOOK,
 			Blocks.HOPPER,
 			Blocks.REDSTONE_LAMP,
@@ -86,7 +85,6 @@ public final class ServerMechanicsGateSystem {
 			Blocks.DETECTOR_RAIL,
 			Blocks.ACTIVATOR_RAIL,
 			Blocks.CRAFTER,
-			Blocks.SCULK_SENSOR,
 			Blocks.CALIBRATED_SCULK_SENSOR
 	);
 	private static final Set<Item> STONE_ERA_ITEMS = Set.of(
@@ -493,7 +491,19 @@ public final class ServerMechanicsGateSystem {
 		if (state == null) {
 			return null;
 		}
-		return requiredUpgradeForBlock(state.getBlock());
+		Block block = state.getBlock();
+		if (block == ModBlocks.CAMERA || block == ModBlocks.MICROPHONE || block == ModBlocks.SPEAKER) {
+			return null;
+		}
+		return requiredUpgradeForBlock(block);
+	}
+
+	public static boolean shouldDropUpgradeLockedDevice(Block block, Entity breaker) {
+		if (!(breaker instanceof ServerPlayer player)) {
+			return true;
+		}
+		String requirement = requiredUpgradeForBlock(block);
+		return requirement == null || ServerUpgradeUiSystem.hasUpgrade(player, requirement);
 	}
 
 	private static String requiredUpgradeForEntityInteraction(Entity entity) {

@@ -115,6 +115,7 @@
 		"PlayerPuroSanOverdriveMixin",
 		"PlayerOrthodoxDefenseMixin",
 		"PortalIgnitionOrthodoxHolinessMixin",
+		"ProjectileMonitorCollisionMixin",
 		"PlayerContainerMenuAccessor",
 		"PlayerListAccountAuthAccessor",
 		"PlayerListAccountAuthMixin",

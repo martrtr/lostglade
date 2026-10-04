@@ -478,7 +478,7 @@ public final class ModBlocks {
 	private static BlockBehaviour.Properties createSpeakerProperties() {
 		return BlockBehaviour.Properties.of()
 				.mapColor(MapColor.COLOR_BLACK)
-				.strength(3.0f, 6.0f)
+				.strength(1.2F, 6.0F)
 				.sound(SoundType.METAL)
 				.noLootTable()
 				.setId(SPEAKER_KEY);
@@ -497,7 +497,7 @@ public final class ModBlocks {
 	private static BlockBehaviour.Properties createCameraProperties() {
 		return BlockBehaviour.Properties.of()
 				.mapColor(MapColor.COLOR_BLACK)
-				.strength(0.8F, 2.0F)
+				.strength(1.2F, 2.0F)
 				.sound(SoundType.METAL)
 				.noOcclusion()
 				.setId(CAMERA_KEY);

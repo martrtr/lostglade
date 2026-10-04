@@ -925,7 +925,9 @@ public final class MonitorScreenSystem {
 		removeDisplays(level, frame.blockPosition(), frame.getDirection());
 		forgetRenderedMapFrame(frame.getItem());
 		frame.setItem(ItemStack.EMPTY, false);
-		frame.spawnAtLocation(level, new ItemStack(ModItems.MONITOR));
+		if (!(breaker instanceof ServerPlayer player) || ServerUpgradeUiSystem.hasUpgrade(player, IT_SCREEN)) {
+			frame.spawnAtLocation(level, new ItemStack(ModItems.MONITOR));
+		}
 		frame.discard();
 		untrackScreenFrame(level, new ScreenKey(framePos, facing), true);
 		if (removedScreenEndpoint != null) {

@@ -5,6 +5,7 @@ import com.lostglade.server.AccountAuthSystem;
 import net.minecraft.network.protocol.common.ServerboundClientInformationPacket;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.network.protocol.game.*;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,6 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /** Rejects movement and state-changing play packets until AccountAuthSystem authorizes the session. */
 @Mixin(value = ServerGamePacketListenerImpl.class, priority = 900)
 public abstract class ServerGamePacketListenerAccountAuthMixin {
+	private static final Identifier WEBCAM_SECRET_REQUEST = Identifier.fromNamespaceAndPath("webcam", "secret_request");
 	@Shadow public ServerPlayer player;
 
 	@Inject(method = "handleMovePlayer", at = @At("HEAD"), cancellable = true)
@@ -129,8 +131,15 @@ public abstract class ServerGamePacketListenerAccountAuthMixin {
 	@Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
 	private void lg2$blockUnauthenticatedCustomPayload(ServerboundCustomPayloadPacket packet, CallbackInfo ci) {
 		if (!AccountAuthSystem.shouldBlockPacket(this.player)) return;
-		if (packet != null && packet.payload() != null
-				&& Lg2Payloads.AuthTokenC2SPayload.TYPE.equals(packet.payload().type())) return;
+		if (packet != null && packet.payload() != null) {
+			var payloadType = packet.payload().type();
+			if (Lg2Payloads.AuthTokenC2SPayload.TYPE.equals(payloadType)
+					|| WEBCAM_SECRET_REQUEST.equals(payloadType.id())) return;
+		}
+		if (AccountAuthSystem.deferVoicechatSecretRequest(this.player, packet)) {
+			ci.cancel();
+			return;
+		}
 		ci.cancel();
 	}
 

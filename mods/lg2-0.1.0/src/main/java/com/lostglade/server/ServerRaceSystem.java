@@ -154,12 +154,14 @@ import net.minecraft.world.entity.MoverType;
 
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.NeutralMob;
+import net.minecraft.world.entity.OwnableEntity;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.PositionMoveRotation;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.animal.camel.Camel;
 import net.minecraft.world.entity.animal.equine.Donkey;
+import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.monster.CrossbowAttackMob;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.monster.RangedAttackMob;
@@ -10393,7 +10395,9 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		if (!(target instanceof ServerPlayer player) || mob == null || getMilkStockAbility(player) == null) {
 			return false;
 		}
-		return isMilkStockAffectedMob(mob) && !isMilkStockRetaliating(mob, player);
+		return isMilkStockAffectedMob(mob)
+				&& !isMilkStockFriendlyMob(mob, player)
+				&& !isMilkStockRetaliating(mob, player);
 	}
 
 	public static void handleMilkStockCombatDamage(ServerLevel level, LivingEntity victim, DamageSource damageSource, float damage, boolean applied) {
@@ -10409,10 +10413,15 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 
 		boolean markedAny = false;
 		for (Mob mob : getMilkStockRetaliationGroup(victim)) {
+			if (isMilkStockFriendlyMob(mob, player)) {
+				continue;
+			}
 			markMilkStockRetaliating(mob, player);
 			markedAny = true;
 		}
-		if (!markedAny && victim instanceof Mob mob && isMilkStockAffectedMob(mob)) {
+		if (!markedAny && victim instanceof Mob mob
+				&& isMilkStockAffectedMob(mob)
+				&& !isMilkStockFriendlyMob(mob, player)) {
 			markMilkStockRetaliating(mob, player);
 		}
 	}
@@ -19991,7 +20000,9 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 					continue;
 				}
 				for (Mob threat : getMilkStockThreatMobs(carrier)) {
-					if (!processedThreats.add(threat.getUUID()) || !threat.isAlive()) {
+					if (!processedThreats.add(threat.getUUID())
+							|| !threat.isAlive()
+							|| isMilkStockFriendlyMob(threat, player)) {
 						continue;
 					}
 					boolean retaliating = isMilkStockRetaliating(threat, player);
@@ -20000,6 +20011,9 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 					}
 					Entity movementBody = getMilkStockMovementBody(threat);
 					if (movementBody == null || !movementBody.isAlive() || movementBody.level() != level) {
+						continue;
+					}
+					if (movementBody instanceof Mob movementMob && isMilkStockFriendlyMob(movementMob, player)) {
 						continue;
 					}
 					double distanceSqr = Math.min(threat.distanceToSqr(player), movementBody.distanceToSqr(player));
@@ -20042,6 +20056,7 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 					|| player.isSpectator()
 					|| mob.level() != player.level()
 					|| getMilkStockAbility(player) == null
+					|| isMilkStockFriendlyMob(mob, player)
 					|| !isMilkStockRetaliationRelevantMob(mob)) {
 				iterator.remove();
 				continue;
@@ -20304,6 +20319,19 @@ private static void tickMilkOligarchStock(MinecraftServer server) {
 				&& !isMilkMouseSilverfish(mob)
 				&& !isMilkStockBoss(mob)
 				&& (mob instanceof Enemy || mob instanceof NeutralMob || mob.getType().getCategory() == MobCategory.MONSTER);
+	}
+
+	private static boolean isMilkStockFriendlyMob(Mob mob, ServerPlayer player) {
+		if (mob == null || player == null) {
+			return false;
+		}
+		if (mob instanceof OwnableEntity ownable && ownable.getRootOwner() == player) {
+			return true;
+		}
+		if (mob instanceof IronGolem ironGolem && ironGolem.isPlayerCreated()) {
+			return true;
+		}
+		return mob.isAlliedTo(player) || player.isAlliedTo(mob);
 	}
 
 	private static boolean isMilkStockBoss(LivingEntity entity) {

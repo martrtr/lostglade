@@ -15,6 +15,8 @@ RestartSec=10
 TimeoutStopSec=45
 LimitNOFILE=1048576
 TasksMax=4096
+CPUQuota=150%
+Nice=10
 
 [Install]
 WantedBy=multi-user.target
