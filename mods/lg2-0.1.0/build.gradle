@@ -21,6 +21,13 @@ def tabJars = fileTree(dir: "${serverRootDir}/mods", include: "TAB*.jar")
 def webcamJars = fileTree(dir: "${serverRootDir}/mods", include: "webcam-fabric-*.jar")
 def skinRestorerNestedLibDir = file("${buildDir}/skinrestorer-libs")
 def skinRestorerJavaClientJars = fileTree(dir: skinRestorerNestedLibDir, include: "java-client-*.jar")
+def voicechatApiDevDir = file("${buildDir}/dev-runtime/voicechat-api")
+def voicechatApiDevJar = file("${voicechatApiDevDir}/voicechat-api-2.6.20.jar")
+def isServerDevRun = gradle.startParameter.taskNames.any { it == "runServer" || it.endsWith(":runServer") }
+def voicechatRuntimeArtifact = configurations.create("voicechatRuntimeArtifact") {
+	canBeConsumed = false
+	canBeResolved = true
+}
 def rendererBotNameProp = providers.systemProperty("lg2.rendererBotName").orElse("RendererBot")
 def rendererBotServerProp = providers.systemProperty("lg2.rendererBotServer").orElse("127.0.0.1:25565")
 def cameraMediaCacheRoot = file("${serverRootDir}/cache/lg2-camera").canonicalFile
@@ -107,8 +114,15 @@ dependencies {
 	// Pin the same stable SVC release used by production. Do not compile or run
 	// clients against the stale top-level mods/ copy; that was the source of a
 	// silent 2.6.12 vs 2.6.22 split between development/client and production.
+	add(voicechatRuntimeArtifact.name, "maven.modrinth:9eGKb6K1:CN53keBo")
 	modCompileOnly "maven.modrinth:9eGKb6K1:CN53keBo"
 	modRuntimeOnly "maven.modrinth:9eGKb6K1:CN53keBo"
+	// Loom strips nested-mod declarations while remapping dependencies for a
+	// development run. vcinteraction needs SVC's nested voicechat_api as a
+	// first-class runtime mod, so expose the extracted API JAR to Loom as well.
+	if (isServerDevRun) {
+		modRuntimeOnly files(voicechatApiDevJar)
+	}
 	modCompileOnly files(webcamJars)
 	modRuntimeOnly files(webcamJars)
 	implementation files(
@@ -117,6 +131,19 @@ dependencies {
 	)
 	runtimeOnly files(skinRestorerJavaClientJars)
 	modRuntimeOnly files("${serverRootDir}/mods/cardinal-components-api-${project.cardinal_components_version}.jar")
+}
+
+// Loom validates runtime mod files while Gradle configures the launch, before
+// any task can run. Materialize the nested API at that point, but only for a
+// local server launch; it remains a disposable build/ artifact.
+if (isServerDevRun && !voicechatApiDevJar.isFile()) {
+	copy {
+		from({ voicechatRuntimeArtifact.files.collect { zipTree(it) } })
+		include("META-INF/jars/voicechat-api-2.6.20.jar")
+		eachFile { it.path = it.name }
+		includeEmptyDirs = false
+		into(voicechatApiDevDir)
+	}
 }
 
 tasks.register("prepareRendererBotClientRunDir", Copy) {

@@ -90,6 +90,7 @@ public final class ServerUpgradeUiSystem {
 	private static final FontDescription TOOLTIP_FONT = new FontDescription.Resource(
 			Objects.requireNonNull(Identifier.tryParse("lg2:upgrade_tooltip"))
 	);
+	private static final String TOOLTIP_ICON_COIN = "\ue981";
 	private static final String NO_PACK_COIN = "₿";
 	private static final int MAIN_BALANCE_CENTER_X = 127;
 	private static final int ERAS_BALANCE_CENTER_X = 129;
@@ -764,7 +765,7 @@ public final class ServerUpgradeUiSystem {
 		Map<String, String> placeholders = buildPlaceholders(viewer, screenId, buttonId, button);
 		stack.set(DataComponents.CUSTOM_NAME, buildTooltipNameComponent(viewer, screenId, buttonId, button, state, placeholders, useCustomTooltip));
 
-		List<Component> loreLines = buildTooltipLore(viewer, button, placeholders, useCustomTooltip);
+		List<Component> loreLines = buildTooltipLore(viewer, button, state, placeholders, useCustomTooltip);
 		if (!loreLines.isEmpty()) {
 			ItemLore lore = ItemLore.EMPTY;
 			for (Component line : loreLines) {
@@ -903,6 +904,7 @@ public final class ServerUpgradeUiSystem {
 	private static List<Component> buildTooltipLore(
 			ServerPlayer viewer,
 			UpgradeUiConfig.ButtonConfig button,
+			ButtonState state,
 			Map<String, String> placeholders,
 			boolean hasPack
 	) {
@@ -926,7 +928,45 @@ public final class ServerUpgradeUiSystem {
 					hasPack
 			));
 		}
+
+		if (UpgradeUiConfig.ButtonType.byId(button.type) == UpgradeUiConfig.ButtonType.PURCHASE_UPGRADE) {
+			if (!description.isEmpty()) {
+				result.add(buildSpacerLine(hasPack));
+			}
+			result.add(buildPriceLine(viewer, button, state, hasPack));
+		}
 		return result;
+	}
+
+	private static Component buildPriceLine(
+			ServerPlayer viewer,
+			UpgradeUiConfig.ButtonConfig button,
+			ButtonState state,
+			boolean hasPack
+	) {
+		if (button.pricesBitcoins == null || button.pricesBitcoins.isEmpty()) {
+			return styledTooltipText("", 0xFFFFFF, false, hasPack);
+		}
+
+		int currentLevel = getUpgradeLevel(viewer, button.upgradeId);
+		int index = Math.max(0, Math.min(button.pricesBitcoins.size() - 1, state == ButtonState.MAXED ? button.pricesBitcoins.size() - 1 : currentLevel));
+		int price = SeasonStartSystem.resolveStartupMenuPrice(viewer, button.upgradeId, button.pricesBitcoins.get(index));
+		boolean affordable = countBitcoins(viewer) >= price;
+		int priceColor = state == ButtonState.MAXED
+				? 0xBFAE89
+				: (affordable ? 0xF0D39B : 0x8E98A3);
+
+		if (!hasPack) {
+			MutableComponent line = Component.empty();
+			line.append(styledTooltipText(NO_PACK_COIN, priceColor, false, false));
+			line.append(styledTooltipText(Integer.toString(price), priceColor, true, false, state == ButtonState.MAXED));
+			return line;
+		}
+
+		MutableComponent line = Component.empty();
+		line.append(styledTooltipText(TOOLTIP_ICON_COIN, 0xFFFFFF, false, true));
+		line.append(styledTooltipText(Integer.toString(price), priceColor, true, true, state == ButtonState.MAXED));
+		return line;
 	}
 
 	private static Component buildTooltipLine(
