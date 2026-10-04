@@ -20,7 +20,7 @@ final class FsitKilkaSalmonBridge {
 		// FSit mounts the seat on the hidden player; viewers need it on the visible fish.
 		for (Entity passenger : java.util.List.copyOf(owner.getPassengers())) {
 			if (passenger instanceof RideEntity) {
-				passenger.startRiding(salmon, true);
+				passenger.startRiding(salmon, true, true);
 			}
 		}
 	}
