@@ -27,6 +27,10 @@ public final class RaceClientControls {
 	}
 
 	public static void register() {
+		// The dedicated renderer has no interactive controls and its stripped runtime may
+		// intentionally omit UI-only mixins such as KeyMappingAccessor.
+		if (Boolean.getBoolean("lg2.rendererBot")) return;
+
 		// ClientModInitializer can run before Minecraft.options exists. Try immediately,
 		// then retry from the client tick until the vanilla binding is actually rewritten.
 		renameVanillaQuickActions(Minecraft.getInstance());
@@ -45,7 +49,7 @@ public final class RaceClientControls {
 		if (client == null || client.options == null || client.options.keyQuickActions == null) return;
 		KeyMapping binding = client.options.keyQuickActions;
 		if ("key.lg2.race_menu".equals(binding.getName()) && CATEGORY.equals(binding.getCategory())) return;
-		KeyMappingAccessor quickActions = (KeyMappingAccessor) binding;
+		if (!(binding instanceof KeyMappingAccessor quickActions)) return;
 		quickActions.lg2$setName("key.lg2.race_menu");
 		quickActions.lg2$setCategory(CATEGORY);
 	}

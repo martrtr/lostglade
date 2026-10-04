@@ -496,12 +496,12 @@ public final class SeasonStartSystem {
 			"guide_route_resume_forward_02",
 			"guide_route_resume_forward_03"
 	};
-	// At the fastest expected rate (10 players x 10 bitcoins/minute), 1,700
-	// offerings keep the shared launch running for 17 minutes.
-	private static final int SHARED_LAUNCH_REQUIRED_BITCOINS = 1_700;
+	// Hotfix: launch target reduced by 20% from 1,700 to 1,360 bitcoins.
+	private static final int SHARED_LAUNCH_REQUIRED_BITCOINS = 1_360;
 	private static final int SHARED_ACTIVE_ORES_PER_PLAYER = 2;
 	private static final int SHARED_LAUNCH_EXTRA_BITCOINS = 10;
 	private static final int SHARED_LAUNCH_SUPPLY_VERSION = 1;
+	private static final long SHARED_ORE_RESPAWN_POSITION_COOLDOWN_TICKS = 20L * 30L;
 	private static final int SHARED_ORE_MIN_Y_OFFSET = 1;
 	private static final int SHARED_ORE_MAX_Y_OFFSET = 4;
 	private static final double SHARED_ORE_SERVER_BUFFER = 4.0D;
@@ -660,6 +660,7 @@ public final class SeasonStartSystem {
 	// itself must not make sand fall or water start flowing across the reveal.
 	private static final Set<Long> WORLD_REVEAL_PLAYER_PHYSICS_POSITIONS = new HashSet<>();
 	private static final Set<BlockPos> SHARED_BITCOIN_POSITIONS = new LinkedHashSet<>();
+	private static final Map<Long, Long> SHARED_BITCOIN_RESPAWN_BLOCKED_UNTIL = new HashMap<>();
 	private static final Set<UUID> SCENE_BUILD_FLOATING_PLAYERS = new HashSet<>();
 	private static final Map<UUID, StartupBiomeOverride> STARTUP_BIOME_OVERRIDES = new HashMap<>();
 	private static final Map<StartupBiomePayloadKey, byte[]> STARTUP_BIOME_PAYLOAD_CACHE = new HashMap<>();
@@ -815,6 +816,14 @@ public final class SeasonStartSystem {
 				rememberWorldRevealPlayerMine(level, pos);
 			}
 			if (state != null && isSharedBitcoinBlock(state)) {
+				// Remove the mined ore from the active index immediately. The shared-stage
+				// population refill runs every tick; without a short per-position cooldown it
+				// can select the exact same coordinate again, which looks like the break was
+				// rolled back in multiplayer. Refill still happens, just at another position.
+				SHARED_BITCOIN_POSITIONS.remove(pos);
+				SHARED_BITCOIN_RESPAWN_BLOCKED_UNTIL.put(
+						pos.asLong(), level.getGameTime() + SHARED_ORE_RESPAWN_POSITION_COOLDOWN_TICKS
+				);
 				restoreStartupLight(level, pos);
 			}
 		});
@@ -7905,6 +7914,8 @@ public final class SeasonStartSystem {
 			migrateSharedBitcoinSupply(level);
 		}
 		pruneSharedBitcoinPositions(level);
+		long nowTick = level.getGameTime();
+		SHARED_BITCOIN_RESPAWN_BLOCKED_UNTIL.entrySet().removeIf(entry -> entry.getValue() <= nowTick);
 		int targetCount = Math.max(0, countSharedPlayers() * SHARED_ACTIVE_ORES_PER_PLAYER);
 		if (targetCount <= 0) {
 			clearSharedBitcoins(level, true);
@@ -8014,6 +8025,10 @@ public final class SeasonStartSystem {
 			return false;
 		}
 		if (SHARED_BITCOIN_POSITIONS.contains(pos) || !isStartupSceneAir(level.getBlockState(pos))) {
+			return false;
+		}
+		Long blockedUntil = SHARED_BITCOIN_RESPAWN_BLOCKED_UNTIL.get(pos.asLong());
+		if (blockedUntil != null && blockedUntil > level.getGameTime()) {
 			return false;
 		}
 		if (isServerStructureFootprint(pos) || isIntroReservedPosition(pos)) {
@@ -9099,7 +9114,13 @@ public final class SeasonStartSystem {
 			difficultyBeforeSeasonStart = parseDifficulty(state.difficultyBeforeSeasonStart);
 			pristineWorldFreeze = PristineWorldFreezeState.fromPersisted(state.pristineWorldFreeze);
 			sharedLaunchCollectedBitcoins = Math.max(0, state.sharedLaunchCollectedBitcoins);
-			sharedLaunchRequiredBitcoins = Math.max(0, state.sharedLaunchRequiredBitcoins);
+			int persistedRequiredBitcoins = Math.max(0, state.sharedLaunchRequiredBitcoins);
+			sharedLaunchRequiredBitcoins = persistedRequiredBitcoins <= 0
+					? 0
+					: Math.min(persistedRequiredBitcoins, SHARED_LAUNCH_REQUIRED_BITCOINS);
+			if (sharedLaunchRequiredBitcoins != persistedRequiredBitcoins) {
+				stateDirty = true;
+			}
 			sharedLaunchBitcoinSpawned = Math.max(0, state.sharedLaunchBitcoinSpawned);
 			sharedLaunchBitcoinSupplyVersion = Math.max(0, state.sharedLaunchBitcoinSupplyVersion);
 			sharedLaunchBitcoinPositionIndexLoaded = false;

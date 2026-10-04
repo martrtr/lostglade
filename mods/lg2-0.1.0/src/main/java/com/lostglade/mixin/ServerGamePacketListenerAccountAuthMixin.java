@@ -131,10 +131,11 @@ public abstract class ServerGamePacketListenerAccountAuthMixin {
 	@Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
 	private void lg2$blockUnauthenticatedCustomPayload(ServerboundCustomPayloadPacket packet, CallbackInfo ci) {
 		if (!AccountAuthSystem.shouldBlockPacket(this.player)) return;
-		if (packet != null && packet.payload() != null
-				&& Lg2Payloads.AuthTokenC2SPayload.TYPE.equals(packet.payload().type())) return;
-		if (packet != null && packet.payload() != null
-				&& WEBCAM_SECRET_REQUEST.equals(packet.payload().type().id())) return;
+		if (packet != null && packet.payload() != null) {
+			var payloadType = packet.payload().type();
+			if (Lg2Payloads.AuthTokenC2SPayload.TYPE.equals(payloadType)
+					|| WEBCAM_SECRET_REQUEST.equals(payloadType.id())) return;
+		}
 		if (AccountAuthSystem.deferVoicechatSecretRequest(this.player, packet)) {
 			ci.cancel();
 			return;

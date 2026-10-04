@@ -1,7 +1,7 @@
 {
   "port": 25454,
   "bind_address": "",
-  "host": "",
+  "host": "31.77.251.51:25454",
   "keep_alive_period": 1000,
   "permission_check_period": 60,
   "max_display_distance": 100.0,
@@ -12,11 +12,11 @@
   "hide_nicknames": true,
   "display_self_webcam": true,
   "synced": {
-    "image_dimension": 360,
-    "mtu": 1100,
-    "bitrate": 500
+    "image_dimension": 320,
+    "mtu": 900,
+    "bitrate": 350
   },
   "messages": {
-    "incompatible_mod_version": "Incompatible Webcam version. Your - %s, server\u0027s - %s"
+    "incompatible_mod_version": "Incompatible Webcam version. Your - %s, server's - %s"
   }
 }

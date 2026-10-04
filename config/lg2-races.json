@@ -49,7 +49,7 @@
       "enabled": true,
       "id": "mister_cartel_49",
       "displayName": "Мистер Картель",
-      "ownerNickname": "",
+      "ownerNickname": "ElbonApart0",
       "description": "Призывает союзников, копирует внешность игроков и производит особые вещества.",
       "attack": {
         "enabled": true,
@@ -112,7 +112,7 @@
       "enabled": true,
       "id": "copper_man",
       "displayName": "Медный Человек",
-      "ownerNickname": "",
+      "ownerNickname": "Demonaje",
       "description": "Сочетает медный организм с технологическими устройствами.",
       "attack": {
         "enabled": true,
@@ -172,7 +172,7 @@
       "enabled": true,
       "id": "no_race",
       "displayName": "Без расы",
-      "ownerNickname": "",
+      "ownerNickname": "Drevanna",
       "description": "",
       "attack": {
         "enabled": true,
@@ -217,7 +217,7 @@
       "enabled": true,
       "id": "woman",
       "displayName": "ЖЕНЩИНА!!!",
-      "ownerNickname": "",
+      "ownerNickname": "MaySora1747",
       "description": "Ослабляет противников и связывает себя с другими игроками.",
       "attack": {
         "enabled": true,
@@ -281,7 +281,7 @@
       "enabled": true,
       "id": "gennadiy_sharoyobov",
       "displayName": "Генадий Шароёбов",
-      "ownerNickname": "",
+      "ownerNickname": "MrMilk",
       "description": "Сражается с помощью турели, ярости и накопленного урона.",
       "attack": {
         "enabled": true,
@@ -347,7 +347,7 @@
       "enabled": true,
       "id": "mark_potroshitel",
       "displayName": "Марк Потрошитель",
-      "ownerNickname": "",
+      "ownerNickname": "MePropertor",
       "description": "Сражается в ближнем бою, восстанавливается от убийств и накапливает гнев.",
       "attack": {
         "enabled": true,
@@ -418,7 +418,7 @@
       "enabled": true,
       "id": "milk_oligarch",
       "displayName": "Молочный Олигарх",
-      "ownerNickname": "",
+      "ownerNickname": "MrMilk888",
       "description": "Избегает прямого боя с помощью уклонений, превращения и личного измерения.",
       "attack": {
         "enabled": true,
@@ -467,7 +467,7 @@
       "enabled": true,
       "id": "little_dictator",
       "displayName": "Маленький Диктатор",
-      "ownerNickname": "",
+      "ownerNickname": "VladimirPutin",
       "description": "Управляет мобами, подавляет игроков и вводит временные указы.",
       "attack": {
         "enabled": true,
@@ -532,7 +532,7 @@
       "enabled": true,
       "id": "kilka",
       "displayName": "Килька",
-      "ownerNickname": "",
+      "ownerNickname": "Rajas_YT",
       "description": "Получает преимущества в воде и штрафы на суше.",
       "attack": {
         "enabled": true,
@@ -651,7 +651,7 @@
       "enabled": true,
       "id": "ancient_ukr",
       "displayName": "Древний укр",
-      "ownerNickname": "",
+      "ownerNickname": "vghnnnn4",
       "description": "Сочетает клинки, дым, поиск ценностей и опасные долги.",
       "attack": {
         "enabled": true,
@@ -710,7 +710,7 @@
       "enabled": true,
       "id": "orthodox",
       "displayName": "Православный",
-      "ownerNickname": "",
+      "ownerNickname": "martrtr",
       "description": "Использует божественные способности, доступность которых зависит от совершённых грехов.",
       "attack": {
         "enabled": true,
@@ -767,7 +767,7 @@
       "enabled": true,
       "id": "necromancer",
       "displayName": "Некромансер",
-      "ownerNickname": "",
+      "ownerNickname": "TinAlex",
       "description": "Использует ману и духа, но имеет мало здоровья и не носит снаряжение.",
       "attack": {
         "enabled": true,
