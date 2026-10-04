@@ -7,6 +7,7 @@ import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 import de.maxhenkel.voicechat.api.events.VoiceDistanceEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStoppedEvent;
+import net.minecraft.server.level.ServerPlayer;
 
 public final class Lg2VoicechatPlugin implements VoicechatPlugin {
 
@@ -23,6 +24,10 @@ public final class Lg2VoicechatPlugin implements VoicechatPlugin {
 	@Override
 	public void registerEvents(EventRegistration registration) {
 		registration.registerEvent(MicrophonePacketEvent.class, event -> {
+			if (shouldSuppressKilkaSalmonVoice(event)) {
+				event.cancel();
+				return;
+			}
 			SeasonStartVoiceSystem.onMicrophonePacket(event);
 			if (event.isCancelled()) {
 				return;
@@ -43,5 +48,13 @@ public final class Lg2VoicechatPlugin implements VoicechatPlugin {
 		registration.registerEvent(VoicechatServerStoppedEvent.class, event ->
 				ServerVoicechatIntegration.setServerApi(null)
 		);
+	}
+
+	private static boolean shouldSuppressKilkaSalmonVoice(MicrophonePacketEvent event) {
+		if (event == null || event.getSenderConnection() == null || event.getSenderConnection().getPlayer() == null) {
+			return false;
+		}
+		Object rawPlayer = event.getSenderConnection().getPlayer().getPlayer();
+		return rawPlayer instanceof ServerPlayer player && ServerRaceSystem.shouldMuteKilkaSalmonVoice(player);
 	}
 }

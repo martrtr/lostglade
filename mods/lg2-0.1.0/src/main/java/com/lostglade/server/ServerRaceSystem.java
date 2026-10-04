@@ -16675,6 +16675,13 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		return player != null && KILKA_SALMON_FORMS.containsKey(player.getUUID());
 	}
 
+	/** The owner of the Kilka salmon form cannot speak through Simple Voice Chat. */
+	public static boolean shouldMuteKilkaSalmonVoice(ServerPlayer player) {
+		return isKilkaSalmonForm(player)
+				&& player.getGameProfile() != null
+				&& "Rajas_YT".equalsIgnoreCase(player.getGameProfile().name());
+	}
+
 	public static boolean shouldSuppressKilkaSalmonMobDetection(Mob mob, LivingEntity target) {
 		if (!(target instanceof ServerPlayer player) || mob == null || !isKilkaSalmonForm(player)) {
 			return false;

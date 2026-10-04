@@ -485,8 +485,8 @@ public final class UpgradeUiConfig {
 					List.of(4, 8, 12),
 					LocalizedText.of("Stability Buffer", "Буфер стабильности"),
 					LocalizedLines.of(
-							List.of("Smooths server hiccups.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Сглаживает сбои сервера.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Smooths server hiccups."),
+							List.of("Сглаживает сбои сервера.")
 					),
 					IconConfig.upgrade()
 			));
@@ -521,8 +521,8 @@ public final class UpgradeUiConfig {
 					List.of(3, 6, 12, 18),
 					LocalizedText.of("Cooling", "Охлаждение"),
 					LocalizedLines.of(
-							List.of("Reduces thermal failures.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Снижает термические сбои.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Reduces thermal failures."),
+							List.of("Снижает термические сбои.")
 					),
 					IconConfig.upgrade()
 			));
@@ -532,8 +532,8 @@ public final class UpgradeUiConfig {
 					List.of(5, 9, 15),
 					LocalizedText.of("Data Bus", "Шина данных"),
 					LocalizedLines.of(
-							List.of("Opens room for future upgrades.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Открывает место под будущие апгрейды.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Opens room for future upgrades."),
+							List.of("Открывает место под будущие апгрейды.")
 					),
 					IconConfig.upgrade()
 			));
@@ -543,8 +543,8 @@ public final class UpgradeUiConfig {
 					List.of(6, 10, 16),
 					LocalizedText.of("Routing", "Маршрутизация"),
 					LocalizedLines.of(
-							List.of("Better internal traffic handling.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Лучше обрабатывает внутренний трафик.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Better internal traffic handling."),
+							List.of("Лучше обрабатывает внутренний трафик.")
 					),
 					IconConfig.upgrade()
 			));
@@ -561,8 +561,8 @@ public final class UpgradeUiConfig {
 					List.of(8, 16, 24, 40, 64),
 					LocalizedText.of("AI Core", "ИИ-ядро"),
 					LocalizedLines.of(
-							List.of("Example of a 5-row upgrade tree.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Пример дерева апгрейдов на 5 рядов.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Example of a 5-row upgrade tree."),
+							List.of("Пример дерева апгрейдов на 5 рядов.")
 					),
 					IconConfig.upgrade()
 			));
@@ -572,8 +572,8 @@ public final class UpgradeUiConfig {
 					List.of(6, 12, 18, 30),
 					LocalizedText.of("Buffering", "Буферизация"),
 					LocalizedLines.of(
-							List.of("Stores more server operations.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Хранит больше операций сервера.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Stores more server operations."),
+							List.of("Хранит больше операций сервера.")
 					),
 					IconConfig.upgrade()
 			));
@@ -583,8 +583,8 @@ public final class UpgradeUiConfig {
 					List.of(7, 14, 28),
 					LocalizedText.of("Clock Sync", "Синхронизация тактов"),
 					LocalizedLines.of(
-							List.of("Stabilizes timing-sensitive systems.", "Level: %level%/%max_level%", "Cost: %cost% BTC"),
-							List.of("Стабилизирует системы, чувствительные ко времени.", "Уровень: %level%/%max_level%", "Цена: %cost% BTC")
+							List.of("Stabilizes timing-sensitive systems."),
+							List.of("Стабилизирует системы, чувствительные ко времени.")
 					),
 					IconConfig.upgrade()
 			));

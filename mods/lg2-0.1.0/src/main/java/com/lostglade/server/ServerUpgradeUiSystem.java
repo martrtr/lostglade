@@ -90,7 +90,6 @@ public final class ServerUpgradeUiSystem {
 	private static final FontDescription TOOLTIP_FONT = new FontDescription.Resource(
 			Objects.requireNonNull(Identifier.tryParse("lg2:upgrade_tooltip"))
 	);
-	private static final String TOOLTIP_ICON_COIN = "\ue981";
 	private static final String NO_PACK_COIN = "₿";
 	private static final int MAIN_BALANCE_CENTER_X = 127;
 	private static final int ERAS_BALANCE_CENTER_X = 129;
@@ -762,10 +761,10 @@ public final class ServerUpgradeUiSystem {
 				: resolveButtonIcon(viewer, screenId, buttonId, button, state, hasPack);
 
 		ItemStack stack = createBaseStack(icon, hasPack);
-		Map<String, String> placeholders = buildPlaceholders(viewer, screenId, buttonId, button, state);
+		Map<String, String> placeholders = buildPlaceholders(viewer, screenId, buttonId, button);
 		stack.set(DataComponents.CUSTOM_NAME, buildTooltipNameComponent(viewer, screenId, buttonId, button, state, placeholders, useCustomTooltip));
 
-		List<Component> loreLines = buildTooltipLore(viewer, button, state, placeholders, useCustomTooltip);
+		List<Component> loreLines = buildTooltipLore(viewer, button, placeholders, useCustomTooltip);
 		if (!loreLines.isEmpty()) {
 			ItemLore lore = ItemLore.EMPTY;
 			for (Component line : loreLines) {
@@ -904,13 +903,12 @@ public final class ServerUpgradeUiSystem {
 	private static List<Component> buildTooltipLore(
 			ServerPlayer viewer,
 			UpgradeUiConfig.ButtonConfig button,
-			ButtonState state,
 			Map<String, String> placeholders,
 			boolean hasPack
 	) {
 		List<Component> result = new ArrayList<>();
 		List<String> description = compactLocalizedLines(
-				resolveLocalizedLines(viewer, button.lore.values),
+				staticDescriptionLines(resolveLocalizedLines(viewer, button.lore.values)),
 				placeholders,
 				tooltipWrapWidth(viewer, TOOLTIP_DESCRIPTION_WRAP, TOOLTIP_DESCRIPTION_WRAP_CJK),
 				TOOLTIP_DESCRIPTION_MAX_LINES
@@ -928,50 +926,7 @@ public final class ServerUpgradeUiSystem {
 					hasPack
 			));
 		}
-
-		UpgradeUiConfig.ButtonType type = UpgradeUiConfig.ButtonType.byId(button.type);
-		if (type == UpgradeUiConfig.ButtonType.NONE) {
-			return result;
-		}
-
-		if (type == UpgradeUiConfig.ButtonType.PURCHASE_UPGRADE) {
-			if (!description.isEmpty()) {
-				result.add(buildSpacerLine(hasPack));
-			}
-			result.add(buildPriceLine(viewer, button, state, hasPack));
-		}
 		return result;
-	}
-
-	private static Component buildPriceLine(
-			ServerPlayer viewer,
-			UpgradeUiConfig.ButtonConfig button,
-			ButtonState state,
-			boolean hasPack
-	) {
-		if (button.pricesBitcoins == null || button.pricesBitcoins.isEmpty()) {
-			return styledTooltipText("", 0xFFFFFF, false, hasPack);
-		}
-
-		int currentLevel = getUpgradeLevel(viewer, button.upgradeId);
-		int index = Math.max(0, Math.min(button.pricesBitcoins.size() - 1, state == ButtonState.MAXED ? button.pricesBitcoins.size() - 1 : currentLevel));
-		int price = SeasonStartSystem.resolveStartupMenuPrice(viewer, button.upgradeId, button.pricesBitcoins.get(index));
-		boolean affordable = countBitcoins(viewer) >= price;
-		int priceColor = state == ButtonState.MAXED
-				? 0xBFAE89
-				: (affordable ? 0xF0D39B : 0x8E98A3);
-
-		if (!hasPack) {
-			MutableComponent line = Component.empty();
-			line.append(styledTooltipText(NO_PACK_COIN, priceColor, false, false));
-			line.append(styledTooltipText(Integer.toString(price), priceColor, true, false, state == ButtonState.MAXED));
-			return line;
-		}
-
-		MutableComponent line = Component.empty();
-		line.append(styledTooltipText(TOOLTIP_ICON_COIN, 0xFFFFFF, false, true));
-		line.append(styledTooltipText(Integer.toString(price), priceColor, true, true, state == ButtonState.MAXED));
-		return line;
 	}
 
 	private static Component buildTooltipLine(
@@ -1026,6 +981,50 @@ public final class ServerUpgradeUiSystem {
 			return List.of();
 		}
 		return wrapText(String.join(" ", cleaned), wrapWidth, maxLines);
+	}
+
+	/**
+	 * The card artwork is the sole presentation of live upgrade state.  Lore is
+	 * deliberately restricted to a timeless description, including for older
+	 * server configs that still contain the former status rows.
+	 */
+	private static List<String> staticDescriptionLines(List<String> lines) {
+		if (lines == null || lines.isEmpty()) {
+			return List.of();
+		}
+		List<String> staticLines = new ArrayList<>();
+		for (String line : lines) {
+			if (!isDynamicDescriptionLine(line)) {
+				staticLines.add(line);
+			}
+		}
+		return staticLines;
+	}
+
+	private static boolean isDynamicDescriptionLine(String line) {
+		String normalized = safeString(line).trim().toLowerCase(Locale.ROOT);
+		if (normalized.contains("%level%")
+				|| normalized.contains("%next_level%")
+				|| normalized.contains("%max_level%")
+				|| normalized.contains("%cost%")
+				|| normalized.contains("%bitcoins%")
+				|| normalized.contains("%status%")) {
+			return true;
+		}
+		return startsWithAny(normalized,
+				"level:", "next level:", "max level:", "cost:", "price:", "balance:", "bitcoins:", "status:",
+				"уровень:", "следующий уровень:", "максимальный уровень:", "цена:", "стоимость:", "баланс:", "биткоины:", "статус:",
+				"рівень:", "наступний рівень:", "максимальний рівень:", "ціна:", "вартість:", "баланс:", "біткоїни:", "стан:",
+				"レベル:", "次のレベル:", "最大レベル:", "コスト:", "価格:", "残高:", "ステータス:");
+	}
+
+	private static boolean startsWithAny(String value, String... prefixes) {
+		for (String prefix : prefixes) {
+			if (value.startsWith(prefix)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static List<String> wrapText(String text, int maxWidth, int maxLines) {
@@ -1232,8 +1231,7 @@ public final class ServerUpgradeUiSystem {
 			ServerPlayer player,
 			String screenId,
 			String buttonId,
-			UpgradeUiConfig.ButtonConfig button,
-			ButtonState state
+			UpgradeUiConfig.ButtonConfig button
 	) {
 		Map<String, String> placeholders = new LinkedHashMap<>();
 		int currentLevel = getUpgradeLevel(player, button.upgradeId);
@@ -1250,7 +1248,6 @@ public final class ServerUpgradeUiSystem {
 		placeholders.put("%max_level%", Integer.toString(maxLevel));
 		placeholders.put("%cost%", Integer.toString(cost));
 		placeholders.put("%bitcoins%", Integer.toString(bitcoins));
-		placeholders.put("%status%", getLocalizedStatus(player, state, cost, bitcoins));
 		return placeholders;
 	}
 
@@ -2473,38 +2470,6 @@ public final class ServerUpgradeUiSystem {
 			return "en_us";
 		}
 		return player.clientInformation().language().toLowerCase(Locale.ROOT);
-	}
-
-	private static String getLocalizedStatus(ServerPlayer player, ButtonState state, int cost, int bitcoins) {
-		String locale = normalizeLocale(player);
-		if (locale.startsWith("rpr")) {
-			return switch (state) {
-				case LOCKED -> "Подъ замкомъ";
-				case MAXED -> "До предѣла";
-				case ACTIVE -> cost > bitcoins ? "Монѣтъ недостаётъ" : "Можно взять";
-			};
-		}
-		if (locale.startsWith("uk")) {
-			return switch (state) {
-				case LOCKED -> "Заблоковано";
-				case MAXED -> "Максимум";
-				case ACTIVE -> cost > bitcoins ? "Недостатньо біткоїнів" : "Можна купити";
-			};
-		}
-		if (locale.startsWith("ja")) {
-			return switch (state) {
-				case LOCKED -> "ロック中";
-				case MAXED -> "最大";
-				case ACTIVE -> cost > bitcoins ? "ビットコイン不足" : "購入可能";
-			};
-		}
-		return switch (state) {
-			case LOCKED -> localizeSystem(player, "Locked", "Заблокировано");
-			case MAXED -> localizeSystem(player, "Maxed", "Максимум");
-			case ACTIVE -> cost > bitcoins
-					? localizeSystem(player, "Not enough bitcoins", "Недостаточно биткоинов")
-					: localizeSystem(player, "Ready to purchase", "Можно купить");
-		};
 	}
 
 	private static String localizeTooltip(

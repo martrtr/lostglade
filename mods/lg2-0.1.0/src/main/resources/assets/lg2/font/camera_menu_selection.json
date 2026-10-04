@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {
+      "type": "bitmap",
+      "file": "lg2:font/camera_menu_selection.png",
+      "ascent": 13,
+      "height": 222,
+      "chars": [
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "type": "reference",
+      "id": "minecraft:default"
+    }
+  ]
+}

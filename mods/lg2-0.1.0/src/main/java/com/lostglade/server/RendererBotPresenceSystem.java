@@ -11,6 +11,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket;
 import net.minecraft.network.protocol.status.ServerStatus;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.ServerScoreboard;
@@ -21,6 +22,7 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.scores.Scoreboard;
 import net.minecraft.world.scores.Team;
 
 import java.net.InetAddress;
@@ -37,6 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class RendererBotPresenceSystem {
 	private static final String HIDDEN_TEAM_NAME = "lg2_renderer_bot_hidden";
+	private static final String CAMERA_NAME_TAG_TEAM = "lg2_cam_hidden";
 	private static final int EFFECT_REFRESH_THRESHOLD_TICKS = 80;
 	private static final int EFFECT_DURATION_TICKS = 220;
 	private static final Set<UUID> ONLINE_BOT_IDS = ConcurrentHashMap.newKeySet();
@@ -58,12 +61,14 @@ public final class RendererBotPresenceSystem {
 				ONLINE_BOT_IDS.add(player.getUUID());
 				enforceBotState(player);
 			}
+			syncHiddenNameTagsForRenderer(server);
 		}));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> ONLINE_BOT_IDS.remove(handler.player.getUUID()));
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
 			if (isRendererBot(newPlayer)) {
 				ONLINE_BOT_IDS.add(newPlayer.getUUID());
 				enforceBotState(newPlayer);
+				syncHiddenNameTagsForRenderer(newPlayer.level().getServer());
 			}
 		});
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
@@ -171,6 +176,37 @@ public final class RendererBotPresenceSystem {
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (isRendererBot(player)) {
 				enforceBotState(player);
+			}
+		}
+		syncHiddenNameTagsForRenderer(server);
+	}
+
+	/**
+	 * Photo and video rendering happens on a real Minecraft client. Send this
+	 * team only to that client, so player name tags are absent from captures
+	 * without changing what ordinary players see in the world.
+	 */
+	private static void syncHiddenNameTagsForRenderer(MinecraftServer server) {
+		if (server == null || ONLINE_BOT_IDS.isEmpty()) {
+			return;
+		}
+
+		PlayerTeam hiddenNames = new PlayerTeam(new Scoreboard(), CAMERA_NAME_TAG_TEAM);
+		hiddenNames.setDisplayName(Component.empty());
+		hiddenNames.setPlayerPrefix(Component.empty());
+		hiddenNames.setPlayerSuffix(Component.empty());
+		hiddenNames.setNameTagVisibility(Team.Visibility.NEVER);
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			String playerName = player.getScoreboardName();
+			if (playerName != null && !playerName.isBlank()) {
+				hiddenNames.getPlayers().add(playerName);
+			}
+		}
+
+		ClientboundSetPlayerTeamPacket packet = ClientboundSetPlayerTeamPacket.createAddOrModifyPacket(hiddenNames, true);
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (isRendererBot(player) && player.connection != null) {
+				player.connection.send(packet);
 			}
 		}
 	}

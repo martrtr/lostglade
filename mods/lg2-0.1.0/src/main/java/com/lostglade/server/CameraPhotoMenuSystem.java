@@ -31,7 +31,6 @@ import xyz.nucleoid.packettweaker.PacketContext;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.OptionalInt;
 
@@ -47,14 +46,22 @@ public final class CameraPhotoMenuSystem {
 	private static final String TITLE_RESET = "\ue940\ue940\ue941\ue943";
 	private static final String CAMERA_PANEL_PHOTO_GLYPH = "\uebf0";
 	private static final String CAMERA_PANEL_VIDEO_GLYPH = "\uebf1";
-	private static final int CAMERA_SIZE_CENTER_X = 139;
-	private static final int CAMERA_TOTAL_CENTER_X = 164;
+	private static final int CAMERA_SELECTION_GLYPH_START = 0xebf2;
+	// The panel glyph's 174px painted width has a 175px Minecraft advance.
+	private static final int CAMERA_PANEL_GLYPH_ADVANCE = 175;
+	// The title pen rests 7px into the panel after its glyph. These anchors put
+	// the size inside the brass display and the total inside its round counter.
+	private static final int CAMERA_SIZE_CENTER_X = 128;
+	private static final int CAMERA_TOTAL_CENTER_X = 153;
 	private static final Identifier INVISIBLE_BUTTON_MODEL = Objects.requireNonNull(Identifier.tryParse("lg2:gui/button/invisible"));
 	private static final FontDescription CAMERA_PANEL_FONT = new FontDescription.Resource(
 			Objects.requireNonNull(Identifier.tryParse("lg2:camera_menu_panel"))
 	);
 	private static final FontDescription CAMERA_SIZE_FONT = new FontDescription.Resource(
 			Objects.requireNonNull(Identifier.tryParse("lg2:camera_menu_size"))
+	);
+	private static final FontDescription CAMERA_SELECTION_FONT = new FontDescription.Resource(
+			Objects.requireNonNull(Identifier.tryParse("lg2:camera_menu_selection"))
 	);
 	private static final FontDescription CAMERA_TOTAL_FONT = new FontDescription.Resource(
 			Objects.requireNonNull(Identifier.tryParse("lg2:camera_menu_count"))
@@ -83,14 +90,12 @@ public final class CameraPhotoMenuSystem {
 	}
 
 	private static Component menuTitle(ServerPlayer player, CameraPhotoSettings settings) {
-		Component plainTitle = plainMenuTitle(player);
 		if (player == null || !PolymerResourcePackUtils.hasMainPack(player) || settings == null) {
-			return plainTitle;
+			return Component.empty();
 		}
 
 		String sizeText = settings.mapsWide() + "x" + settings.mapsHigh();
 		String totalText = Integer.toString(settings.totalMaps());
-		int titleWidth = plainTitle.getString().length() * 6;
 		int sizeWidth = sizeText.length() * 6;
 		int totalWidth = totalText.length() * 6;
 		int sizeStartX = CAMERA_SIZE_CENTER_X - sizeWidth / 2;
@@ -99,14 +104,16 @@ public final class CameraPhotoMenuSystem {
 		MutableComponent title = Component.empty();
 		title.append(defaultStyled(TITLE_SHIFT));
 		title.append(Component.literal(panelGlyph(settings)).withStyle(style -> style.withColor(0xFFFFFF).withItalic(false).withFont(CAMERA_PANEL_FONT)));
+		title.append(defaultStyled(buildHorizontalAdvance(-CAMERA_PANEL_GLYPH_ADVANCE)));
+		title.append(Component.literal(selectionGlyph(settings))
+				.withStyle(style -> style.withColor(0xFFFFFF).withItalic(false).withFont(CAMERA_SELECTION_FONT)));
 		title.append(defaultStyled(TITLE_RESET));
-		title.append(plainTitle.copy().withStyle(style -> style.withColor(0xD0C4A7).withItalic(false)));
-		title.append(defaultStyled(buildHorizontalAdvance(sizeStartX - titleWidth)));
+		title.append(defaultStyled(buildHorizontalAdvance(sizeStartX)));
 		title.append(Component.literal(sizeText)
 				.withStyle(style -> style.withColor(0x1A1A1A).withItalic(false).withFont(CAMERA_SIZE_FONT)));
 		title.append(defaultStyled(buildHorizontalAdvance(totalStartX - sizeStartX - sizeWidth)));
 		title.append(Component.literal(totalText)
-				.withStyle(style -> style.withColor(0xD2C39A).withItalic(false).withFont(CAMERA_TOTAL_FONT)));
+				.withStyle(style -> style.withColor(0x1A1A1A).withItalic(false).withFont(CAMERA_TOTAL_FONT)));
 		return title;
 	}
 
@@ -116,77 +123,15 @@ public final class CameraPhotoMenuSystem {
 				: CAMERA_PANEL_PHOTO_GLYPH;
 	}
 
-	private static Component plainMenuTitle(ServerPlayer player) {
-		String locale = locale(player);
-		if (locale.startsWith("rpr")) {
-			return literal("Размеръ снимка");
-		}
-		if (locale.startsWith("uk")) {
-			return literal("Розмір знімка");
-		}
-		if (locale.startsWith("ja")) {
-			return literal("写真サイズ");
-		}
-		if (locale.startsWith("ru")) {
-			return literal("Размер снимка");
-		}
-		return literal("Photo Size");
-	}
-
-	private static Component currentSizeLabel(ServerPlayer player, CameraPhotoSettings settings) {
-		String size = settings.mapsWide() + " x " + settings.mapsHigh();
-		String total = Integer.toString(settings.totalMaps());
-		String locale = locale(player);
-		if (locale.startsWith("rpr")) {
-			return literal("Текущiй размеръ: " + size + " (" + total + ")");
-		}
-		if (locale.startsWith("uk")) {
-			return literal("Поточний розмір: " + size + " (" + total + ")");
-		}
-		if (locale.startsWith("ja")) {
-			return literal("現在: " + size + " (" + total + "枚)");
-		}
-		if (locale.startsWith("ru")) {
-			return literal("Текущий размер: " + size + " (" + total + ")");
-		}
-		return literal("Current size: " + size + " (" + total + ")");
-	}
-
-	private static Component helpLabel(ServerPlayer player) {
-		String locale = locale(player);
-		if (locale.startsWith("rpr")) {
-			return literal("Нажми ячейку сетки");
-		}
-		if (locale.startsWith("uk")) {
-			return literal("Натисни клітинку сітки");
-		}
-		if (locale.startsWith("ja")) {
-			return literal("グリッドをクリック");
-		}
-		if (locale.startsWith("ru")) {
-			return literal("Нажми ячейку сетки");
-		}
-		return literal("Click a grid cell");
-	}
-
-	private static String locale(ServerPlayer player) {
-		if (player == null || player.clientInformation() == null || player.clientInformation().language() == null) {
-			return "en_us";
-		}
-		return player.clientInformation().language().toLowerCase(Locale.ROOT);
-	}
-
-	private static Component literal(String value) {
-		return Component.literal(value).withStyle(style -> style.withItalic(false));
+	private static String selectionGlyph(CameraPhotoSettings settings) {
+		int mapsWide = settings == null ? 1 : settings.mapsWide();
+		int mapsHigh = settings == null ? 1 : settings.mapsHigh();
+		int index = (mapsHigh - 1) * GRID_COLUMNS + (mapsWide - 1);
+		return Character.toString(CAMERA_SELECTION_GLYPH_START + index);
 	}
 
 	private static MutableComponent defaultStyled(String value) {
 		return Component.literal(value).withStyle(style -> style.withColor(0xFFFFFF).withItalic(false));
-	}
-
-	private static ItemStack named(ItemStack stack, Component name) {
-		stack.set(DataComponents.CUSTOM_NAME, name);
-		return stack;
 	}
 
 	private static ItemStack invisibleGuiStack() {
@@ -304,16 +249,8 @@ public final class CameraPhotoMenuSystem {
 				this.container.setItem(slot, ItemStack.EMPTY);
 			}
 
-			for (int row = 0; row < GRID_ROWS; row++) {
-				for (int column = 0; column < GRID_COLUMNS; column++) {
-					boolean selected = column < settings.mapsWide() && row < settings.mapsHigh();
-					ItemStack visual = named(
-							new ItemStack(selected ? Items.LIME_STAINED_GLASS_PANE : Items.GRAY_STAINED_GLASS_PANE),
-							literal((column + 1) + " x " + (row + 1))
-					);
-					this.container.setItem(row * MENU_COLUMNS + column, visual);
-				}
-			}
+			// The size grid is drawn by the custom-font frame in the title. Keeping its
+			// slots empty makes the cells click targets rather than virtual items.
 
 			this.container.setItem(MODE_SLOT_LEFT, invisibleGuiStack());
 			this.container.setItem(MODE_SLOT_RIGHT, invisibleGuiStack());
