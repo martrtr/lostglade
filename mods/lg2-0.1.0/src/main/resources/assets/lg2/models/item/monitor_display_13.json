@@ -1,194 +1,194 @@
 {
-  "gui_light": "front",
-  "textures": {
-    "shell": "minecraft:block/gray_concrete",
-    "bezel": "minecraft:block/black_concrete",
-    "particle": "minecraft:block/black_concrete"
-  },
-  "display": {
-    "thirdperson_righthand": {
-      "rotation": [
-        75,
-        45,
-        0
-      ],
-      "translation": [
-        0,
-        2,
-        1
-      ],
-      "scale": [
-        0.55,
-        0.55,
-        0.55
-      ]
-    },
-    "thirdperson_lefthand": {
-      "rotation": [
-        75,
-        225,
-        0
-      ],
-      "translation": [
-        0,
-        2,
-        1
-      ],
-      "scale": [
-        0.55,
-        0.55,
-        0.55
-      ]
-    },
-    "firstperson_righthand": {
-      "rotation": [
-        0,
-        45,
-        0
-      ],
-      "translation": [
-        1.13,
-        3.2,
-        1.13
-      ],
-      "scale": [
-        0.68,
-        0.68,
-        0.68
-      ]
-    },
-    "firstperson_lefthand": {
-      "rotation": [
-        0,
-        225,
-        0
-      ],
-      "translation": [
-        1.13,
-        3.2,
-        1.13
-      ],
-      "scale": [
-        0.68,
-        0.68,
-        0.68
-      ]
-    },
-    "gui": {
-      "rotation": [
-        22,
-        225,
-        0
-      ],
-      "translation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        0.95,
-        0.95,
-        0.95
-      ]
-    },
-    "ground": {
-      "translation": [
-        0,
-        3,
-        0
-      ],
-      "scale": [
-        0.5,
-        0.5,
-        0.5
-      ]
-    },
-    "fixed": {
-      "rotation": [
-        0,
-        0,
-        0
-      ],
-      "translation": [
-        0,
-        0,
-        0
-      ],
-      "scale": [
-        1,
-        1,
-        1
-      ]
-    }
-  },
-  "elements": [
-    {
-      "from": [
-        15.25,
-        -0.75,
-        7.45
-      ],
-      "to": [
-        16.0,
-        16.75,
-        8.1
-      ],
-      "faces": {
-        "north": {
-          "uv": [
-            0,
-            0,
-            16,
-            16
-          ],
-          "texture": "#bezel"
-        },
-        "south": {
-          "uv": [
-            0,
-            0,
-            16,
-            16
-          ],
-          "texture": "#shell"
-        },
-        "east": {
-          "uv": [
-            0,
-            0,
-            16,
-            16
-          ],
-          "texture": "#shell"
-        },
-        "west": {
-          "uv": [
-            0,
-            0,
-            16,
-            16
-          ],
-          "texture": "#shell"
-        },
-        "up": {
-          "uv": [
-            0,
-            0,
-            16,
-            16
-          ],
-          "texture": "#shell"
-        },
-        "down": {
-          "uv": [
-            0,
-            0,
-            16,
-            16
-          ],
-          "texture": "#shell"
-        }
-      }
-    }
-  ]
+    "gui_light":  "front",
+    "textures":  {
+                     "front":  "lg2:item/monitor_frame",
+                     "shell":  "lg2:item/monitor_shell",
+                     "particle":  "lg2:item/monitor_shell"
+                 },
+    "display":  {
+                    "thirdperson_righthand":  {
+                                                  "rotation":  [
+                                                                   75,
+                                                                   45,
+                                                                   0
+                                                               ],
+                                                  "translation":  [
+                                                                      0,
+                                                                      2,
+                                                                      1
+                                                                  ],
+                                                  "scale":  [
+                                                                0.55,
+                                                                0.55,
+                                                                0.55
+                                                            ]
+                                              },
+                    "thirdperson_lefthand":  {
+                                                 "rotation":  [
+                                                                  75,
+                                                                  225,
+                                                                  0
+                                                              ],
+                                                 "translation":  [
+                                                                     0,
+                                                                     2,
+                                                                     1
+                                                                 ],
+                                                 "scale":  [
+                                                               0.55,
+                                                               0.55,
+                                                               0.55
+                                                           ]
+                                             },
+                    "firstperson_righthand":  {
+                                                  "rotation":  [
+                                                                   0,
+                                                                   45,
+                                                                   0
+                                                               ],
+                                                  "translation":  [
+                                                                      1.13,
+                                                                      3.2,
+                                                                      1.13
+                                                                  ],
+                                                  "scale":  [
+                                                                0.68,
+                                                                0.68,
+                                                                0.68
+                                                            ]
+                                              },
+                    "firstperson_lefthand":  {
+                                                 "rotation":  [
+                                                                  0,
+                                                                  225,
+                                                                  0
+                                                              ],
+                                                 "translation":  [
+                                                                     1.13,
+                                                                     3.2,
+                                                                     1.13
+                                                                 ],
+                                                 "scale":  [
+                                                               0.68,
+                                                               0.68,
+                                                               0.68
+                                                           ]
+                                             },
+                    "gui":  {
+                                "rotation":  [
+                                                 0,
+                                                 0,
+                                                 0
+                                             ],
+                                "translation":  [
+                                                    0,
+                                                    0,
+                                                    0
+                                                ],
+                                "scale":  [
+                                              0.95,
+                                              0.95,
+                                              0.95
+                                          ]
+                            },
+                    "ground":  {
+                                   "translation":  [
+                                                       0,
+                                                       3,
+                                                       0
+                                                   ],
+                                   "scale":  [
+                                                 0.5,
+                                                 0.5,
+                                                 0.5
+                                             ]
+                               },
+                    "fixed":  {
+                                  "rotation":  [
+                                                   0,
+                                                   0,
+                                                   0
+                                               ],
+                                  "translation":  [
+                                                      0,
+                                                      0,
+                                                      0
+                                                  ],
+                                  "scale":  [
+                                                1,
+                                                1,
+                                                1
+                                            ]
+                              }
+                },
+    "elements":  [
+                     {
+                         "from":  [
+                                      15,
+                                      0,
+                                      7
+                                  ],
+                         "to":  [
+                                    16,
+                                    16,
+                                    8
+                                ],
+                         "faces":  {
+                                       "north":  {
+                                                     "uv":  [
+                                                                0,
+                                                                0,
+                                                                1,
+                                                                16
+                                                            ],
+                                                     "texture":  "#front"
+                                                 },
+                                       "south":  {
+                                                     "uv":  [
+                                                                15,
+                                                                0,
+                                                                16,
+                                                                16
+                                                            ],
+                                                     "texture":  "#front"
+                                                 },
+                                       "east":  {
+                                                    "uv":  [
+                                                               7,
+                                                               0,
+                                                               8,
+                                                               16
+                                                           ],
+                                                    "texture":  "#shell"
+                                                },
+                                       "west":  {
+                                                    "uv":  [
+                                                               7,
+                                                               0,
+                                                               8,
+                                                               16
+                                                           ],
+                                                    "texture":  "#shell"
+                                                },
+                                       "up":  {
+                                                  "uv":  [
+                                                             15,
+                                                             7,
+                                                             16,
+                                                             8
+                                                         ],
+                                                  "texture":  "#shell"
+                                              },
+                                       "down":  {
+                                                    "uv":  [
+                                                               15,
+                                                               7,
+                                                               16,
+                                                               8
+                                                           ],
+                                                    "texture":  "#shell"
+                                                }
+                                   }
+                     }
+                 ]
 }

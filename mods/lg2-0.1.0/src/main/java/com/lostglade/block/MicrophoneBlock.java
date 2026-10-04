@@ -5,6 +5,7 @@ import com.lostglade.server.BluetoothLinkSystem;
 import com.lostglade.server.PlacedDeviceNameStore;
 import com.lostglade.server.RocketLaunchEventSystem;
 import com.lostglade.server.ServerSelectionHighlightSystem;
+import com.lostglade.server.ServerMechanicsGateSystem;
 import eu.pb4.polymer.core.api.block.PolymerBlockUtils;
 import eu.pb4.polymer.core.api.block.PolymerHeadBlock;
 import eu.pb4.polymer.core.api.block.SimplePolymerBlock;
@@ -17,6 +18,7 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Display;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
@@ -30,6 +32,7 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.redstone.Orientation;
 import net.minecraft.world.level.storage.loot.LootParams;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import xyz.nucleoid.packettweaker.PacketContext;
@@ -105,6 +108,10 @@ public final class MicrophoneBlock extends SimplePolymerBlock implements Polymer
 
 	@Override
 	protected List<ItemStack> getDrops(BlockState state, LootParams.Builder builder) {
+		Entity breaker = builder.getOptionalParameter(LootContextParams.THIS_ENTITY);
+		if (!ServerMechanicsGateSystem.shouldDropUpgradeLockedDevice(this, breaker)) {
+			return List.of();
+		}
 		return List.of(new ItemStack(this));
 	}
 

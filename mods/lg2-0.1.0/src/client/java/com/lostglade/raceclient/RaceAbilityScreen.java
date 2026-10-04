@@ -44,6 +44,7 @@ public final class RaceAbilityScreen extends Screen {
 	private final RaceActionButton[] actionButtons = new RaceActionButton[ICONS.length];
 	private int hoveredSlot = -1;
 	private boolean finishingHold;
+	private boolean menuBindingObservedDown;
 
 	public RaceAbilityScreen() {
 		super(Component.translatable("key.lg2.race_menu"));
@@ -78,7 +79,9 @@ public final class RaceAbilityScreen extends Screen {
 	@Override
 	public boolean keyReleased(KeyEvent event) {
 		if (this.minecraft != null && this.minecraft.options.keyQuickActions.matches(event)) {
-			this.finishHoldSelection();
+			if (!RaceClientControls.isMenuBindingPhysicallyDown(this.minecraft)) {
+				this.finishHoldSelection();
+			}
 			return true;
 		}
 		return super.keyReleased(event);
@@ -87,10 +90,23 @@ public final class RaceAbilityScreen extends Screen {
 	@Override
 	public boolean mouseReleased(MouseButtonEvent event) {
 		if (this.minecraft != null && this.minecraft.options.keyQuickActions.matchesMouse(event)) {
-			this.finishHoldSelection();
+			if (!RaceClientControls.isMenuBindingPhysicallyDown(this.minecraft)) {
+				this.finishHoldSelection();
+			}
 			return true;
 		}
 		return super.mouseReleased(event);
+	}
+
+	@Override
+	public void tick() {
+		super.tick();
+		if (this.minecraft == null) return;
+		if (RaceClientControls.isMenuBindingPhysicallyDown(this.minecraft)) {
+			this.menuBindingObservedDown = true;
+		} else if (this.menuBindingObservedDown) {
+			this.finishHoldSelection();
+		}
 	}
 
 	private void finishHoldSelection() {

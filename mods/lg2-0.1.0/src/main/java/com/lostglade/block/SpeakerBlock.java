@@ -3,6 +3,7 @@ package com.lostglade.block;
 import com.lostglade.server.SpeakerSystem;
 import com.lostglade.server.BluetoothLinkSystem;
 import com.lostglade.server.Lg2Messages;
+import com.lostglade.server.ServerMechanicsGateSystem;
 import eu.pb4.polymer.blocks.api.PolymerTexturedBlock;
 import eu.pb4.polymer.core.api.block.SimplePolymerBlock;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
@@ -18,6 +19,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -33,6 +35,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.minecraft.world.level.redstone.Orientation;
 import net.minecraft.world.level.storage.loot.LootParams;
+import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
 import net.minecraft.world.phys.BlockHitResult;
 import xyz.nucleoid.packettweaker.PacketContext;
 
@@ -132,6 +135,10 @@ public final class SpeakerBlock extends SimplePolymerBlock implements PolymerTex
 
 	@Override
 	protected List<ItemStack> getDrops(BlockState state, LootParams.Builder builder) {
+		Entity breaker = builder.getOptionalParameter(LootContextParams.THIS_ENTITY);
+		if (!ServerMechanicsGateSystem.shouldDropUpgradeLockedDevice(this, breaker)) {
+			return List.of();
+		}
 		return List.of(new ItemStack(this));
 	}
 

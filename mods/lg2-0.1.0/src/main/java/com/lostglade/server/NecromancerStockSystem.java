@@ -63,6 +63,7 @@ import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -97,6 +98,8 @@ public final class NecromancerStockSystem {
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_stock_block_reach");
 	private static final Identifier ENTITY_REACH_MODIFIER_ID =
 			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_stock_entity_reach");
+	private static final Identifier MINING_SPEED_MODIFIER_ID =
+			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "necromancer_stock_mining_speed");
 	private static final String MANAGED_GLOWING_TAG = "lg2_necromancer_glowing";
 	private static final String MANA_BAR_FRAME = "\uea00";
 	private static final FontDescription MANA_BAR_FONT = new FontDescription.Resource(
@@ -151,6 +154,7 @@ public final class NecromancerStockSystem {
 		if (!trySpendActionMana(player)) return false;
 		HELD_ACTIONS.put(player.getUUID(), HeldAction.breaking(
 				pos.immutable(), direction, nextActionChargeTick(player)));
+		syncMiningSpeed(player, pos);
 		return true;
 	}
 
@@ -242,20 +246,25 @@ public final class NecromancerStockSystem {
 
 	private static ItemStack fasterMiningTool(ItemStack currentBest, EraToolSet era, BlockState state) {
 		ItemStack best = currentBest;
-		float bestSpeed = best.isEmpty() ? 1.0F : best.getDestroySpeed(state);
+		float bestProgress = miningProgress(best, state);
 		boolean bestCorrect = !best.isEmpty() && best.isCorrectToolForDrops(state);
 		for (Item item : era.miningTools()) {
 			ItemStack candidate = new ItemStack(item);
-			float speed = candidate.getDestroySpeed(state);
+			float progress = miningProgress(candidate, state);
 			boolean correct = candidate.isCorrectToolForDrops(state);
-			if (speed > bestSpeed + 1.0E-4F
-					|| (Math.abs(speed - bestSpeed) <= 1.0E-4F && correct && !bestCorrect)) {
+			if (progress > bestProgress + 1.0E-4F
+					|| (Math.abs(progress - bestProgress) <= 1.0E-4F && correct && !bestCorrect)) {
 				best = candidate;
-				bestSpeed = speed;
+				bestProgress = progress;
 				bestCorrect = correct;
 			}
 		}
 		return best;
+	}
+
+	private static float miningProgress(ItemStack tool, BlockState state) {
+		int divisor = !state.requiresCorrectToolForDrops() || tool.isCorrectToolForDrops(state) ? 30 : 100;
+		return tool.getDestroySpeed(state) / divisor;
 	}
 
 	private static InteractionResult useVirtualEraToolOnBlock(
@@ -436,6 +445,7 @@ public final class NecromancerStockSystem {
 				}
 			}
 			syncAttributes(player, config);
+			syncMiningSpeed(player);
 			syncGlowing(player);
 			syncArmor(player);
 			syncActionGameMode(player, config, state);
@@ -553,6 +563,46 @@ public final class NecromancerStockSystem {
 		double reach = positiveOrDefault(config.necromancerReachBlocks, DEFAULT_REACH_BLOCKS);
 		syncExactAttribute(player.getAttribute(Attributes.BLOCK_INTERACTION_RANGE), BLOCK_REACH_MODIFIER_ID, reach);
 		syncExactAttribute(player.getAttribute(Attributes.ENTITY_INTERACTION_RANGE), ENTITY_REACH_MODIFIER_ID, reach);
+	}
+
+	private static void syncMiningSpeed(ServerPlayer player) {
+		HeldAction action = HELD_ACTIONS.get(player.getUUID());
+		if (action != null && action.kind == HeldActionKind.BREAKING
+				&& !player.level().getBlockState(action.blockPos).isAir()) {
+			syncMiningSpeed(player, action.blockPos);
+			return;
+		}
+		HitResult hit = player.pick(player.getAttributeValue(Attributes.BLOCK_INTERACTION_RANGE), 1.0F, false);
+		syncMiningSpeed(player, hit instanceof BlockHitResult blockHit ? blockHit.getBlockPos() : null);
+	}
+
+	private static void syncMiningSpeed(ServerPlayer player, BlockPos pos) {
+		AttributeInstance attribute = player.getAttribute(Attributes.BLOCK_BREAK_SPEED);
+		if (attribute == null) return;
+		double ratio = 1.0D;
+		if (pos != null && player.isAlive() && player.gameMode.isSurvival()) {
+			BlockState state = player.level().getBlockState(pos);
+			ItemStack virtualTool = virtualMiningSpeedTool(player, state);
+			if (!virtualTool.isEmpty()) {
+				ItemStack held = player.getMainHandItem();
+				double virtualSpeed = virtualTool.getDestroySpeed(state);
+				if (virtualSpeed > 1.0D) virtualSpeed += player.getAttributeValue(Attributes.MINING_EFFICIENCY);
+				double heldSpeed = held.getDestroySpeed(state);
+				if (heldSpeed > 1.0D) heldSpeed += player.getAttributeValue(Attributes.MINING_EFFICIENCY);
+				int virtualDivisor = !state.requiresCorrectToolForDrops() || virtualTool.isCorrectToolForDrops(state) ? 30 : 100;
+				int heldDivisor = !state.requiresCorrectToolForDrops() || held.isCorrectToolForDrops(state) ? 30 : 100;
+				if (heldSpeed > 0.0D) ratio = virtualSpeed * heldDivisor / (heldSpeed * virtualDivisor);
+			}
+		}
+		ratio = Math.max(1.0D, Math.min(1024.0D, ratio));
+		AttributeModifier current = attribute.getModifier(MINING_SPEED_MODIFIER_ID);
+		if (Math.abs(ratio - 1.0D) < 1.0E-4D) {
+			if (current != null) attribute.removeModifier(MINING_SPEED_MODIFIER_ID);
+		} else if (current == null || Math.abs(current.amount() - (ratio - 1.0D)) > 1.0E-4D) {
+			if (current != null) attribute.removeModifier(MINING_SPEED_MODIFIER_ID);
+			attribute.addTransientModifier(new AttributeModifier(
+					MINING_SPEED_MODIFIER_ID, ratio - 1.0D, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
+		}
 	}
 
 	private static void syncExactAttribute(AttributeInstance attribute, Identifier modifierId, double targetValue) {
@@ -730,6 +780,7 @@ public final class NecromancerStockSystem {
 		removeModifier(player.getAttribute(Attributes.MAX_HEALTH), MAX_HEALTH_MODIFIER_ID);
 		removeModifier(player.getAttribute(Attributes.BLOCK_INTERACTION_RANGE), BLOCK_REACH_MODIFIER_ID);
 		removeModifier(player.getAttribute(Attributes.ENTITY_INTERACTION_RANGE), ENTITY_REACH_MODIFIER_ID);
+		removeModifier(player.getAttribute(Attributes.BLOCK_BREAK_SPEED), MINING_SPEED_MODIFIER_ID);
 		if (player.getHealth() > player.getMaxHealth()) player.setHealth(player.getMaxHealth());
 		if (player.getTags().contains(MANAGED_GLOWING_TAG)) {
 			player.setGlowingTag(false);

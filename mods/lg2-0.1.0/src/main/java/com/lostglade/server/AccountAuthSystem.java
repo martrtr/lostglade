@@ -25,6 +25,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.ClientboundDisconnectPacket;
 import net.minecraft.network.protocol.common.ClientboundKeepAlivePacket;
 import net.minecraft.network.protocol.common.ClientboundPingPacket;
@@ -142,6 +143,8 @@ public final class AccountAuthSystem {
 	private static final Map<ServerPlayer, LimboState> LIMBO = new ConcurrentHashMap<>();
 	private static final Map<Connection, AuthenticationReturnTarget> STAGED_RETURN_TARGETS = Collections.synchronizedMap(new WeakHashMap<>());
 	private static final Map<UUID, List<Runnable>> AFTER_AUTH_ACTIONS = new ConcurrentHashMap<>();
+	private static final Identifier VOICECHAT_REQUEST_SECRET = Identifier.fromNamespaceAndPath("voicechat", "request_secret");
+	private static final Map<ServerPlayer, ServerboundCustomPayloadPacket> PENDING_VOICECHAT_SECRET_REQUESTS = new ConcurrentHashMap<>();
 	private static MinecraftServer authenticatedPlayersCacheServer;
 	private static int authenticatedPlayersCacheTick = Integer.MIN_VALUE;
 	private static List<ServerPlayer> authenticatedPlayersCache = List.of();
@@ -237,6 +240,7 @@ public final class AccountAuthSystem {
 			PRESENCE_REMOVE_END_OF_TICK.clear();
 			PREMIUM_TOKEN_BIND_PENDING.clear();
 			AFTER_AUTH_ACTIONS.clear();
+			PENDING_VOICECHAT_SECRET_REQUESTS.clear();
 			STAGED_RETURN_TARGETS.clear();
 			authenticatedPlayersCacheServer = null;
 			authenticatedPlayersCacheTick = Integer.MIN_VALUE;
@@ -455,6 +459,20 @@ public final class AccountAuthSystem {
 	/** Used by the packet mixin as the final guard for movement and inventory packets. */
 	public static boolean shouldBlockPacket(ServerPlayer player) {
 		return player != null && !RendererBotPresenceSystem.isRendererBot(player) && !isAuthenticated(player);
+	}
+
+	/** Voice Chat requests its secret once on join, before password authentication finishes. */
+	public static boolean deferVoicechatSecretRequest(ServerPlayer player, ServerboundCustomPayloadPacket packet) {
+		if (player == null || packet == null || packet.payload() == null
+				|| !VOICECHAT_REQUEST_SECRET.equals(packet.payload().type().id())) return false;
+		PENDING_VOICECHAT_SECRET_REQUESTS.putIfAbsent(player, packet);
+		if (isAuthenticated(player)) {
+			ServerboundCustomPayloadPacket pending = PENDING_VOICECHAT_SECRET_REQUESTS.remove(player);
+			if (pending != null) player.level().getServer().execute(() -> {
+				if (isAuthenticated(player)) player.connection.handleCustomPayload(pending);
+			});
+		}
+		return true;
 	}
 
 	/**
@@ -888,6 +906,8 @@ public final class AccountAuthSystem {
 		if (!AUTHENTICATED.add(playerId)) return;
 
 		invalidateAuthenticatedPlayersCache();
+		ServerboundCustomPayloadPacket voicechatRequest = PENDING_VOICECHAT_SECRET_REQUESTS.remove(player);
+		if (voicechatRequest != null) player.connection.handleCustomPayload(voicechatRequest);
 		OFFERED_CLIENT_TOKENS.remove(player.getUUID());
 		CLIENT_TOKEN_GRACE_UNTIL.remove(player.getUUID());
 		FAILURES.remove(key(player.getScoreboardName()));
@@ -908,6 +928,7 @@ public final class AccountAuthSystem {
 		UUID playerId = player.getUUID();
 		// A delayed disconnect belonging to a replaced connection must never clear the new session.
 		if (!ACTIVE_HUMAN_SESSIONS.remove(playerId, player)) return;
+		PENDING_VOICECHAT_SECRET_REQUESTS.remove(player);
 		PLACEMENT_COMPLETE.remove(playerId, player);
 		invalidateAuthenticatedPlayersCache();
 		CONNECTED_HUMAN_SESSIONS.remove(playerId);

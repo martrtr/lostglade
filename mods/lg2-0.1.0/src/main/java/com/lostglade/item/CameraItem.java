@@ -3,7 +3,6 @@ package com.lostglade.item;
 import com.lostglade.Lg2;
 import com.lostglade.block.CameraBlock;
 import com.lostglade.server.CameraCaptureSystem;
-import com.lostglade.server.CameraPhotoMenuSystem;
 import com.lostglade.server.DroneSystem;
 import eu.pb4.polymer.core.api.item.PolymerBlockItem;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
@@ -63,10 +62,7 @@ public final class CameraItem extends PolymerBlockItem {
 		if (player instanceof ServerPlayer serverPlayer) {
 			CameraCaptureSystem.suppressNextCameraSwing(serverPlayer, hand);
 		}
-		if (!player.isShiftKeyDown()) {
-			// use() is only reached for a click in air.  Keep useOn() below for
-			// placing the camera on blocks, but make the handheld camera take a
-			// photo again instead of delegating this click to its block-item base.
+		if (player.isShiftKeyDown()) {
 			if (player instanceof ServerPlayer serverPlayer) {
 				return CameraCaptureSystem.tryCapture(serverPlayer, player.getItemInHand(hand))
 						? InteractionResult.SUCCESS
@@ -74,10 +70,7 @@ public final class CameraItem extends PolymerBlockItem {
 			}
 			return InteractionResult.SUCCESS;
 		}
-		if (player instanceof ServerPlayer serverPlayer) {
-			CameraPhotoMenuSystem.open(serverPlayer);
-		}
-		return InteractionResult.SUCCESS;
+		return InteractionResult.PASS;
 	}
 
 	@Override
@@ -92,18 +85,11 @@ public final class CameraItem extends PolymerBlockItem {
 		if (player instanceof ServerPlayer serverPlayer) {
 			CameraCaptureSystem.suppressNextCameraSwing(serverPlayer, context.getHand());
 		}
-		if (context.getLevel().getBlockState(context.getClickedPos()).getBlock() instanceof CameraBlock) {
-			if (player != null && player.isShiftKeyDown()) {
-				if (player instanceof ServerPlayer serverPlayer) {
-					CameraPhotoMenuSystem.open(serverPlayer);
-				}
-				return InteractionResult.SUCCESS;
-			}
-			return InteractionResult.PASS;
-		}
 		if (player != null && player.isShiftKeyDown()) {
 			if (player instanceof ServerPlayer serverPlayer) {
-				CameraPhotoMenuSystem.open(serverPlayer);
+				return CameraCaptureSystem.tryCapture(serverPlayer, player.getItemInHand(context.getHand()))
+						? InteractionResult.SUCCESS
+						: InteractionResult.FAIL;
 			}
 			return InteractionResult.SUCCESS;
 		}

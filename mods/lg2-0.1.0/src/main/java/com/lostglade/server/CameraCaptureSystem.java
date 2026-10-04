@@ -61,9 +61,8 @@ public final class CameraCaptureSystem {
 			if (!isLeftClickCameraTrigger(serverPlayer, hand)) {
 				return InteractionResult.PASS;
 			}
-			return tryCapture(serverPlayer, serverPlayer.getItemInHand(hand))
-					? InteractionResult.SUCCESS
-					: InteractionResult.PASS;
+			CameraPhotoMenuSystem.open(serverPlayer);
+			return InteractionResult.SUCCESS;
 		});
 		AttackEntityCallback.EVENT.register(CameraCaptureSystem::onAttackEntity);
 	}
@@ -81,7 +80,8 @@ public final class CameraCaptureSystem {
 		if (hasAttackTarget(player)) {
 			return false;
 		}
-		return tryCapture(player, player.getItemInHand(hand));
+		CameraPhotoMenuSystem.open(player);
+		return true;
 	}
 
 	public static void suppressNextCameraSwing(ServerPlayer player, InteractionHand hand) {
@@ -271,9 +271,8 @@ public final class CameraCaptureSystem {
 		if (!isLeftClickCameraTrigger(serverPlayer, hand)) {
 			return InteractionResult.PASS;
 		}
-		return tryCapture(serverPlayer, serverPlayer.getItemInHand(hand))
-				? InteractionResult.SUCCESS
-				: InteractionResult.PASS;
+		CameraPhotoMenuSystem.open(serverPlayer);
+		return InteractionResult.SUCCESS;
 	}
 
 	private static boolean isLeftClickCameraTrigger(ServerPlayer player, InteractionHand hand) {
