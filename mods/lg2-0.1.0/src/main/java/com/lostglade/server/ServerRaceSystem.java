@@ -51,6 +51,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.fabricmc.loader.api.FabricLoader;
 import com.lostglade.network.Lg2Payloads;
 import net.lionarius.skinrestorer.mineskin.MineskinService;
 import net.lionarius.skinrestorer.SkinRestorer;
@@ -1189,6 +1190,7 @@ public final class ServerRaceSystem {
 
 
 	private static final Map<UUID, KilkaSalmonFormSession> KILKA_SALMON_FORMS = new LinkedHashMap<>();
+	private static final Set<UUID> KILKA_SALMON_VOICE_PLAYERS = ConcurrentHashMap.newKeySet();
 	private static final Map<UUID, Float> KILKA_STOCK_CLIENT_WALKING_SPEEDS = new HashMap<>();
 	private static final Map<UUID, List<KilkaSeaBeaconLink>> KILKA_SEA_BEACONS = new LinkedHashMap<>();
 	private static final Set<UUID> KILKA_SHNYAGA_BUFFED_PLAYERS = new HashSet<>();
@@ -1222,8 +1224,12 @@ public final class ServerRaceSystem {
 	private static final List<LittleDictatorUniqueShockWaveSession> LITTLE_DICTATOR_UNIQUE_SHOCK_WAVES = new ArrayList<>();
 	private static final OrderedPacketDelayQueue<UUID> LITTLE_DICTATOR_PACKET_QUEUE = new OrderedPacketDelayQueue<>(LITTLE_DICTATOR_DEFENSE_MAX_DELAYED_PACKETS_PER_PLAYER);
 	private static final Set<UUID> KILKA_STOCK_NIGHT_VISION = new HashSet<>();
+	private static final Set<UUID> KILKA_STOCK_NIGHT_VISION_INITIALIZED = new HashSet<>();
 	private static final Map<UUID, MobEffectInstance> KILKA_STOCK_NATURAL_NIGHT_VISION = new LinkedHashMap<>();
 	private static final Map<UUID, Long> KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS = new LinkedHashMap<>();
+	// Stay above the client's 200-tick night-vision pulsing threshold.
+	private static final int KILKA_STOCK_NIGHT_VISION_DURATION_TICKS = 260;
+	private static final int KILKA_STOCK_NIGHT_VISION_REFRESH_TICKS = 220;
 	private static final Map<UUID, LittleDictatorUniqueSession> LITTLE_DICTATOR_UNIQUE_SESSIONS = new LinkedHashMap<>();
 	private static final Set<UUID> LITTLE_DICTATOR_TAX_CHEST_PENDING = new HashSet<>();
 	private static final Map<UUID, Set<LittleDictatorTaxChestRef>> LITTLE_DICTATOR_TAX_CHESTS = new LinkedHashMap<>();
@@ -1884,6 +1890,7 @@ public final class ServerRaceSystem {
 			clearLittleDictatorUniqueTargetState(handler.player);
 			clearKilkaShnyagaBuffs(handler.player);
 			clearKilkaStockNightVision(handler.player);
+			KILKA_STOCK_NIGHT_VISION_INITIALIZED.remove(handler.player.getUUID());
 			KILKA_STOCK_CLIENT_WALKING_SPEEDS.remove(handler.player.getUUID());
 			clearKilkaSeaBeaconClientDisplays(handler.player);
 			KILKA_ATTACK_FLASHES.remove(handler.player.getUUID());
@@ -5914,7 +5921,20 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 		if (womanAttack != InteractionResult.PASS) {
 			return womanAttack;
 		}
-		return tryUseWomanAnimalBreedStock(player, hand, entity);
+		InteractionResult womanStock = tryUseWomanAnimalBreedStock(player, hand, entity);
+		if (womanStock != InteractionResult.PASS) {
+			return womanStock;
+		}
+		if (hand == InteractionHand.MAIN_HAND && player.getMainHandItem().isEmpty()
+				&& FabricLoader.getInstance().isModLoaded("fsit")
+				&& isKilkaSalmonVisualEntity(entity)
+				&& player.level() instanceof ServerLevel level) {
+			ServerPlayer owner = findKilkaSalmonOwner(level.getServer(), entity.getUUID());
+			if (owner != null && owner != player && owner.isAlive() && !owner.isSpectator()) {
+				return FsitKilkaSalmonBridge.interact(player, level, owner);
+			}
+		}
+		return InteractionResult.PASS;
 	}
 
 	private static InteractionResult tryUseWomanFlowerStock(ServerPlayer player, InteractionHand hand, BlockPos pos) {
@@ -14816,6 +14836,12 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		Set<UUID> onlinePlayers = new HashSet<>();
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			onlinePlayers.add(player.getUUID());
+			if (KILKA_STOCK_NIGHT_VISION_INITIALIZED.add(player.getUUID())
+					&& getKilkaStockAbility(player) != null
+					&& !KILKA_STOCK_NIGHT_VISION.contains(player.getUUID())) {
+				MobEffectInstance existing = player.getEffect(MobEffects.NIGHT_VISION);
+				if (isPersistedKilkaStockNightVision(existing)) player.removeEffect(MobEffects.NIGHT_VISION);
+			}
 			updateKilkaStockMiningModifiers(player);
 			if (player.isAlive() && !player.isSpectator() && getKilkaStockAbility(player) != null && isKilkaHeadUnderwater(player)) {
 				refreshKilkaStockNightVision(player);
@@ -14824,6 +14850,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			}
 		}
 		KILKA_STOCK_NIGHT_VISION.removeIf(playerId -> !onlinePlayers.contains(playerId));
+		KILKA_STOCK_NIGHT_VISION_INITIALIZED.removeIf(playerId -> !onlinePlayers.contains(playerId));
 		KILKA_STOCK_NATURAL_NIGHT_VISION.keySet().removeIf(playerId -> !onlinePlayers.contains(playerId));
 		KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS.keySet().removeIf(playerId -> !onlinePlayers.contains(playerId));
 	}
@@ -14836,6 +14863,12 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		MobEffectInstance current = player.getEffect(MobEffects.NIGHT_VISION);
 		if (isKilkaStockNightVision(player, current)) {
 			getKilkaStockNaturalNightVision(player);
+			if (current.isInfiniteDuration()) {
+				player.removeEffect(MobEffects.NIGHT_VISION);
+				applyKilkaStockNightVision(player);
+			} else if (current.getDuration() <= KILKA_STOCK_NIGHT_VISION_REFRESH_TICKS) {
+				applyKilkaStockNightVision(player);
+			}
 			return;
 		}
 		MobEffectInstance natural = copyKilkaStockNaturalNightVision(current);
@@ -14846,9 +14879,13 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			player.removeEffect(MobEffects.NIGHT_VISION);
 		}
 		KILKA_STOCK_NIGHT_VISION.add(playerId);
+		applyKilkaStockNightVision(player);
+	}
+
+	private static void applyKilkaStockNightVision(ServerPlayer player) {
 		KILKA_STOCK_APPLYING_NIGHT_VISION.set(Boolean.TRUE);
 		try {
-			player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, MobEffectInstance.INFINITE_DURATION, 0, false, false, false));
+			player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, KILKA_STOCK_NIGHT_VISION_DURATION_TICKS, 0, false, false, false));
 		} finally {
 			KILKA_STOCK_APPLYING_NIGHT_VISION.set(Boolean.FALSE);
 		}
@@ -14975,6 +15012,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			}
 		}
 		KILKA_STOCK_NIGHT_VISION.clear();
+		KILKA_STOCK_NIGHT_VISION_INITIALIZED.clear();
 		KILKA_STOCK_NATURAL_NIGHT_VISION.clear();
 		KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS.clear();
 	}
@@ -15398,6 +15436,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			sendKilkaSalmonOwnerPassengerAttachment(player, visual);
 		}
 		KILKA_SALMON_FORMS.put(playerId, session);
+		KILKA_SALMON_VOICE_PLAYERS.add(playerId);
 		KILKA_SALMON_FORM_PLAYERS.add(playerId);
 		saveKilkaSalmonFormPlayers(level.getServer());
 		applyKilkaSalmonScale(player, true);
@@ -15521,6 +15560,9 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			syncKilkaSalmonCollisionTeam(server, player, visual, session);
 			maintainKilkaSalmonVisualSurvival(visual);
 			syncKilkaSalmonVisual(level, player, visual, session);
+			if (FabricLoader.getInstance().isModLoaded("fsit")) {
+				FsitKilkaSalmonBridge.attachSeatsToSalmon(player, visual);
+			}
 			syncKilkaSalmonMobTargets(level, player, visual);
 			clearKilkaSalmonInvalidMobTargets(level, player);
 		}
@@ -16172,13 +16214,22 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 				|| type == MobEffects.NIGHT_VISION;
 	}
 
+	private static boolean isPersistedKilkaStockNightVision(MobEffectInstance effect) {
+		return effect != null
+				&& effect.getEffect() == MobEffects.NIGHT_VISION
+				&& effect.getAmplifier() == 0
+				&& (effect.isInfiniteDuration() || effect.getDuration() <= KILKA_STOCK_NIGHT_VISION_DURATION_TICKS)
+				&& !effect.isVisible()
+				&& !effect.showIcon();
+	}
+
 	private static boolean isKilkaStockNightVision(ServerPlayer player, MobEffectInstance effect) {
 		return player != null
 				&& effect != null
-				&& effect.getEffect() == MobEffects.NIGHT_VISION
 				&& KILKA_STOCK_NIGHT_VISION.contains(player.getUUID())
+				&& effect.getEffect() == MobEffects.NIGHT_VISION
 				&& effect.getAmplifier() == 0
-				&& effect.isInfiniteDuration()
+				&& (effect.isInfiniteDuration() || effect.getDuration() <= KILKA_STOCK_NIGHT_VISION_DURATION_TICKS)
 				&& !effect.isVisible()
 				&& !effect.showIcon();
 	}
@@ -16556,6 +16607,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		if (playerId == null) {
 			return;
 		}
+		KILKA_SALMON_VOICE_PLAYERS.remove(playerId);
 		removeKilkaSalmonVisual(server, session);
 		if (server == null) {
 			return;
@@ -16684,11 +16736,21 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		return player != null && KILKA_SALMON_FORMS.containsKey(player.getUUID());
 	}
 
-	/** The owner of the Kilka salmon form cannot speak through Simple Voice Chat. */
-	public static boolean shouldMuteKilkaSalmonVoice(ServerPlayer player) {
-		return isKilkaSalmonForm(player)
-				&& player.getGameProfile() != null
-				&& "Rajas_YT".equalsIgnoreCase(player.getGameProfile().name());
+	public static boolean isKilkaSalmonVoiceSender(UUID playerId) {
+		return playerId != null && KILKA_SALMON_VOICE_PLAYERS.contains(playerId);
+	}
+
+	public static Vec3 getKilkaSalmonVoiceOrigin(ServerPlayer player) {
+		if (!isKilkaSalmonForm(player)) return null;
+		KilkaSalmonFormSession session = KILKA_SALMON_FORMS.get(player.getUUID());
+		if (session != null && session.visualSalmonId != null && player.level() instanceof ServerLevel level
+				&& level.dimension().equals(session.dimension)) {
+			Entity visual = level.getEntity(session.visualSalmonId);
+			if (visual != null && visual.isAlive()) {
+				return visual.position().add(0.0D, visual.getBbHeight() * 0.5D, 0.0D);
+			}
+		}
+		return player.getEyePosition();
 	}
 
 	public static boolean shouldSuppressKilkaSalmonMobDetection(Mob mob, LivingEntity target) {
@@ -16726,6 +16788,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 	}
 
 	private static void cleanupAllKilkaSalmonForms(MinecraftServer server, boolean restorePlayers) {
+		KILKA_SALMON_VOICE_PLAYERS.clear();
 		if (server == null || KILKA_SALMON_FORMS.isEmpty()) {
 			return;
 		}

@@ -125,6 +125,7 @@ dependencies {
 	}
 	modCompileOnly files(webcamJars)
 	modRuntimeOnly files(webcamJars)
+	modCompileOnly files("${serverRootDir}/mods/fsit-2.8.3+mc1.21.11.jar")
 	implementation files(
 			"libs/flow-math-1.0.3.jar",
 			"libs/bluenbt-3.5.0.jar"

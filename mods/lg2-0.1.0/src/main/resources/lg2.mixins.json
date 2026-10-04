@@ -142,6 +142,7 @@
 		"ServerGamePacketListenerCopperManGogglesMixin",
 		"ServerGamePacketListenerCopperManJetpackMixin",
 		"ServerGamePacketListenerDroneControlMixin",
+		"ServerGamePacketListenerMovementSpeedMixin",
 		"ServerGamePacketListenerImplAccessor",
 		"ServerGamePacketListenerItemDisplayHitboxMixin",
     "ServerGamePacketListenerLittleDictatorLagMixin",
