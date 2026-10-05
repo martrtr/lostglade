@@ -60,3 +60,25 @@ lostglade-activate-release <commit>
 
 After the initial deployment, use `journalctl -u lostglade -f` to watch
 startup. Chunky pre-generation is intentionally a manual post-release task.
+
+## Daily maintenance
+
+`config/lg2.json` has `restartHourMsk` (default `3`, clamped to `0..23`). The
+server saves and starts an online ZIP backup 30 minutes before that Moscow
+hour, then stops at the scheduled hour. If the archive is still being written,
+shutdown waits until it finishes. Warning titles are sent at 30, 10, 3 and 1
+minutes, then 30, 10, 5, 4, 3, 2 and 1 seconds before shutdown.
+
+The backup is written to `/srv/lostglade/data/backups` as
+`lg2-YYYY-MM-DD-HH-msk.zip` and includes the world, release config, persistent
+config (including LG2 authentication state) and server properties/allow lists.
+The backup directory and archives are private to the server user on Linux.
+Only completed LG2 ZIP archives older than seven days are pruned. Logs, caches,
+release binaries and the separate `server-secrets/` directory are excluded.
+This is an online save-and-copy backup, not an atomic filesystem
+snapshot; an off-host copy is still recommended for disaster recovery.
+
+`lostglade.service` uses `Restart=always` to start Minecraft after its clean
+scheduled stop. `systemctl stop lostglade.service` still stops it intentionally;
+the in-game `/stop` command will instead be followed by a service restart.
+The Gradle `runServer` development task has no supervisor and will simply exit.

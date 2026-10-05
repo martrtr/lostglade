@@ -138,6 +138,8 @@ public final class Lg2Config {
 
 	private static boolean sanitize(ConfigData configData) {
 		boolean changed = false;
+		changed |= clampSingleValue(configData.restartHourMsk, 0, 23,
+				newValue -> configData.restartHourMsk = newValue);
 
 		changed |= clampRange(configData, RangeType.ORES_PER_CHUNK, 0, MAX_ORES_PER_CHUNK);
 		changed |= clampRange(configData, RangeType.VEIN_SIZE, 0, MAX_VEIN_SIZE);
@@ -374,6 +376,8 @@ public final class Lg2Config {
 	}
 
 	public static final class ConfigData {
+		/** Daily restart hour in Moscow time; backup runs 30 minutes before it. */
+		public int restartHourMsk = 3;
 		public int oresPerChunkMin = 8;
 		public int oresPerChunkMax = 14;
 		public int veinSizeMin = 3;

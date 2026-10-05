@@ -15560,8 +15560,10 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			syncKilkaSalmonCollisionTeam(server, player, visual, session);
 			maintainKilkaSalmonVisualSurvival(visual);
 			syncKilkaSalmonVisual(level, player, visual, session);
-			if (FabricLoader.getInstance().isModLoaded("fsit")) {
-				FsitKilkaSalmonBridge.attachSeatsToSalmon(player, visual);
+			if (FabricLoader.getInstance().isModLoaded("fsit")
+					&& FsitKilkaSalmonBridge.attachSeatsToSalmon(player, visual)) {
+				// FSit replaced the owner's client-only player -> salmon passenger packet.
+				sendKilkaSalmonOwnerPassengerAttachment(player, visual);
 			}
 			syncKilkaSalmonMobTargets(level, player, visual);
 			clearKilkaSalmonInvalidMobTargets(level, player);

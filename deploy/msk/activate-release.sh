@@ -123,6 +123,8 @@ ln -s "${release_dir}" "${server_root}/current.next"
 mv -Tf "${server_root}/current.next" "${server_root}/current"
 
 started_at="$(date --iso-8601=seconds)"
+install -m 0644 "${release_dir}/deploy/msk/lostglade.service" /etc/systemd/system/lostglade.service
+systemctl daemon-reload
 systemctl restart lostglade.service
 ready=0
 for _ in $(seq 1 45); do

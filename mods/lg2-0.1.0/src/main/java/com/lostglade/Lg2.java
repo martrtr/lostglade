@@ -102,6 +102,7 @@ public class Lg2 implements ModInitializer {
 			return;
 		}
 		Lg2Config.load();
+		com.lostglade.server.DailyMaintenanceSystem.register();
 		SeasonStartConfig.load();
 		CameraMediaCache.initialize(FabricLoader.getInstance().getGameDir());
 		AccountAuthSystem.preflightServerProperties();

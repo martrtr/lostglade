@@ -1,4 +1,6 @@
 {
+  "restartHourMsk": 3,
+
   "oresPerChunkMin": 8,
   "oresPerChunkMax": 14,
   "veinSizeMin": 2,

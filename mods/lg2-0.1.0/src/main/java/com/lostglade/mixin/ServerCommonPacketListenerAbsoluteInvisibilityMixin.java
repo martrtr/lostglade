@@ -99,7 +99,7 @@ public abstract class ServerCommonPacketListenerAbsoluteInvisibilityMixin {
 			}
 		}
 		if (packet instanceof ClientboundSetPlayerTeamPacket playerTeamPacket) {
-			ServerTabPacketSystem.stripShadowFromTeamPacket(playerTeamPacket);
+			ServerTabPacketSystem.stripShadowFromTeamPacket(receiver, playerTeamPacket);
 		}
 
 		if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket
