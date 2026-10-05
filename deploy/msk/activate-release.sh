@@ -16,6 +16,11 @@ release_dir="${server_root}/releases/${release_id}"
 temporary_dir="${server_root}/releases/.${release_id}.tmp"
 data_dir="${server_root}/data"
 
+# Do not run two release activations concurrently. The legacy maintenance
+# service also uses this lock until the new release disables its timer.
+exec 9>/run/lock/lostglade-operations.lock
+flock -n 9 || { echo 'Another Lostglade operation is in progress; retry later.' >&2; exit 1; }
+
 [[ -f "${archive_path}" ]] || { echo "Archive is missing: ${archive_path}" >&2; exit 1; }
 if [[ -e "${release_dir}" ]]; then
   if [[ -L "${server_root}/current" && "$(readlink -f "${server_root}/current")" == "${release_dir}" ]]; then
@@ -51,6 +56,7 @@ for required in \
   server-icon.png \
   whitelist.json.template \
   deploy/msk/run-server.sh \
+  deploy/msk/backup-server.sh \
   deploy/msk/run-renderer-bot.sh \
   renderer-bot/launch.cfg \
   mods/lg2-1.0.0.jar \
@@ -151,7 +157,12 @@ if [[ "${ready}" -ne 1 ]]; then
   exit 1
 fi
 
+install -m 0755 "${release_dir}/deploy/msk/backup-server.sh" /usr/local/sbin/lostglade-backup
 install -m 0644 "${release_dir}/deploy/msk/lostglade-renderer-bot.service" /etc/systemd/system/lostglade-renderer-bot.service
+if systemctl is-active --quiet lostglade-maintenance.timer || systemctl is-enabled --quiet lostglade-maintenance.timer; then
+  systemctl disable --now lostglade-maintenance.timer
+fi
+rm -f -- /etc/systemd/system/lostglade-maintenance.timer /etc/systemd/system/lostglade-maintenance.service /usr/local/sbin/lostglade-maintenance
 systemctl daemon-reload
 systemctl enable lostglade-renderer-bot.service
 systemctl restart lostglade-renderer-bot.service

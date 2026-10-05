@@ -28,6 +28,11 @@ chown lostglade:lostglade "${server_root}/.config/yt-dlp/config"
 chmod 0640 "${server_root}/.config/yt-dlp/config"
 install -m 0755 "${bootstrap_dir}/deploy/msk/activate-release.sh" /usr/local/sbin/lostglade-activate-release
 install -m 0644 "${bootstrap_dir}/deploy/msk/lostglade.service" /etc/systemd/system/lostglade.service
+install -m 0755 "${bootstrap_dir}/deploy/msk/backup-server.sh" /usr/local/sbin/lostglade-backup
+if systemctl is-active --quiet lostglade-maintenance.timer || systemctl is-enabled --quiet lostglade-maintenance.timer; then
+  systemctl disable --now lostglade-maintenance.timer
+fi
+rm -f -- /etc/systemd/system/lostglade-maintenance.timer /etc/systemd/system/lostglade-maintenance.service /usr/local/sbin/lostglade-maintenance
 systemctl daemon-reload
 systemctl enable lostglade.service
 

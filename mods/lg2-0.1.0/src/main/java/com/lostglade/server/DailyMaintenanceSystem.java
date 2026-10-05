@@ -2,15 +2,20 @@ package com.lostglade.server;
 
 import com.lostglade.Lg2;
 import com.lostglade.config.Lg2Config;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetTitleTextPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTitlesAnimationPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
@@ -26,7 +31,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Set;
+import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -38,6 +46,9 @@ public final class DailyMaintenanceSystem {
 			"server.properties", "whitelist.json", "ops.json", "banned-players.json",
 			"banned-ips.json", "usercache.json", "RELEASE_COMMIT");
 	private static final String BACKUP_PREFIX = "lg2-";
+	private static final Pattern BACKUP_FILE = Pattern.compile(
+			"lg2-(?:\\d{4}-\\d{2}-\\d{2}-\\d{2}-msk|manual-\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}-\\d{2}-msk-[0-9a-f]{32})\\.zip");
+	private static final DateTimeFormatter MANUAL_STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss");
 	private static final Duration RETENTION = Duration.ofDays(7);
 
 	private static Schedule schedule;
@@ -61,6 +72,61 @@ public final class DailyMaintenanceSystem {
 		});
 		ServerTickEvents.END_SERVER_TICK.register(DailyMaintenanceSystem::tick);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> schedule = null);
+		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
+				Commands.literal("restart")
+						.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
+						.then(Commands.argument("minutes", IntegerArgumentType.integer(1))
+								.executes(context -> startManualRestart(context.getSource(),
+										IntegerArgumentType.getInteger(context, "minutes"))))));
+	}
+
+	private static int startManualRestart(CommandSourceStack source, int minutes) {
+		if (schedule == null || restartRequested) {
+			source.sendFailure(Component.literal("Перезапуск уже выполняется."));
+			return 0;
+		}
+		if (backupRunning) {
+			source.sendFailure(Component.literal("Дождитесь завершения текущего бекапа."));
+			return 0;
+		}
+		MinecraftServer server = source.getServer();
+		ZonedDateTime restart = manualRestart(Instant.now(), minutes);
+		if (!startBackup(server, restart, true)) {
+			source.sendFailure(Component.literal("Не удалось запустить бекап; перезапуск не назначен."));
+			return 0;
+		}
+		schedule = new Schedule(restart, restart.toInstant(), true);
+		previousRemainingMillis = Duration.between(Instant.now(), restart.toInstant()).toMillis();
+		backupDelayAnnounced = false;
+		long initialSeconds = (long) minutes * 60;
+		if (initialSeconds == 1800 || initialSeconds == 600 || initialSeconds == 180 || initialSeconds == 60) {
+			sendWarning(server, initialSeconds);
+		} else {
+			sendTitle(server, "Перезапуск через " + minutes + " " + minuteWord(minutes), 60);
+		}
+		source.sendSuccess(() -> Component.literal("Бекап запущен; перезапуск через "
+				+ minutes + " " + minuteWord(minutes) + "."), true);
+		Lg2.LOGGER.info("Manual restart scheduled for {} (Moscow); backup started immediately", restart);
+		return 1;
+	}
+
+	static ZonedDateTime manualRestart(Instant now, int minutes) {
+		if (minutes < 1) {
+			throw new IllegalArgumentException("Restart delay must be positive");
+		}
+		return now.atZone(MOSCOW).plusMinutes(minutes);
+	}
+
+	private static String minuteWord(int minutes) {
+		int lastTwo = minutes % 100;
+		if (lastTwo >= 11 && lastTwo <= 14) {
+			return "минут";
+		}
+		return switch (minutes % 10) {
+			case 1 -> "минуту";
+			case 2, 3, 4 -> "минуты";
+			default -> "минут";
+		};
 	}
 
 	static ZonedDateTime nextRestart(Instant now, int hour) {
@@ -97,7 +163,7 @@ public final class DailyMaintenanceSystem {
 
 		if (!schedule.backupStarted() && !now.isBefore(schedule.backupAt())) {
 			schedule = schedule.withBackupStarted();
-			startBackup(server, schedule.restart());
+			startBackup(server, schedule.restart(), false);
 		}
 		if (remainingMillis <= 0 && backupRunning && !backupDelayAnnounced) {
 			backupDelayAnnounced = true;
@@ -137,7 +203,7 @@ public final class DailyMaintenanceSystem {
 		}
 	}
 
-	private static void startBackup(MinecraftServer server, ZonedDateTime restart) {
+	private static boolean startBackup(MinecraftServer server, ZonedDateTime restart, boolean manual) {
 		try {
 			server.saveEverything(false, true, true);
 			Path world = server.getWorldPath(LevelResource.ROOT).toRealPath();
@@ -146,22 +212,28 @@ public final class DailyMaintenanceSystem {
 			backupRunning = true;
 			Thread worker = new Thread(() -> {
 				try {
-					Path archive = writeBackup(world, gameDir, backupDir, restart);
-					Lg2.LOGGER.info("Daily backup completed: {}", archive);
+					Path archive = writeBackup(world, gameDir, backupDir, restart, manual);
+					Lg2.LOGGER.info("{} backup completed: {}", manual ? "Manual" : "Daily", archive);
 				} catch (Exception e) {
-					Lg2.LOGGER.error("Daily backup failed; scheduled restart will still proceed", e);
+					Lg2.LOGGER.error("{} backup failed; scheduled restart will still proceed", manual ? "Manual" : "Daily", e);
 				} finally {
 					backupRunning = false;
 				}
 			}, "LG2-daily-backup");
 			worker.setDaemon(true);
 			worker.start();
+			return true;
 		} catch (Exception e) {
-			Lg2.LOGGER.error("Could not start daily backup; scheduled restart will still proceed", e);
+			Lg2.LOGGER.error("Could not start {} backup", manual ? "manual" : "daily", e);
+			return false;
 		}
 	}
 
 	static Path writeBackup(Path world, Path gameDir, Path backupDir, ZonedDateTime restart) throws IOException {
+		return writeBackup(world, gameDir, backupDir, restart, false);
+	}
+
+	static Path writeBackup(Path world, Path gameDir, Path backupDir, ZonedDateTime restart, boolean manual) throws IOException {
 		Files.createDirectories(backupDir);
 		boolean posix = Files.getFileStore(backupDir).supportsFileAttributeView("posix");
 		if (posix) {
@@ -169,7 +241,10 @@ public final class DailyMaintenanceSystem {
 					PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE));
 		}
 		pruneStalePartials(backupDir, Instant.now());
-		String name = BACKUP_PREFIX + restart.toLocalDate() + "-" + String.format("%02d", restart.getHour()) + "-msk.zip";
+		String name = manual
+				? BACKUP_PREFIX + "manual-" + MANUAL_STAMP.format(restart) + "-msk-"
+						+ UUID.randomUUID().toString().replace("-", "") + ".zip"
+				: BACKUP_PREFIX + restart.toLocalDate() + "-" + String.format("%02d", restart.getHour()) + "-msk.zip";
 		Path archive = backupDir.resolve(name);
 		if (!Files.exists(archive)) {
 			Path partial = backupDir.resolve(name + ".partial");
@@ -236,7 +311,7 @@ public final class DailyMaintenanceSystem {
 		try (var files = Files.list(backupDir)) {
 			for (Path file : files.toList()) {
 				String name = file.getFileName().toString();
-				if (name.matches("lg2-\\d{4}-\\d{2}-\\d{2}-\\d{2}-msk\\.zip")
+				if (BACKUP_FILE.matcher(name).matches()
 						&& Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
 						&& Files.getLastModifiedTime(file).toInstant().isBefore(cutoff)) {
 					Files.delete(file);
@@ -250,7 +325,8 @@ public final class DailyMaintenanceSystem {
 		try (var files = Files.list(backupDir)) {
 			for (Path file : files.toList()) {
 				String name = file.getFileName().toString();
-				if (name.matches("lg2-\\d{4}-\\d{2}-\\d{2}-\\d{2}-msk\\.zip\\.partial")
+				if (name.endsWith(".partial")
+						&& BACKUP_FILE.matcher(name.substring(0, name.length() - ".partial".length())).matches()
 						&& Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
 						&& Files.getLastModifiedTime(file).toInstant().isBefore(cutoff)) {
 					Files.delete(file);

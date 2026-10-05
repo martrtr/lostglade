@@ -19,7 +19,7 @@ mod. World, player state, Fabric's remap cache, downloaded vanilla runtime,
 Polymer pack and TAB's player caches live in `/srv/lostglade/data`, outside
 releases.
 Secrets live in `/srv/lostglade/server-secrets` and are linked into a release
-only at runtime; they are never included in an archive or Git.
+only at runtime; they are never included in a release archive or Git.
 
 LG2 configuration is copied to persistent storage only for its first release;
 later releases retain auth and season state. `seamless-itemframes` remains: its
@@ -78,7 +78,22 @@ release binaries and the separate `server-secrets/` directory are excluded.
 This is an online save-and-copy backup, not an atomic filesystem
 snapshot; an off-host copy is still recommended for disaster recovery.
 
-`lostglade.service` uses `Restart=always` to start Minecraft after its clean
+Operators can schedule an earlier restart with `/restart <minutes>` (positive
+integer, required). It starts a separate backup immediately, shows the initial
+red title and then sends each warning threshold reached during the countdown.
+An archive still in progress delays the stop until it finishes.
+
+`lostglade.service` uses `Restart=always` to start Minecraft after a clean
 scheduled stop. `systemctl stop lostglade.service` still stops it intentionally;
 the in-game `/stop` command will instead be followed by a service restart.
 The Gradle `runServer` development task has no supervisor and will simply exit.
+Release activation removes the obsolete 04:00 `lostglade-maintenance.timer`
+and its service, so it cannot trigger a second restart or backup.
+
+For a separate offline recovery point, stop `lostglade.service` intentionally
+and run `lostglade-backup` as root, then start the service again. This manual
+tool creates and verifies a private tar.gz archive plus SHA-256 checksum in
+`/srv/lostglade/backups`. Unlike the automatic ZIP, it includes the generated
+Polymer pack and `server-secrets/`. It also prunes its own archives older than
+seven days. Neither local backup location survives total VPS loss; off-host
+copies require separate storage.

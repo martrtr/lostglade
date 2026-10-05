@@ -27,6 +27,17 @@ public final class DailyMaintenanceTest {
 				"restart at exactly 03:00 must be tomorrow");
 		check(DailyMaintenanceSystem.nextRestart(before, -5).getHour() == 0, "negative hour was not clamped");
 		check(DailyMaintenanceSystem.nextRestart(before, 42).getHour() == 23, "hour above 23 was not clamped");
+		for (int minutes : new int[]{1, 2, 10, 31, 1440}) {
+			ZonedDateTime manual = DailyMaintenanceSystem.manualRestart(before, minutes);
+			check(manual.toInstant().equals(before.plus(Duration.ofMinutes(minutes))),
+					"manual restart must use requested minutes: " + minutes);
+		}
+		try {
+			DailyMaintenanceSystem.manualRestart(before, 0);
+			throw new AssertionError("zero-minute restart was accepted");
+		} catch (IllegalArgumentException expected) {
+			// The command parser rejects this before calling the scheduler.
+		}
 	}
 
 	private static void checkWarnings() {
@@ -55,21 +66,29 @@ public final class DailyMaintenanceTest {
 			Files.writeString(root.resolve("data/config/lg2-auth.json"), "auth state");
 			Files.writeString(game.resolve("server.properties"), "properties");
 			Path oldBackup = backupDir.resolve("lg2-2026-09-20-03-msk.zip");
+			Path oldManual = backupDir.resolve("lg2-manual-2026-09-20-03-10-00-msk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip");
 			Path stalePartial = backupDir.resolve("lg2-2026-09-20-03-msk.zip.partial");
+			Path staleManualPartial = backupDir.resolve(oldManual.getFileName() + ".partial");
 			Path unrelated = backupDir.resolve("manual.zip");
 			Files.writeString(oldBackup, "old");
+			Files.writeString(oldManual, "old");
 			Files.writeString(stalePartial, "incomplete");
+			Files.writeString(staleManualPartial, "incomplete");
 			Files.writeString(unrelated, "keep");
 			FileTime oldTime = FileTime.from(Instant.now().minus(Duration.ofDays(8)));
 			Files.setLastModifiedTime(oldBackup, oldTime);
+			Files.setLastModifiedTime(oldManual, oldTime);
 			Files.setLastModifiedTime(stalePartial, oldTime);
+			Files.setLastModifiedTime(staleManualPartial, oldTime);
 			Files.setLastModifiedTime(unrelated, oldTime);
 
 			ZonedDateTime restart = DailyMaintenanceSystem.nextRestart(Instant.parse("2026-10-05T23:00:00Z"), 3);
 			Path archive = DailyMaintenanceSystem.writeBackup(world, game, backupDir, restart);
 			check(Files.isRegularFile(archive), "backup archive missing");
 			check(!Files.exists(oldBackup), "expired backup was not removed");
+			check(!Files.exists(oldManual), "expired manual backup was not removed");
 			check(!Files.exists(stalePartial), "stale partial backup was not removed");
+			check(!Files.exists(staleManualPartial), "stale manual partial backup was not removed");
 			check(Files.exists(unrelated), "unrelated archive was removed");
 			check(!Files.exists(backupDir.resolve(archive.getFileName() + ".partial")), "partial archive left behind");
 			try (ZipFile zip = new ZipFile(archive.toFile())) {
@@ -79,6 +98,14 @@ public final class DailyMaintenanceTest {
 					check(entries.contains(entry), "missing archive entry " + entry);
 				}
 			}
+			Path manualArchive = DailyMaintenanceSystem.writeBackup(world, game, backupDir, restart, true);
+			check(!manualArchive.equals(archive), "manual backup overwrote the daily archive");
+			check(Files.isRegularFile(manualArchive), "manual backup archive missing");
+			try (ZipFile zip = new ZipFile(manualArchive.toFile())) {
+				check(zip.getEntry("world/level.dat") != null, "manual backup omitted the world");
+			}
+			Path secondManualArchive = DailyMaintenanceSystem.writeBackup(world, game, backupDir, restart, true);
+			check(!secondManualArchive.equals(manualArchive), "manual backups reused the same archive name");
 		} finally {
 			try (var files = Files.walk(root)) {
 				for (Path file : files.sorted((a, b) -> b.getNameCount() - a.getNameCount()).toList()) {
