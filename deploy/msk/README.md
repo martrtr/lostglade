@@ -60,3 +60,22 @@ lostglade-activate-release <commit>
 
 After the initial deployment, use `journalctl -u lostglade -f` to watch
 startup. Chunky pre-generation is intentionally a manual post-release task.
+
+## Nightly restart and backups
+
+`lostglade-maintenance.timer` runs every day at 04:00 Moscow time. It takes an
+exclusive operations lock, stops Minecraft cleanly, makes a verified archive,
+then waits for the server's `Done (...)` startup marker before bringing the
+camera renderer back. A failed backup still restarts a previously running
+server.
+
+Archives are root-readable only in `/srv/lostglade/backups`. Each contains the
+world, player data, runtime configuration, generated Polymer resource pack and
+server secrets; it does not include logs or disposable caches. Retention keeps
+14 daily points, 8 weekly points and 12 monthly points. Every archive has an
+adjacent SHA-256 file and is listed with `tar -tzf` before it becomes a restore
+point.
+
+These are local VPS backups, so they do not survive total VPS loss. Adding an
+offsite target requires separate storage credentials and should copy only the
+already-verified archive plus its checksum.

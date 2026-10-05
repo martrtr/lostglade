@@ -16,6 +16,10 @@ release_dir="${server_root}/releases/${release_id}"
 temporary_dir="${server_root}/releases/.${release_id}.tmp"
 data_dir="${server_root}/data"
 
+# Do not switch releases while nightly maintenance owns the server lifecycle.
+exec 9>/run/lock/lostglade-operations.lock
+flock -n 9 || { echo 'Lostglade maintenance is in progress; retry deployment later.' >&2; exit 1; }
+
 [[ -f "${archive_path}" ]] || { echo "Archive is missing: ${archive_path}" >&2; exit 1; }
 if [[ -e "${release_dir}" ]]; then
   if [[ -L "${server_root}/current" && "$(readlink -f "${server_root}/current")" == "${release_dir}" ]]; then
@@ -51,6 +55,8 @@ for required in \
   server-icon.png \
   whitelist.json.template \
   deploy/msk/run-server.sh \
+  deploy/msk/backup-server.sh \
+  deploy/msk/lostglade-maintenance.sh \
   deploy/msk/run-renderer-bot.sh \
   renderer-bot/launch.cfg \
   mods/lg2-1.0.0.jar \
@@ -149,9 +155,14 @@ if [[ "${ready}" -ne 1 ]]; then
   exit 1
 fi
 
+install -m 0755 "${release_dir}/deploy/msk/backup-server.sh" /usr/local/sbin/lostglade-backup
+install -m 0755 "${release_dir}/deploy/msk/lostglade-maintenance.sh" /usr/local/sbin/lostglade-maintenance
 install -m 0644 "${release_dir}/deploy/msk/lostglade-renderer-bot.service" /etc/systemd/system/lostglade-renderer-bot.service
+install -m 0644 "${release_dir}/deploy/msk/lostglade-maintenance.service" /etc/systemd/system/lostglade-maintenance.service
+install -m 0644 "${release_dir}/deploy/msk/lostglade-maintenance.timer" /etc/systemd/system/lostglade-maintenance.timer
 systemctl daemon-reload
 systemctl enable lostglade-renderer-bot.service
+systemctl enable --now lostglade-maintenance.timer
 systemctl restart lostglade-renderer-bot.service
 
 rm -f -- "${archive_path}"

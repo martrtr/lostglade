@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Lostglade maintenance daily at 04:00 Moscow time
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Europe/Moscow
+Persistent=true
+AccuracySec=1min
+Unit=lostglade-maintenance.service
+
+[Install]
+WantedBy=timers.target
