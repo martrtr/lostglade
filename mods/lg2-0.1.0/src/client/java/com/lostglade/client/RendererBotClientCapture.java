@@ -44,6 +44,7 @@ public final class RendererBotClientCapture {
 	// last-resort failure limit, not a capture delay: a settled camera sends its
 	// frame as soon as its final render is stable.
 	private static final long LOCAL_CAPTURE_TIMEOUT_MS = Long.getLong("lg2.rendererBotLocalCaptureTimeoutMs", 40_000L);
+	private static final long LIVE_STREAM_FIRST_FRAME_TIMEOUT_MS = Long.getLong("lg2.rendererBotLiveStreamFirstFrameTimeoutMs", 14_000L);
 	private static final long RECENT_FRAME_TTL_MS = Long.getLong("lg2.rendererBotRecentFrameTtlMs", 175L);
 	private static final int DEFAULT_WARMUP_FRAMES = Math.max(1, Integer.getInteger("lg2.rendererBotWarmupFrames", 2));
 	// A renderer-owned empty section queue is the completion barrier.  A second
@@ -246,7 +247,7 @@ public final class RendererBotClientCapture {
 		// requests queued without converting that intentional pause into a timeout.
 		boolean handVideoActive = RendererBotClientVideoRecording.hasActiveRecording();
 		for (PendingCapture capture : captures) {
-			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= PHOTO_CAPTURE_TIMEOUT_MS) {
+			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= LOCAL_CAPTURE_TIMEOUT_MS) {
 				RendererBotShadowWorldManager.RenderReadiness readiness =
 						RendererBotShadowWorldManager.inspectRenderReadiness(capture.payload().renderSessionId());
 				Lg2.LOGGER.warn(
