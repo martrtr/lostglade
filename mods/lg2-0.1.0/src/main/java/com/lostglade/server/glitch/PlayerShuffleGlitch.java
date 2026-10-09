@@ -1,7 +1,5 @@
 package com.lostglade.server.glitch;
 
-import com.lostglade.server.AccountAuthSystem;
-
 import com.google.gson.JsonObject;
 import com.mojang.authlib.properties.Property;
 import it.unimi.dsi.fastutil.Pair;
@@ -208,7 +206,7 @@ public final class PlayerShuffleGlitch implements ServerGlitchHandler {
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (player == null || !player.isAlive() || player.isSpectator() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}

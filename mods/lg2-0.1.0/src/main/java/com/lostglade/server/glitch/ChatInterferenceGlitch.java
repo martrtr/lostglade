@@ -1,7 +1,5 @@
 package com.lostglade.server.glitch;
 
-import com.lostglade.server.AccountAuthSystem;
-
 import com.google.gson.JsonObject;
 import com.lostglade.config.GlitchConfig;
 import com.lostglade.server.AncientUkrCreditorChatSystem;
@@ -134,7 +132,7 @@ public final class ChatInterferenceGlitch implements ChatMessageGlitchHandler {
 		}
 
 		Component glitchedDecorated = outgoingParams.decorate(Component.literal(mutation.content()));
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (player == null) {
 				continue;
 			}
@@ -274,7 +272,7 @@ public final class ChatInterferenceGlitch implements ChatMessageGlitchHandler {
 	}
 
 	private static boolean hasAlternativeOnlinePlayer(MinecraftServer server, ServerPlayer sender) {
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (!player.getUUID().equals(sender.getUUID()) && !ServerBackroomsSystem.isInBackrooms(player)) {
 				return true;
 			}
@@ -284,7 +282,7 @@ public final class ChatInterferenceGlitch implements ChatMessageGlitchHandler {
 
 	private static ServerPlayer pickRandomOtherPlayer(MinecraftServer server, ServerPlayer sender, RandomSource random) {
 		List<ServerPlayer> candidates = new ArrayList<>();
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (player.getUUID().equals(sender.getUUID()) || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}

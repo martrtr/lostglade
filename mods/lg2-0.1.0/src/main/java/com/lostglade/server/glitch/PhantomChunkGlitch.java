@@ -1,10 +1,9 @@
 package com.lostglade.server.glitch;
 
-import com.lostglade.server.AccountAuthSystem;
-
 import com.google.gson.JsonObject;
 import com.lostglade.Lg2;
 import com.lostglade.config.GlitchConfig;
+import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerBackroomsSystem;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -282,7 +281,8 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 		}
 
 		for (ServerPlayer player : new ArrayList<>(level.players())) {
-			if (player == null || !player.isAlive() || player.isSpectator()) {
+			if (player == null || !player.isAlive() || player.isSpectator()
+					|| RendererBotPresenceSystem.isRendererBot(player)) {
 				continue;
 			}
 			if (!player.chunkPosition().equals(chunkPos)) {
@@ -337,7 +337,7 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (player == null || !player.isAlive() || player.isSpectator() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}
