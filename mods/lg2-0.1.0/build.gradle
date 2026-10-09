@@ -388,6 +388,14 @@ tasks.register("runGennadiyReportTrackerTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
+tasks.register("runCameraCapturePolicyTest", JavaExec) {
+	group = "verification"
+	description = "Runs still-camera readiness, interaction and cancellation regression checks."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.CameraCapturePolicyTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
 tasks.named("check") {
 	dependsOn(tasks.named("runYandexMapRenderPhaseEightTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseSevenTest"))
@@ -398,6 +406,7 @@ tasks.named("check") {
 	dependsOn(tasks.named("runYandexMapRenderPhaseTwoTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseOneTest"))
 	dependsOn(tasks.named("runGennadiyReportTrackerTest"))
+	dependsOn(tasks.named("runCameraCapturePolicyTest"))
 	dependsOn(tasks.named("runCompanionMovementTest"))
 	dependsOn(tasks.named("runRaceFixRegressionTest"))
 	dependsOn(tasks.named("runAncientUkrCreditorSelectionTest"))

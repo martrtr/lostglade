@@ -52,6 +52,11 @@ public interface MapPixelProvider {
 		return null;
 	}
 
+	/** Latest non-final 128×128 frame, if the provider can stream photo warm-up. */
+	default byte[] pollProgressPreview() {
+		return null;
+	}
+
 	default boolean immediatePreviewMatchesPrimaryFrame() {
 		return false;
 	}
@@ -69,6 +74,10 @@ public interface MapPixelProvider {
 	}
 
 	default void onCompleted(MinecraftServer server) {
+	}
+
+	/** Called when the print is no longer owned by its photographer or a frame. */
+	default void onCancelled(MinecraftServer server) {
 	}
 
 	default PhotoPrintData.MediaKind mediaKind() {

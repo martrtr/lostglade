@@ -1,6 +1,7 @@
 package com.lostglade.client;
 
 import com.lostglade.Lg2;
+import com.lostglade.server.CameraCaptureReadinessPolicy;
 import com.lostglade.mixin.client.ClientLevelMapDataAccessor;
 import com.lostglade.mixin.client.ClientPacketListenerShadowAccessor;
 import com.lostglade.mixin.client.MinecraftOffscreenWorldAccessor;
@@ -169,9 +170,10 @@ public final class RendererBotShadowWorldManager {
 
 	/**
 	 * Returns the renderer's own completion signal for a shadow-world camera.
-	 * A frame is safe to publish only after vanilla has built and uploaded every
-	 * visible section, and no new chunk packet has changed the shadow level
-	 * between consecutive checks.
+	 * A frame is safe to publish only after current shadow content has rendered,
+	 * at least one terrain section is visible, and this shadow renderer's section
+	 * queues are empty.  Each shadow session owns its own LevelRenderer, so this
+	 * cannot wait on terrain from the player's normal world or another camera.
 	 */
 	public static RenderReadiness inspectRenderReadiness(UUID sessionId) {
 		ShadowRenderSession session = resolveRenderSession(sessionId);
@@ -191,7 +193,7 @@ public final class RendererBotShadowWorldManager {
 			int uploadQueueSize = dispatcher.getToUpload();
 			int visibleSections = levelRenderer.countRenderedSections();
 			return new RenderReadiness(
-					contentReady && currentContentRendered && allSectionsRendered && compileQueueSize == 0 && uploadQueueSize == 0,
+					CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, allSectionsRendered),
 					session.contentRevision(),
 					visibleSections,
 					contentReady,
@@ -933,8 +935,13 @@ public final class RendererBotShadowWorldManager {
 			boolean currentContentRendered,
 			boolean allSectionsRendered,
 			int compileQueueSize,
-			int uploadQueueSize
+		int uploadQueueSize
 	) {
+		public boolean fullySettled() {
+			return this.contentReady && this.currentContentRendered && this.allSectionsRendered
+					&& this.compileQueueSize == 0 && this.uploadQueueSize == 0;
+		}
+
 		private static RenderReadiness unavailable() {
 			return new RenderReadiness(false, -1L, 0, false, false, false, -1, -1);
 		}

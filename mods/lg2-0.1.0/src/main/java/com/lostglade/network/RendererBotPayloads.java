@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RendererBotPayloads {
 	// Map-tile transport was removed from the renderer-bot protocol. Older clients
 	// must not accept this stream.
-	public static final int PROTOCOL_VERSION = 28;
+	public static final int PROTOCOL_VERSION = 29;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
 	private static final int MAX_HIDDEN_CAMERA_ENTITIES = 32;
@@ -46,6 +46,7 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playC2S().register(RendererBotAudioCaptureFailureC2SPayload.TYPE, RendererBotAudioCaptureFailureC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotServerModIdsS2CPayload.TYPE, RendererBotServerModIdsS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotCaptureRequestS2CPayload.TYPE, RendererBotCaptureRequestS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotCaptureCancelS2CPayload.TYPE, RendererBotCaptureCancelS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamStartS2CPayload.TYPE, RendererBotLiveStreamStartS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamPoseS2CPayload.TYPE, RendererBotLiveStreamPoseS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamStopS2CPayload.TYPE, RendererBotLiveStreamStopS2CPayload.STREAM_CODEC);
@@ -187,6 +188,26 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotCaptureRequestS2CPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** Stops client GPU work after the server invalidates the unfinished print. */
+	public record RendererBotCaptureCancelS2CPayload(UUID requestId) implements CustomPacketPayload {
+		public static final Type<RendererBotCaptureCancelS2CPayload> TYPE = new Type<>(id("renderer_bot_capture_cancel"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotCaptureCancelS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotCaptureCancelS2CPayload::write, RendererBotCaptureCancelS2CPayload::new);
+
+		public RendererBotCaptureCancelS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+		}
+
+		@Override
+		public Type<RendererBotCaptureCancelS2CPayload> type() {
 			return TYPE;
 		}
 	}

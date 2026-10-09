@@ -363,6 +363,16 @@ public final class CameraCaptureSystem {
 		}
 
 		@Override
+		public byte[] pollProgressPreview() {
+			return this.captureHandle.pollPreview();
+		}
+
+		@Override
+		public void onCancelled(MinecraftServer server) {
+			RendererBotCameraSystem.cancelCapture(this.captureHandle.requestId());
+		}
+
+		@Override
 		public boolean immediatePreviewMatchesPrimaryFrame() {
 			return this.mapsWide == 1 && this.mapsHigh == 1;
 		}

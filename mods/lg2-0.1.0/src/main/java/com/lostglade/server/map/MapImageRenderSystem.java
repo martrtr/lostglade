@@ -183,13 +183,23 @@ public final class MapImageRenderSystem {
 			pollNextActive();
 			return;
 		}
+		if (!isPhotoStillReachable(server, player, job.photoData())) {
+			job.provider().onCancelled(server);
+			player.displayClientMessage(Component.literal("Рендер снимка отменён: снимок больше не в инвентаре или рамке."), true);
+			removeJob(job.playerId());
+			pollNextActive();
+			return;
+		}
 		beginRender(player, job);
 		if (job.provider().prefersWholeFrameRendering()) {
 			if (!ensureWholeFrameTaskDispatched(server, player, job)) {
 				return;
 			}
 		}
-		if (!tickPreviewStage(server, player, job)) {
+		// Whole-frame providers already have the final map-sized image.  A second,
+		// independent 128x128 readback made the optional preview a hard dependency
+		// and could abort an otherwise valid photo.
+		if (!job.provider().prefersWholeFrameRendering() && !tickPreviewStage(server, player, job)) {
 			return;
 		}
 
@@ -278,6 +288,7 @@ public final class MapImageRenderSystem {
 		if (!ensureWholeFrameTaskDispatched(server, player, job)) {
 			return;
 		}
+		applyProgressPreview(server, player, job);
 
 		FrameResult frameResult = job.frameResult();
 		if (frameResult == null) {
@@ -300,6 +311,7 @@ public final class MapImageRenderSystem {
 			return;
 		}
 
+		applyPreviewToMaps(job, downscaleFrame(frame, job.outputWidth(), job.outputHeight()));
 		applyWholeFrameToMaps(job, frame);
 		updatePhotoProgress(server, job);
 
@@ -313,6 +325,44 @@ public final class MapImageRenderSystem {
 			removeJob(job.playerId());
 			pollNextActive();
 		}
+	}
+
+	private static void applyProgressPreview(MinecraftServer server, ServerPlayer player, RenderJob job) {
+		byte[] preview = job == null ? null : job.provider().pollProgressPreview();
+		if (!isValidFrame(preview, MAP_SIZE * MAP_SIZE) || !job.acceptPreview(preview)) {
+			return;
+		}
+		applyPreviewToMaps(job, preview);
+		if (player != null) {
+			sendPhotoPreviewMap(player, new MapId(job.previewMapId()), job.previewMapData());
+		}
+		sendCompletedPhotoMaps(server, job.photoData());
+	}
+
+	private static void applyPreviewToMaps(RenderJob job, byte[] preview) {
+		if (job == null || !isValidFrame(preview, MAP_SIZE * MAP_SIZE)) return;
+		applyFrameToMap(job.previewMapData(), preview);
+		for (int tileY = 0; tileY < job.mapsHigh(); tileY++) {
+			for (int tileX = 0; tileX < job.mapsWide(); tileX++) {
+				MapItemSavedData mapData = job.mapDataSet()[tileY * job.mapsWide() + tileX];
+				if (mapData == null || mapData.colors == null || mapData.colors.length < MAP_SIZE * MAP_SIZE) continue;
+				for (int y = 0; y < MAP_SIZE; y++) for (int x = 0; x < MAP_SIZE; x++) {
+					int sourceX = (tileX * MAP_SIZE + x) * MAP_SIZE / job.outputWidth();
+					int sourceY = (tileY * MAP_SIZE + y) * MAP_SIZE / job.outputHeight();
+					mapData.colors[y * MAP_SIZE + x] = preview[sourceY * MAP_SIZE + sourceX];
+				}
+				mapData.setDirty();
+			}
+		}
+	}
+
+	private static byte[] downscaleFrame(byte[] frame, int width, int height) {
+		byte[] preview = new byte[MAP_SIZE * MAP_SIZE];
+		if (frame == null || frame.length < width * height) return preview;
+		for (int y = 0; y < MAP_SIZE; y++) for (int x = 0; x < MAP_SIZE; x++) {
+			preview[y * MAP_SIZE + x] = frame[(y * height / MAP_SIZE) * width + x * width / MAP_SIZE];
+		}
+		return preview;
 	}
 
 	private static boolean ensureWholeFrameTaskDispatched(MinecraftServer server, ServerPlayer player, RenderJob job) {
@@ -872,6 +922,33 @@ public final class MapImageRenderSystem {
 		}
 	}
 
+	private static boolean isPhotoStillReachable(MinecraftServer server, ServerPlayer owner, PhotoPrintData photoData) {
+		if (server == null || owner == null || photoData == null) {
+			return false;
+		}
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			PhotoPrintData stackData = PhotoPrintData.readPhotoItem(owner.getInventory().getItem(slot));
+			if (stackData != null && stackData.samePhoto(photoData)) {
+				return true;
+			}
+		}
+		for (ServerLevel level : server.getAllLevels()) {
+			var bounds = new net.minecraft.world.phys.AABB(
+					-30_000_000.0D, level.getMinY(), -30_000_000.0D,
+					30_000_000.0D, level.getMaxY(), 30_000_000.0D
+			);
+			for (net.minecraft.world.entity.decoration.ItemFrame frame : level.getEntitiesOfClass(
+					net.minecraft.world.entity.decoration.ItemFrame.class, bounds
+			)) {
+				PhotoPrintData.PlacedPhotoFrameData frameData = PhotoPrintData.readFrameTile(frame.getItem());
+				if (frameData != null && frameData.samePhoto(photoData)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	private static void ensureExecutor() {
 		if (executor != null) {
 			return;
@@ -922,6 +999,7 @@ public final class MapImageRenderSystem {
 		private boolean startedRendering;
 		private volatile FrameResult frameResult;
 		private volatile FrameResult previewResult;
+		private byte[] lastAppliedProgressPreview;
 		private int frameApplyIndex;
 		private int lastDisplayedProgress = -1;
 
@@ -1085,6 +1163,13 @@ public final class MapImageRenderSystem {
 
 		private FrameResult previewResult() {
 			return this.previewResult;
+		}
+
+		private boolean acceptPreview(byte[] preview) {
+			if (preview == null || preview.length < MAP_SIZE * MAP_SIZE) return false;
+			if (java.util.Arrays.equals(this.lastAppliedProgressPreview, preview)) return false;
+			this.lastAppliedProgressPreview = preview.clone();
+			return true;
 		}
 
 		private int frameApplyIndex() {
