@@ -1,12 +1,11 @@
 package com.lostglade.server.glitch;
 
-import com.lostglade.server.AccountAuthSystem;
-
 import com.google.common.collect.ImmutableMultimap;
 import com.google.gson.JsonObject;
 import com.lostglade.Lg2;
 import com.lostglade.mixin.PlayerTrackedDataAccessor;
 import com.lostglade.config.GlitchConfig;
+import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerBackroomsSystem;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
@@ -462,7 +461,7 @@ public final class PhantomMobGlitch implements ServerGlitchHandler {
 		}
 
 		List<ServerPlayer> candidates = new ArrayList<>();
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (player == null || !player.isAlive() || player.isSpectator() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}
@@ -665,7 +664,8 @@ public final class PhantomMobGlitch implements ServerGlitchHandler {
 
 		AABB phantomBox = mob.getBoundingBox().inflate(CONTACT_PADDING);
 		for (ServerPlayer player : level.players()) {
-			if (!player.isAlive() || player.isSpectator()) {
+			if (!player.isAlive() || player.isSpectator()
+					|| RendererBotPresenceSystem.isRendererBot(player)) {
 				continue;
 			}
 			if (player.getBoundingBox().intersects(phantomBox)) {
@@ -814,7 +814,7 @@ public final class PhantomMobGlitch implements ServerGlitchHandler {
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
 		List<ServerPlayer> players = new ArrayList<>();
-		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
+		for (ServerPlayer player : GlitchPlayers.eligiblePlayers(server)) {
 			if (player.isSpectator() || !player.isAlive() || ServerBackroomsSystem.isInBackrooms(player)) {
 				continue;
 			}

@@ -2,6 +2,7 @@ package com.lostglade.server.glitch;
 
 import com.google.gson.JsonObject;
 import com.lostglade.config.GlitchConfig;
+import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerBackroomsSystem;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -337,7 +338,8 @@ public final class GravitySurgeGlitch implements ServerGlitchHandler {
 		if (entity.isPassenger()) {
 			return false;
 		}
-		if (entity instanceof ServerPlayer player && player.isSpectator()) {
+		if (entity instanceof ServerPlayer player
+				&& (player.isSpectator() || RendererBotPresenceSystem.isRendererBot(player))) {
 			return false;
 		}
 		return true;

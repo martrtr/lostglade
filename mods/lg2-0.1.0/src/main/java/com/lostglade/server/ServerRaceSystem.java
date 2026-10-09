@@ -14846,7 +14846,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			}
 			updateKilkaStockMiningModifiers(player);
 			if (player.isAlive() && !player.isSpectator() && getKilkaStockAbility(player) != null
-					&& (isKilkaFeetInWater(player) || isKilkaHeadUnderwater(player))) {
+					&& isKilkaHeadUnderwater(player)) {
 				refreshKilkaStockNightVision(player);
 			} else {
 				clearKilkaStockNightVision(player);

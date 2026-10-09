@@ -61,6 +61,9 @@ public final class CameraCaptureSystem {
 			if (!isLeftClickCameraTrigger(serverPlayer, hand)) {
 				return InteractionResult.PASS;
 			}
+			if (isSuppressedByRecentUse(serverPlayer, hand)) {
+				return InteractionResult.PASS;
+			}
 			CameraPhotoMenuSystem.open(serverPlayer);
 			return InteractionResult.SUCCESS;
 		});
@@ -269,6 +272,9 @@ public final class CameraCaptureSystem {
 			return InteractionResult.PASS;
 		}
 		if (!isLeftClickCameraTrigger(serverPlayer, hand)) {
+			return InteractionResult.PASS;
+		}
+		if (isSuppressedByRecentUse(serverPlayer, hand)) {
 			return InteractionResult.PASS;
 		}
 		CameraPhotoMenuSystem.open(serverPlayer);

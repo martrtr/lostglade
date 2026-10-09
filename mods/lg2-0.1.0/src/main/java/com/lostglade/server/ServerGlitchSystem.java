@@ -212,7 +212,10 @@ public final class ServerGlitchSystem {
 			return;
 		}
 
-		if (ServerBackroomsSystem.countPlayersOutsideBackrooms(server) <= 0) {
+		if (AccountAuthSystem.authenticatedPlayers(server).stream().noneMatch(player ->
+				player.isAlive() && !player.isSpectator()
+						&& !ServerBackroomsSystem.isInBackrooms(player)
+						&& !RendererBotPresenceSystem.isRendererBot(player))) {
 			return;
 		}
 
@@ -227,13 +230,13 @@ public final class ServerGlitchSystem {
 	}
 
 	private static boolean onAllowChatMessage(PlayerChatMessage message, ServerPlayer sender, ChatType.Bound params) {
-		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
+		if (!AccountAuthSystem.isAuthenticated(sender) || RendererBotPresenceSystem.isRendererBot(sender)) return true;
 		return handleBroadcastedPlayerMessage(message, sender, params, true);
 	}
 
 	private static boolean onAllowCommandMessage(PlayerChatMessage message, CommandSourceStack source, ChatType.Bound params) {
 		if (source == null || !(source.getEntity() instanceof ServerPlayer sender)) return true;
-		if (!AccountAuthSystem.isAuthenticated(sender)) return true;
+		if (!AccountAuthSystem.isAuthenticated(sender) || RendererBotPresenceSystem.isRendererBot(sender)) return true;
 		return handleBroadcastedPlayerMessage(message, sender, params, false);
 	}
 
@@ -331,6 +334,7 @@ public final class ServerGlitchSystem {
 	) {
 		if (source == null
 				|| !(source.getEntity() instanceof ServerPlayer sender)
+				|| RendererBotPresenceSystem.isRendererBot(sender)
 				|| targets == null
 				|| targets.isEmpty()
 				|| message == null) {
@@ -494,7 +498,7 @@ public final class ServerGlitchSystem {
 	}
 
 	private static void onCopyFrom(ServerPlayer oldPlayer, ServerPlayer newPlayer, boolean alive) {
-		if (alive || newPlayer == null) {
+		if (alive || newPlayer == null || RendererBotPresenceSystem.isRendererBot(newPlayer)) {
 			return;
 		}
 		if ((oldPlayer != null && ServerBackroomsSystem.isInBackrooms(oldPlayer))
@@ -574,6 +578,9 @@ public final class ServerGlitchSystem {
 	}
 
 	private static void onAfterRespawn(ServerPlayer oldPlayer, ServerPlayer newPlayer, boolean alive) {
+		if (RendererBotPresenceSystem.isRendererBot(newPlayer)) {
+			return;
+		}
 		ServerGlitchHandler baseHandler = HANDLERS.get(CHECKPOINT_DESYNC_ID);
 		if (!(baseHandler instanceof RespawnGlitchHandler respawnHandler)) {
 			return;
@@ -593,7 +600,8 @@ public final class ServerGlitchSystem {
 		if (world.isClientSide() || !(player instanceof ServerPlayer serverPlayer) || !(world instanceof ServerLevel serverLevel)) {
 			return InteractionResult.PASS;
 		}
-		if (ServerBackroomsSystem.isInBackrooms(serverPlayer) || ServerBackroomsSystem.isBackrooms(serverLevel)) {
+		if (RendererBotPresenceSystem.isRendererBot(serverPlayer)
+				|| ServerBackroomsSystem.isInBackrooms(serverPlayer) || ServerBackroomsSystem.isBackrooms(serverLevel)) {
 			return InteractionResult.PASS;
 		}
 
@@ -694,7 +702,8 @@ public final class ServerGlitchSystem {
 		if (world.isClientSide() || !(player instanceof ServerPlayer serverPlayer)) {
 			return InteractionResult.PASS;
 		}
-		if (ServerBackroomsSystem.isInBackrooms(serverPlayer) || ServerBackroomsSystem.isInBackrooms(entity)) {
+		if (RendererBotPresenceSystem.isRendererBot(serverPlayer)
+				|| ServerBackroomsSystem.isInBackrooms(serverPlayer) || ServerBackroomsSystem.isInBackrooms(entity)) {
 			return InteractionResult.PASS;
 		}
 		ChestDesyncGlitch.noteEntityInteraction(serverPlayer, entity, hand);
@@ -784,7 +793,8 @@ public final class ServerGlitchSystem {
 			Entity entity,
 			EntityHitResult hitResult
 	) {
-		if (world.isClientSide() || !(player instanceof ServerPlayer)) {
+		if (world.isClientSide() || !(player instanceof ServerPlayer serverPlayer)
+				|| RendererBotPresenceSystem.isRendererBot(serverPlayer)) {
 			return InteractionResult.PASS;
 		}
 
