@@ -40,10 +40,10 @@ import java.util.concurrent.Executors;
 
 public final class RendererBotClientCapture {
 	private static final Object LOCK = new Object();
-	// The server normally allows 15 seconds for a photo.  This is only a
-	// last-resort failure limit, not a capture delay: a settled camera sends its
-	// frame as soon as its final render is stable.
-	private static final long LOCAL_CAPTURE_TIMEOUT_MS = Long.getLong("lg2.rendererBotLocalCaptureTimeoutMs", 14_000L);
+	// A settled camera sends immediately; this only bounds heavy scenes that
+	// need extra time to finish compiling every visible section.
+	private static final long PHOTO_CAPTURE_TIMEOUT_MS = Long.getLong("lg2.rendererBotLocalCaptureTimeoutMs", 58_000L);
+	private static final long LIVE_STREAM_FIRST_FRAME_TIMEOUT_MS = 14_000L;
 	private static final long RECENT_FRAME_TTL_MS = Long.getLong("lg2.rendererBotRecentFrameTtlMs", 175L);
 	private static final int DEFAULT_WARMUP_FRAMES = Math.max(1, Integer.getInteger("lg2.rendererBotWarmupFrames", 2));
 	private static final int CAPTURE_REQUIRED_SETTLED_RENDERS = Math.max(1, Integer.getInteger("lg2.rendererBotStableCaptureProbes", 2));
@@ -237,7 +237,7 @@ public final class RendererBotClientCapture {
 		// requests queued without converting that intentional pause into a timeout.
 		boolean handVideoActive = RendererBotClientVideoRecording.hasActiveRecording();
 		for (PendingCapture capture : captures) {
-			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= LOCAL_CAPTURE_TIMEOUT_MS) {
+			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= PHOTO_CAPTURE_TIMEOUT_MS) {
 				RendererBotShadowWorldManager.RenderReadiness readiness =
 						RendererBotShadowWorldManager.inspectRenderReadiness(capture.payload().renderSessionId());
 				Lg2.LOGGER.warn(
@@ -259,7 +259,7 @@ public final class RendererBotClientCapture {
 			if (liveStream == null || !liveStream.canScheduleFrame()) {
 				continue;
 			}
-			if (!handVideoActive && now - liveStream.startedAtMillis() >= LOCAL_CAPTURE_TIMEOUT_MS && liveStream.lastFrameAtNanos() == 0L) {
+			if (!handVideoActive && now - liveStream.startedAtMillis() >= LIVE_STREAM_FIRST_FRAME_TIMEOUT_MS && liveStream.lastFrameAtNanos() == 0L) {
 				sendLiveFailure(liveStream.payload(), "Renderer bot live stream did not produce a rendered frame in time");
 				clearLiveStreamSession(liveStream.payload().streamId());
 			}

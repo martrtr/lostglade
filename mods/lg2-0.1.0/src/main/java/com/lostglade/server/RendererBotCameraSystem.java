@@ -123,6 +123,7 @@ public final class RendererBotCameraSystem {
 	private static final int CAMERA_CHUNK_TICKET_UNIQUE_FLAG = 128;
 	private static final int SHADOW_REAR_VIEW_CHUNKS = 2;
 	private static final long LIVE_STREAM_STALE_MS = 1_500L;
+	private static final long CAMERA_HOTBAR_WARMUP_STALE_MS = 15_000L;
 	private static final long LIVE_STREAM_REBALANCE_INTERVAL_MS = 1_000L;
 	private static final long LIVE_STREAM_TRANSFER_COOLDOWN_MS = 15_000L;
 	private static final long ITEM_ICON_CAPTURE_TIMEOUT_MS = 30_000L;
@@ -1998,8 +1999,7 @@ public final class RendererBotCameraSystem {
 		if (server == null || server.getPlayerList() == null) {
 			return false;
 		}
-		ServerPlayer bot = selectBot(server);
-		if (bot != null && hasActiveVideoRecording(bot.getUUID())) {
+		if (shouldSuspendCameraHotbarWarmup(server)) {
 			return false;
 		}
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
@@ -2042,11 +2042,10 @@ public final class RendererBotCameraSystem {
 		if (server == null || server.getPlayerList() == null) {
 			return;
 		}
-		// A recording needs the renderer client's single off-screen target and a
-		// stable shadow world.  The invisible 1x1 hotbar prewarm stream otherwise
-		// keeps being restarted while the client deliberately services the video.
-		ServerPlayer bot = selectBot(server);
-		if (bot != null && hasActiveVideoRecording(bot.getUUID())) {
+		// Photos and recordings need the renderer's single off-screen target. A
+		// prewarm stream cannot produce frames during capture, becomes stale and
+		// restarts repeatedly, invalidating the shadow-world render backlog.
+		if (shouldSuspendCameraHotbarWarmup(server)) {
 			for (String ownerKey : new ArrayList<>(LIVE_STREAMS_BY_OWNER.keySet())) {
 				if (ownerKey != null && ownerKey.startsWith("lg2:camera_hotbar_warmup:")) {
 					stopLiveStream(ownerKey);
@@ -2100,6 +2099,14 @@ public final class RendererBotCameraSystem {
 			}
 			stopLiveStream(ownerKey);
 		}
+	}
+
+	private static boolean shouldSuspendCameraHotbarWarmup(MinecraftServer server) {
+		if (!PENDING_CAPTURES.isEmpty()) {
+			return true;
+		}
+		ServerPlayer bot = selectBot(server);
+		return bot != null && hasActiveVideoRecording(bot.getUUID());
 	}
 
 	private static void cleanupOrphanedLiveStreams(MinecraftServer server) {
@@ -5215,7 +5222,9 @@ public final class RendererBotCameraSystem {
 			if (this.lastFrameAtMillis > referenceTime) {
 				referenceTime = this.lastFrameAtMillis;
 			}
-			return System.currentTimeMillis() - referenceTime > LIVE_STREAM_STALE_MS;
+			long staleAfter = this.ownerKey.startsWith("lg2:camera_hotbar_warmup:")
+					? CAMERA_HOTBAR_WARMUP_STALE_MS : LIVE_STREAM_STALE_MS;
+			return System.currentTimeMillis() - referenceTime > staleAfter;
 		}
 
 		private long lastActivityAtMillis() {

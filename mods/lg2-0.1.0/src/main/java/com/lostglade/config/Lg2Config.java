@@ -49,7 +49,7 @@ public final class Lg2Config {
 	private static final int MIN_CAMERA_RENDER_SAMPLES_PER_AXIS = 1;
 	private static final int MAX_CAMERA_RENDER_SAMPLES_PER_AXIS = 4;
 	private static final int MIN_CAMERA_RENDERER_BOT_TIMEOUT_MS = 250;
-	private static final int MAX_CAMERA_RENDERER_BOT_TIMEOUT_MS = 30_000;
+	private static final int MAX_CAMERA_RENDERER_BOT_TIMEOUT_MS = 60_000;
 	private static final int MIN_YANDEX_MAP_RENDERER_MAX_GLOBAL_IN_FLIGHT = 1;
 	private static final int MAX_YANDEX_MAP_RENDERER_MAX_GLOBAL_IN_FLIGHT = 64;
 	private static final int MIN_YANDEX_MAP_SNAPSHOT_THREADS = 1;
@@ -418,7 +418,7 @@ public final class Lg2Config {
 		public boolean cameraRendererAllowPlayerVolunteers = true;
 		/** Client-side opt-in. Never enabled automatically. */
 		public boolean cameraRendererVolunteerEnabled = false;
-		public int cameraRendererBotTimeoutMs = 15_000;
+		public int cameraRendererBotTimeoutMs = 60_000;
 		/** Server admission for regular Lostglade clients volunteering for map rendering. */
 		public boolean yandexMapRendererAllowPlayerVolunteers = true;
 		public int yandexMapRendererMaxGlobalInFlight = 32;

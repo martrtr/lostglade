@@ -38,7 +38,7 @@
   "giantZombieReplacementChance": 200,
 
   "cameraRendererBotPlayerName": "camera",
-  "cameraRendererBotTimeoutMs": 15000,
+  "cameraRendererBotTimeoutMs": 60000,
   "cameraRenderThreads": 2,
   "cameraRenderInFlightPixels": 1024,
   "cameraRenderSamplesPerAxis": 2,
