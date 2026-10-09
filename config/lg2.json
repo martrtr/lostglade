@@ -1,4 +1,6 @@
 {
+  "restartHourMsk": 3,
+
   "oresPerChunkMin": 8,
   "oresPerChunkMax": 14,
   "veinSizeMin": 2,
@@ -36,7 +38,7 @@
   "giantZombieReplacementChance": 200,
 
   "cameraRendererBotPlayerName": "camera",
-  "cameraRendererBotTimeoutMs": 15000,
+  "cameraRendererBotTimeoutMs": 60000,
   "cameraRenderThreads": 2,
   "cameraRenderInFlightPixels": 1024,
   "cameraRenderSamplesPerAxis": 2,

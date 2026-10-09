@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The maintenance service stops Minecraft first; refusing a live backup avoids
-# archives with mismatched region files.
+# Run only while Minecraft is stopped; refusing a live backup avoids archives
+# with mismatched region files.
 if [[ ${EUID} -ne 0 ]]; then
   echo 'Run as root.' >&2
   exit 1
@@ -17,8 +17,8 @@ backup_dir="${server_root}/backups"
 tz='Europe/Moscow'
 install -d -o root -g root -m 0700 "${backup_dir}"
 
-backup_date="$(TZ="${tz}" date +%F)"
-archive_name="daily-${backup_date}.tar.gz"
+backup_date="$(TZ="${tz}" date +%F-%H-%M-%S)"
+archive_name="cold-${backup_date}-$$.tar.gz"
 archive_path="${backup_dir}/${archive_name}"
 temporary_path="${backup_dir}/.${archive_name}.$$.partial"
 cleanup() { rm -f -- "${temporary_path}"; }
@@ -43,36 +43,12 @@ mv -f -- "${temporary_path}" "${archive_path}"
 sha256sum "${archive_path}" > "${archive_path}.sha256"
 chmod 0600 "${archive_path}" "${archive_path}.sha256"
 
-# Retain 14 daily points, then one from each earlier ISO week (8) and month
-# (12). Archive and checksum are always removed together.
-mapfile -t archives < <(find "${backup_dir}" -maxdepth 1 -type f -name 'daily-????-??-??.tar.gz' -printf '%f\n' | LC_ALL=C sort -r)
-declare -A keep=() seen_weeks=() seen_months=()
-daily_count=0
-weekly_count=0
-monthly_count=0
-for name in "${archives[@]}"; do
-  date_part="${name#daily-}"
-  date_part="${date_part%.tar.gz}"
-  if (( daily_count < 14 )); then
-    keep["${name}"]=1
-    ((daily_count += 1))
-  fi
-  week="$(TZ="${tz}" date -d "${date_part}" +%G-W%V)"
-  if [[ -z "${seen_weeks[${week}]:-}" && ${weekly_count} -lt 8 ]]; then
-    keep["${name}"]=1
-    seen_weeks["${week}"]=1
-    ((weekly_count += 1))
-  fi
-  month="${date_part:0:7}"
-  if [[ -z "${seen_months[${month}]:-}" && ${monthly_count} -lt 12 ]]; then
-    keep["${name}"]=1
-    seen_months["${month}"]=1
-    ((monthly_count += 1))
-  fi
-done
-for name in "${archives[@]}"; do
-  [[ -n "${keep[${name}]:-}" ]] && continue
-  rm -f -- "${backup_dir}/${name}" "${backup_dir}/${name}.sha256"
-done
+# Manual cold archives, including archives from the retired timer, expire after
+# one week. Remove each checksum with its archive.
+while IFS= read -r -d '' old_archive; do
+  rm -f -- "${old_archive}" "${old_archive}.sha256"
+done < <(find "${backup_dir}" -maxdepth 1 -type f \
+  \( -name 'cold-????-??-??-??-??-??-*.tar.gz' -o -name 'daily-????-??-??.tar.gz' \) \
+  -mmin +10080 -print0)
 
 printf 'Created backup %s\n' "${archive_path}"

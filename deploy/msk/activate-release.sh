@@ -16,9 +16,10 @@ release_dir="${server_root}/releases/${release_id}"
 temporary_dir="${server_root}/releases/.${release_id}.tmp"
 data_dir="${server_root}/data"
 
-# Do not switch releases while nightly maintenance owns the server lifecycle.
+# Do not run two release activations concurrently. The legacy maintenance
+# service also uses this lock until the new release disables its timer.
 exec 9>/run/lock/lostglade-operations.lock
-flock -n 9 || { echo 'Lostglade maintenance is in progress; retry deployment later.' >&2; exit 1; }
+flock -n 9 || { echo 'Another Lostglade operation is in progress; retry later.' >&2; exit 1; }
 
 [[ -f "${archive_path}" ]] || { echo "Archive is missing: ${archive_path}" >&2; exit 1; }
 if [[ -e "${release_dir}" ]]; then
@@ -56,7 +57,6 @@ for required in \
   whitelist.json.template \
   deploy/msk/run-server.sh \
   deploy/msk/backup-server.sh \
-  deploy/msk/lostglade-maintenance.sh \
   deploy/msk/run-renderer-bot.sh \
   renderer-bot/launch.cfg \
   mods/lg2-1.0.0.jar \
@@ -129,6 +129,8 @@ ln -s "${release_dir}" "${server_root}/current.next"
 mv -Tf "${server_root}/current.next" "${server_root}/current"
 
 started_at="$(date --iso-8601=seconds)"
+install -m 0644 "${release_dir}/deploy/msk/lostglade.service" /etc/systemd/system/lostglade.service
+systemctl daemon-reload
 systemctl restart lostglade.service
 ready=0
 for _ in $(seq 1 45); do
@@ -156,13 +158,13 @@ if [[ "${ready}" -ne 1 ]]; then
 fi
 
 install -m 0755 "${release_dir}/deploy/msk/backup-server.sh" /usr/local/sbin/lostglade-backup
-install -m 0755 "${release_dir}/deploy/msk/lostglade-maintenance.sh" /usr/local/sbin/lostglade-maintenance
 install -m 0644 "${release_dir}/deploy/msk/lostglade-renderer-bot.service" /etc/systemd/system/lostglade-renderer-bot.service
-install -m 0644 "${release_dir}/deploy/msk/lostglade-maintenance.service" /etc/systemd/system/lostglade-maintenance.service
-install -m 0644 "${release_dir}/deploy/msk/lostglade-maintenance.timer" /etc/systemd/system/lostglade-maintenance.timer
+if systemctl is-active --quiet lostglade-maintenance.timer || systemctl is-enabled --quiet lostglade-maintenance.timer; then
+  systemctl disable --now lostglade-maintenance.timer
+fi
+rm -f -- /etc/systemd/system/lostglade-maintenance.timer /etc/systemd/system/lostglade-maintenance.service /usr/local/sbin/lostglade-maintenance
 systemctl daemon-reload
 systemctl enable lostglade-renderer-bot.service
-systemctl enable --now lostglade-maintenance.timer
 systemctl restart lostglade-renderer-bot.service
 
 rm -f -- "${archive_path}"

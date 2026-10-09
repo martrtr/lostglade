@@ -29,12 +29,12 @@ chmod 0640 "${server_root}/.config/yt-dlp/config"
 install -m 0755 "${bootstrap_dir}/deploy/msk/activate-release.sh" /usr/local/sbin/lostglade-activate-release
 install -m 0644 "${bootstrap_dir}/deploy/msk/lostglade.service" /etc/systemd/system/lostglade.service
 install -m 0755 "${bootstrap_dir}/deploy/msk/backup-server.sh" /usr/local/sbin/lostglade-backup
-install -m 0755 "${bootstrap_dir}/deploy/msk/lostglade-maintenance.sh" /usr/local/sbin/lostglade-maintenance
-install -m 0644 "${bootstrap_dir}/deploy/msk/lostglade-maintenance.service" /etc/systemd/system/lostglade-maintenance.service
-install -m 0644 "${bootstrap_dir}/deploy/msk/lostglade-maintenance.timer" /etc/systemd/system/lostglade-maintenance.timer
+if systemctl is-active --quiet lostglade-maintenance.timer || systemctl is-enabled --quiet lostglade-maintenance.timer; then
+  systemctl disable --now lostglade-maintenance.timer
+fi
+rm -f -- /etc/systemd/system/lostglade-maintenance.timer /etc/systemd/system/lostglade-maintenance.service /usr/local/sbin/lostglade-maintenance
 systemctl daemon-reload
 systemctl enable lostglade.service
-systemctl enable lostglade-maintenance.timer
 
 # The renderer is local-only. Only SSH, Minecraft, voice and webcam are
 # exposed; the later UFW enable is intentionally after the SSH allow rule.

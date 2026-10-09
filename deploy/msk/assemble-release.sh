@@ -145,7 +145,6 @@ done < <(find "${repo_dir}/config/lg2-season-start" -type f -print0 | LC_ALL=C s
 for path in \
   deploy/msk/activate-release.sh \
   deploy/msk/backup-server.sh \
-  deploy/msk/lostglade-maintenance.sh \
   deploy/msk/lostglade.service \
   deploy/msk/provision-vps.sh \
   deploy/msk/run-server.sh \
@@ -155,12 +154,6 @@ done
 install -D -m 0644 \
   "${repo_dir}/deploy/msk/lostglade-renderer-bot.service" \
   "${stage_dir}/deploy/msk/lostglade-renderer-bot.service"
-for path in \
-  deploy/msk/lostglade-maintenance.service \
-  deploy/msk/lostglade-maintenance.timer; do
-  install -D -m 0644 "${repo_dir}/${path}" "${stage_dir}/${path}"
-done
-
 printf '%s\n' "${release_id}" > "${stage_dir}/RELEASE_COMMIT"
 (
   cd "${stage_dir}"

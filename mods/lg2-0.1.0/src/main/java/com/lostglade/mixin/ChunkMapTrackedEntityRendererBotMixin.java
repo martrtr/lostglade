@@ -43,6 +43,17 @@ public abstract class ChunkMapTrackedEntityRendererBotMixin {
 
 	@Inject(method = "updatePlayer", at = @At("HEAD"), cancellable = true)
 	private void lg2$trackEntitiesFromVirtualCameraPositions(ServerPlayer player, CallbackInfo ci) {
+		double dx = player.getX() - this.entity.getX();
+		double dz = player.getZ() - this.entity.getZ();
+		double range = this.getEffectiveRange();
+		if (dx * dx + dz * dz > range * range
+				&& !this.seenBy.contains(player.connection)
+				&& !RendererBotPresenceSystem.isRendererBot(player)
+				&& !DroneSystem.isControllingDrone(player)) {
+			ci.cancel();
+			return;
+		}
+
 		if (SeasonStartSystem.shouldSuppressEntityTracking(player, this.entity)) {
 			ci.cancel();
 			this.removePlayer(player);

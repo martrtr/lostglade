@@ -1227,9 +1227,9 @@ public final class ServerRaceSystem {
 	private static final Set<UUID> KILKA_STOCK_NIGHT_VISION_INITIALIZED = new HashSet<>();
 	private static final Map<UUID, MobEffectInstance> KILKA_STOCK_NATURAL_NIGHT_VISION = new LinkedHashMap<>();
 	private static final Map<UUID, Long> KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS = new LinkedHashMap<>();
-	// Stay above the client's 200-tick night-vision pulsing threshold.
+	private static final String KILKA_STOCK_NIGHT_VISION_TAG = "lg2_kilka_stock_night_vision";
+	// Recognize effects left by older releases during the first tick after login.
 	private static final int KILKA_STOCK_NIGHT_VISION_DURATION_TICKS = 260;
-	private static final int KILKA_STOCK_NIGHT_VISION_REFRESH_TICKS = 220;
 	private static final Map<UUID, LittleDictatorUniqueSession> LITTLE_DICTATOR_UNIQUE_SESSIONS = new LinkedHashMap<>();
 	private static final Set<UUID> LITTLE_DICTATOR_TAX_CHEST_PENDING = new HashSet<>();
 	private static final Map<UUID, Set<LittleDictatorTaxChestRef>> LITTLE_DICTATOR_TAX_CHESTS = new LinkedHashMap<>();
@@ -14836,14 +14836,17 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		Set<UUID> onlinePlayers = new HashSet<>();
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
 			onlinePlayers.add(player.getUUID());
-			if (KILKA_STOCK_NIGHT_VISION_INITIALIZED.add(player.getUUID())
-					&& getKilkaStockAbility(player) != null
-					&& !KILKA_STOCK_NIGHT_VISION.contains(player.getUUID())) {
-				MobEffectInstance existing = player.getEffect(MobEffects.NIGHT_VISION);
-				if (isPersistedKilkaStockNightVision(existing)) player.removeEffect(MobEffects.NIGHT_VISION);
+			if (KILKA_STOCK_NIGHT_VISION_INITIALIZED.add(player.getUUID())) {
+				if (player.getTags().contains(KILKA_STOCK_NIGHT_VISION_TAG)) {
+					discardKilkaStockNightVision(player);
+				} else if (getKilkaStockAbility(player) != null
+						&& isPersistedKilkaStockNightVision(player.getEffect(MobEffects.NIGHT_VISION))) {
+					player.removeEffect(MobEffects.NIGHT_VISION);
+				}
 			}
 			updateKilkaStockMiningModifiers(player);
-			if (player.isAlive() && !player.isSpectator() && getKilkaStockAbility(player) != null && isKilkaHeadUnderwater(player)) {
+			if (player.isAlive() && !player.isSpectator() && getKilkaStockAbility(player) != null
+					&& isKilkaHeadUnderwater(player)) {
 				refreshKilkaStockNightVision(player);
 			} else {
 				clearKilkaStockNightVision(player);
@@ -14863,12 +14866,6 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		MobEffectInstance current = player.getEffect(MobEffects.NIGHT_VISION);
 		if (isKilkaStockNightVision(player, current)) {
 			getKilkaStockNaturalNightVision(player);
-			if (current.isInfiniteDuration()) {
-				player.removeEffect(MobEffects.NIGHT_VISION);
-				applyKilkaStockNightVision(player);
-			} else if (current.getDuration() <= KILKA_STOCK_NIGHT_VISION_REFRESH_TICKS) {
-				applyKilkaStockNightVision(player);
-			}
 			return;
 		}
 		MobEffectInstance natural = copyKilkaStockNaturalNightVision(current);
@@ -14879,13 +14876,14 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			player.removeEffect(MobEffects.NIGHT_VISION);
 		}
 		KILKA_STOCK_NIGHT_VISION.add(playerId);
+		player.addTag(KILKA_STOCK_NIGHT_VISION_TAG);
 		applyKilkaStockNightVision(player);
 	}
 
 	private static void applyKilkaStockNightVision(ServerPlayer player) {
 		KILKA_STOCK_APPLYING_NIGHT_VISION.set(Boolean.TRUE);
 		try {
-			player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, KILKA_STOCK_NIGHT_VISION_DURATION_TICKS, 0, false, false, false));
+			player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, MobEffectInstance.INFINITE_DURATION, 0, false, false, false));
 		} finally {
 			KILKA_STOCK_APPLYING_NIGHT_VISION.set(Boolean.FALSE);
 		}
@@ -14899,6 +14897,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		MobEffectInstance current = player.getEffect(MobEffects.NIGHT_VISION);
 		boolean managed = isKilkaStockNightVision(player, current);
 		KILKA_STOCK_NIGHT_VISION.remove(playerId);
+		player.removeTag(KILKA_STOCK_NIGHT_VISION_TAG);
 		MobEffectInstance natural = getKilkaStockNaturalNightVision(player);
 		KILKA_STOCK_NATURAL_NIGHT_VISION.remove(playerId);
 		KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS.remove(playerId);
@@ -14998,6 +14997,7 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		UUID playerId = player.getUUID();
 		boolean managed = isKilkaStockNightVision(player, player.getEffect(MobEffects.NIGHT_VISION));
 		KILKA_STOCK_NIGHT_VISION.remove(playerId);
+		player.removeTag(KILKA_STOCK_NIGHT_VISION_TAG);
 		KILKA_STOCK_NATURAL_NIGHT_VISION.remove(playerId);
 		KILKA_STOCK_NATURAL_NIGHT_VISION_END_TICKS.remove(playerId);
 		if (managed) {
@@ -15560,8 +15560,10 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			syncKilkaSalmonCollisionTeam(server, player, visual, session);
 			maintainKilkaSalmonVisualSurvival(visual);
 			syncKilkaSalmonVisual(level, player, visual, session);
-			if (FabricLoader.getInstance().isModLoaded("fsit")) {
-				FsitKilkaSalmonBridge.attachSeatsToSalmon(player, visual);
+			if (FabricLoader.getInstance().isModLoaded("fsit")
+					&& FsitKilkaSalmonBridge.attachSeatsToSalmon(player, visual)) {
+				// FSit replaced the owner's client-only player -> salmon passenger packet.
+				sendKilkaSalmonOwnerPassengerAttachment(player, visual);
 			}
 			syncKilkaSalmonMobTargets(level, player, visual);
 			clearKilkaSalmonInvalidMobTargets(level, player);
@@ -16226,10 +16228,10 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 	private static boolean isKilkaStockNightVision(ServerPlayer player, MobEffectInstance effect) {
 		return player != null
 				&& effect != null
-				&& KILKA_STOCK_NIGHT_VISION.contains(player.getUUID())
+				&& (KILKA_STOCK_NIGHT_VISION.contains(player.getUUID()) || player.getTags().contains(KILKA_STOCK_NIGHT_VISION_TAG))
 				&& effect.getEffect() == MobEffects.NIGHT_VISION
 				&& effect.getAmplifier() == 0
-				&& (effect.isInfiniteDuration() || effect.getDuration() <= KILKA_STOCK_NIGHT_VISION_DURATION_TICKS)
+				&& effect.isInfiniteDuration()
 				&& !effect.isVisible()
 				&& !effect.showIcon();
 	}

@@ -19,7 +19,7 @@ mod. World, player state, Fabric's remap cache, downloaded vanilla runtime,
 Polymer pack and TAB's player caches live in `/srv/lostglade/data`, outside
 releases.
 Secrets live in `/srv/lostglade/server-secrets` and are linked into a release
-only at runtime; they are never included in an archive or Git.
+only at runtime; they are never included in a release archive or Git.
 
 LG2 configuration is copied to persistent storage only for its first release;
 later releases retain auth and season state. `seamless-itemframes` remains: its
@@ -61,21 +61,39 @@ lostglade-activate-release <commit>
 After the initial deployment, use `journalctl -u lostglade -f` to watch
 startup. Chunky pre-generation is intentionally a manual post-release task.
 
-## Nightly restart and backups
+## Daily maintenance
 
-`lostglade-maintenance.timer` runs every day at 04:00 Moscow time. It takes an
-exclusive operations lock, stops Minecraft cleanly, makes a verified archive,
-then waits for the server's `Done (...)` startup marker before bringing the
-camera renderer back. A failed backup still restarts a previously running
-server.
+`config/lg2.json` has `restartHourMsk` (default `3`, clamped to `0..23`). The
+server saves and starts an online ZIP backup 30 minutes before that Moscow
+hour, then stops at the scheduled hour. If the archive is still being written,
+shutdown waits until it finishes. Warning titles are sent at 30, 10, 3 and 1
+minutes, then 30, 10, 5, 4, 3, 2 and 1 seconds before shutdown.
 
-Archives are root-readable only in `/srv/lostglade/backups`. Each contains the
-world, player data, runtime configuration, generated Polymer resource pack and
-server secrets; it does not include logs or disposable caches. Retention keeps
-14 daily points, 8 weekly points and 12 monthly points. Every archive has an
-adjacent SHA-256 file and is listed with `tar -tzf` before it becomes a restore
-point.
+The backup is written to `/srv/lostglade/data/backups` as
+`lg2-YYYY-MM-DD-HH-msk.zip` and includes the world, release config, persistent
+config (including LG2 authentication state) and server properties/allow lists.
+The backup directory and archives are private to the server user on Linux.
+Only completed LG2 ZIP archives older than seven days are pruned. Logs, caches,
+release binaries and the separate `server-secrets/` directory are excluded.
+This is an online save-and-copy backup, not an atomic filesystem
+snapshot; an off-host copy is still recommended for disaster recovery.
 
-These are local VPS backups, so they do not survive total VPS loss. Adding an
-offsite target requires separate storage credentials and should copy only the
-already-verified archive plus its checksum.
+Operators can schedule an earlier restart with `/restart <minutes>` (positive
+integer, required). It starts a separate backup immediately, shows the initial
+red title and then sends each warning threshold reached during the countdown.
+An archive still in progress delays the stop until it finishes.
+
+`lostglade.service` uses `Restart=always` to start Minecraft after a clean
+scheduled stop. `systemctl stop lostglade.service` still stops it intentionally;
+the in-game `/stop` command will instead be followed by a service restart.
+The Gradle `runServer` development task has no supervisor and will simply exit.
+Release activation removes the obsolete 04:00 `lostglade-maintenance.timer`
+and its service, so it cannot trigger a second restart or backup.
+
+For a separate offline recovery point, stop `lostglade.service` intentionally
+and run `lostglade-backup` as root, then start the service again. This manual
+tool creates and verifies a private tar.gz archive plus SHA-256 checksum in
+`/srv/lostglade/backups`. Unlike the automatic ZIP, it includes the generated
+Polymer pack and `server-secrets/`. It also prunes its own archives older than
+seven days. Neither local backup location survives total VPS loss; off-host
+copies require separate storage.

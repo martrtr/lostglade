@@ -10,6 +10,8 @@ import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.scores.Team;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -107,7 +109,7 @@ public final class ServerTabPacketSystem {
 		return packet;
 	}
 
-	public static void stripShadowFromTeamPacket(ClientboundSetPlayerTeamPacket packet) {
+	public static void stripShadowFromTeamPacket(ServerPlayer receiver, ClientboundSetPlayerTeamPacket packet) {
 		if (packet == null) {
 			return;
 		}
@@ -121,6 +123,16 @@ public final class ServerTabPacketSystem {
 		accessor.lg2$setDisplayName(withoutShadow(parameters.getDisplayName()));
 		accessor.lg2$setPlayerPrefix(withoutShadow(parameters.getPlayerPrefix()));
 		accessor.lg2$setPlayerSuffix(withoutShadow(parameters.getPlayerSuffix()));
+		if (receiver != null && receiver.level() != null) {
+			MinecraftServer server = receiver.level().getServer();
+			PlayerTeam serverTeam = server.getScoreboard().getPlayerTeam(packet.getName());
+			boolean hasPlayer = server.getPlayerList().getPlayers().stream().anyMatch(player ->
+					packet.getPlayers().contains(player.getScoreboardName())
+							|| (serverTeam != null && serverTeam.getPlayers().contains(player.getScoreboardName())));
+			if (hasPlayer) {
+				accessor.lg2$setNametagVisibility(Team.Visibility.NEVER);
+			}
+		}
 	}
 
 	public static Component withoutShadow(Component component) {

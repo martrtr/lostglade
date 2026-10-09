@@ -381,6 +381,14 @@ tasks.register("runCompanionMovementTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
+tasks.register("runDailyMaintenanceTest", JavaExec) {
+	group = "verification"
+	description = "Checks Moscow restart timing, backup contents and seven-day retention."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.DailyMaintenanceTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
 tasks.register("runGennadiyReportTrackerTest", JavaExec) {
 	group = "verification"
 	classpath = sourceSets.test.runtimeClasspath
@@ -397,6 +405,7 @@ tasks.register("runCameraCapturePolicyTest", JavaExec) {
 }
 
 tasks.named("check") {
+	dependsOn(tasks.named("runDailyMaintenanceTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseEightTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseSevenTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseSixTest"))

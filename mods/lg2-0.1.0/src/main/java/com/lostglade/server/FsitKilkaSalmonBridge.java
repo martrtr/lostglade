@@ -15,13 +15,15 @@ final class FsitKilkaSalmonBridge {
 		return PassedUseEntityCallback.EVENT.invoker().interact(rider, level, owner);
 	}
 
-	static void attachSeatsToSalmon(ServerPlayer owner, Entity salmon) {
-		if (salmon == null || !salmon.isAlive()) return;
+	static boolean attachSeatsToSalmon(ServerPlayer owner, Entity salmon) {
+		if (salmon == null || !salmon.isAlive()) return false;
+		boolean moved = false;
 		// FSit mounts the seat on the hidden player; viewers need it on the visible fish.
 		for (Entity passenger : java.util.List.copyOf(owner.getPassengers())) {
 			if (passenger instanceof RideEntity) {
-				passenger.startRiding(salmon, true, true);
+				moved |= passenger.startRiding(salmon, true, true);
 			}
 		}
+		return moved;
 	}
 }
