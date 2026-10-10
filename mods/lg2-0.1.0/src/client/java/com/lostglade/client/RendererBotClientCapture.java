@@ -40,6 +40,7 @@ import java.util.concurrent.Executors;
 
 public final class RendererBotClientCapture {
 	private static final Object LOCK = new Object();
+	private static boolean previousRenderWasPhoto;
 	// The server normally allows 15 seconds for a photo.  This is only a
 	// last-resort failure limit, not a capture delay: a settled camera sends its
 	// frame as soon as its final render is stable.
@@ -262,7 +263,7 @@ public final class RendererBotClientCapture {
 					readiness.dirtyVisibleSections(),
 					readiness.contentRevision()
 				);
-				sendFailure(capture.payload(), "Photo terrain did not finish loading before the capture deadline");
+				sendFailure(capture.payload(), "Photo terrain did not finish loading before the capture deadline: " + readiness);
 				clearPendingCapture(capture.payload().requestId());
 			}
 		}
@@ -443,13 +444,14 @@ public final class RendererBotClientCapture {
 					if (capture == null || capture.screenshotRequested() || !capture.canScheduleRender(nowNanos)) {
 						continue;
 					}
-					if (captureToRender == null || capture.requestStartedAt() < captureToRender.requestStartedAt()) {
+					if (captureToRender == null || capture.lastRenderAttemptNanos < captureToRender.lastRenderAttemptNanos
+							|| (capture.lastRenderAttemptNanos == captureToRender.lastRenderAttemptNanos
+									&& capture.requestStartedAt() < captureToRender.requestStartedAt())) {
 						captureToRender = capture;
 					}
 				}
 			}
-			// Do not let a background monitor stream issue a second off-screen render
-			// while a full camera frame is warming up or being read back.
+			// Both classes must advance: photo mesh uploads run during photo passes.
 			if (!RendererBotClientVideoRecording.hasActiveRecording()) {
 				for (LiveStreamSession liveStream : LIVE_STREAM_SESSIONS.values()) {
 					if (liveStream == null || !liveStream.canScheduleFrame()) {
@@ -475,7 +477,9 @@ public final class RendererBotClientCapture {
 				}
 			}
 		}
-		if (captureToRender != null && (liveStreamToRender == null || captureToRender.finalCaptureReady())) {
+		if (com.lostglade.server.CameraCaptureReadinessPolicy.choosePhoto(
+				captureToRender != null, liveStreamToRender != null, previousRenderWasPhoto)) {
+			previousRenderWasPhoto = true;
 			PendingCapture capture = captureToRender;
 			RendererBotShadowWorldManager.hideEntityFromSession(
 					capture.payload().renderSessionId(),
@@ -507,6 +511,7 @@ public final class RendererBotClientCapture {
 			return false;
 		}
 		LiveStreamSession liveStream = liveStreamToRender;
+		previousRenderWasPhoto = false;
 		hideLiveStreamCameraCarriers(liveStream.payload());
 		boolean rendered = RendererBotGpuCaptureBackend.isAvailable()
 				? RendererBotOffscreenWorldRenderer.renderToTarget(
@@ -1451,6 +1456,7 @@ public final class RendererBotClientCapture {
 		private long stableContentRevision = Long.MIN_VALUE;
 		private int stableVisibleSections = -1;
 		private long nextProbeAtNanos;
+		private long lastRenderAttemptNanos;
 		private long lastProgressPreviewAtMillis;
 		private boolean progressPreviewRequested;
 
@@ -1478,6 +1484,7 @@ public final class RendererBotClientCapture {
 		}
 
 		private void markScreenshotRequested(long nowNanos) {
+			this.lastRenderAttemptNanos = nowNanos;
 			this.screenshotRequested = true;
 			if (!this.finalCaptureReady) {
 				this.nextProbeAtNanos = nowNanos + PHOTO_WARMUP_INTERVAL_NANOS;

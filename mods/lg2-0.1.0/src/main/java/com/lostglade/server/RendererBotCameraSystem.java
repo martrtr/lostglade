@@ -4298,7 +4298,25 @@ public final class RendererBotCameraSystem {
 		}
 
 		private void markDynamicContentFrozen() {
+			if (this.freezeDynamicContent) return;
 			this.freezeDynamicContent = true;
+			// Vanilla requires the eight neighboring columns before building a new
+			// section. Send a one-column apron around the actual camera footprint.
+			LongSet footprint = new LongOpenHashSet(this.trackedChunks);
+			for (long chunk : footprint) {
+				ChunkPos pos = new ChunkPos(chunk);
+				for (int dx = -1; dx <= 1; dx++) {
+					for (int dz = -1; dz <= 1; dz++) {
+						this.trackedChunks.add(new ChunkPos(pos.x + dx, pos.z + dz).toLong());
+					}
+				}
+			}
+			Map<CameraChunkTicketKey, Integer> expandedTickets = new HashMap<>();
+			this.chunkTickets.forEach((key, refs) -> expandedTickets.put(
+					new CameraChunkTicketKey(key.dimension(), key.chunkLong(), key.radius() + 2), refs));
+			this.chunkTickets.clear();
+			this.chunkTickets.putAll(expandedTickets);
+			recomputeViewWindow(null);
 		}
 
 		private boolean freezeDynamicContent() {

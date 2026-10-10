@@ -19,9 +19,20 @@ public final class CameraCapturePolicyTest {
 	}
 
 	private static void photoWarmupDoesNotMonopolizeLiveStreams() throws Exception {
+		boolean previousWasPhoto = false;
+		int photos = 0;
+		int videos = 0;
+		for (int frame = 0; frame < 100; frame++) {
+			boolean photo = CameraCaptureReadinessPolicy.choosePhoto(true, true, previousWasPhoto);
+			if (photo) photos++; else videos++;
+			previousWasPhoto = photo;
+		}
+		require(photos == 50 && videos == 50, "continuous video and photo contention must not starve either class");
+		require(CameraCaptureReadinessPolicy.choosePhoto(true, false, true), "an uncontended photo must not wait for a video turn");
+		require(!CameraCaptureReadinessPolicy.choosePhoto(false, true, false), "video must run when photo is not due");
 		String client = Files.readString(Path.of("").toAbsolutePath().resolve("src/client/java/com/lostglade/client/RendererBotClientCapture.java"));
 		require(client.contains("PHOTO_WARMUP_INTERVAL_NANOS = 100_000_000L") && client.contains("capture.canScheduleRender(nowNanos)"), "photo warm-up renders must be bounded instead of consuming every client tick");
-		require(client.contains("activeCaptures < LostgladeClientSettings.maxParallelCaptures()") && client.contains("if (!RendererBotClientVideoRecording.hasActiveRecording())") && client.contains("captureToRender != null && (liveStreamToRender == null || captureToRender.finalCaptureReady())"), "a due live stream must render while a photo warms up or its final readback is in flight");
+		require(client.contains("activeCaptures < LostgladeClientSettings.maxParallelCaptures()") && client.contains("if (!RendererBotClientVideoRecording.hasActiveRecording())") && client.contains("CameraCaptureReadinessPolicy.choosePhoto("), "photo and live stream scheduling must use the fair selection policy");
 		require(client.contains("!readiness.settled()") && client.contains("stableVisibleSections != readiness.visibleSections()") && client.contains("CAPTURE_REQUIRED_SETTLED_RENDERS = Math.max(2"), "a still must finish only after received content and the visible terrain section count stabilize");
 		String readiness = Files.readString(Path.of("").toAbsolutePath().resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
 		require(readiness.contains("CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, dirtyVisibleSections)") && readiness.contains("section.isDirty()"), "the final still barrier must wait only for dirty sections in the current camera view");

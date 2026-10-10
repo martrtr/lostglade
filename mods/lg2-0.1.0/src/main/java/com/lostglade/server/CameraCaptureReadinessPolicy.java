@@ -10,6 +10,11 @@ public final class CameraCaptureReadinessPolicy {
 	private CameraCaptureReadinessPolicy() {
 	}
 
+	/** Alternate contending render classes so both GPU upload queues advance. */
+	public static boolean choosePhoto(boolean photoDue, boolean videoDue, boolean previousWasPhoto) {
+		return photoDue && (!videoDue || !previousWasPhoto);
+	}
+
 	/** Scheduling a build clears dirty, but does not install the resulting mesh. */
 	public static boolean sectionPending(boolean dirty, boolean uncompiled) {
 		return dirty || uncompiled;

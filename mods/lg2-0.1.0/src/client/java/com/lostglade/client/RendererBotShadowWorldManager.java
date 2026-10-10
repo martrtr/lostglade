@@ -192,7 +192,7 @@ public final class RendererBotShadowWorldManager {
 			int compileQueueSize = dispatcher.getCompileQueueSize();
 			int uploadQueueSize = dispatcher.getToUpload();
 			int visibleSections = levelRenderer.countRenderedSections();
-			int dirtyVisibleSections = countDirtyVisibleSections(levelRenderer);
+			int dirtyVisibleSections = countDirtyVisibleSections(levelRenderer, session.level());
 			var graph = (com.lostglade.mixin.client.SectionOcclusionGraphAccessor) levelRenderer.getSectionOcclusionGraph();
 			var graphTask = graph.lg2$getFullUpdateTask();
 			boolean visibilityReady = !graph.lg2$needsFullUpdate()
@@ -203,6 +203,7 @@ public final class RendererBotShadowWorldManager {
 					session.contentRevision(),
 					visibleSections,
 					dirtyVisibleSections,
+					visibilityReady,
 					contentReady,
 					currentContentRendered,
 					allSectionsRendered,
@@ -214,10 +215,28 @@ public final class RendererBotShadowWorldManager {
 		}
 	}
 
-	private static int countDirtyVisibleSections(LevelRenderer levelRenderer) {
+	private static int countDirtyVisibleSections(LevelRenderer levelRenderer, ClientLevel level) {
 		if (levelRenderer == null) return 0;
 		int dirtySections = 0;
 		for (SectionRenderDispatcher.RenderSection section : levelRenderer.getVisibleSections()) {
+			if (section == null) continue;
+			var origin = section.getRenderOrigin();
+			int chunkX = Math.floorDiv(origin.getX(), 16);
+			int chunkZ = Math.floorDiv(origin.getZ(), 16);
+			boolean interior = true;
+			for (int dx = -1; dx <= 1 && interior; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					if (level.getChunkSource().getChunk(chunkX + dx, chunkZ + dz,
+							net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false) == null) {
+						interior = false;
+						break;
+					}
+				}
+			}
+			// contentReady guarantees receipt of the server footprint plus its
+			// apron. The apron itself has no outer neighbors and is not capturable.
+			// Check presence, not hasAllNeighbors(): pending lighting must still wait.
+			if (!interior) continue;
 			// Vanilla clears dirty when scheduling, BEFORE the asynchronous build
 			// and GPU upload complete. UNCOMPILED persists until the mesh is installed.
 			if (section != null && CameraCaptureReadinessPolicy.sectionPending(section.isDirty(),
@@ -953,6 +972,7 @@ public final class RendererBotShadowWorldManager {
 			long contentRevision,
 			int visibleSections,
 			int dirtyVisibleSections,
+			boolean visibilityReady,
 			boolean contentReady,
 			boolean currentContentRendered,
 			boolean allSectionsRendered,
@@ -965,7 +985,7 @@ public final class RendererBotShadowWorldManager {
 		}
 
 		private static RenderReadiness unavailable() {
-			return new RenderReadiness(false, -1L, 0, 0, false, false, false, -1, -1);
+			return new RenderReadiness(false, -1L, 0, 0, false, false, false, false, -1, -1);
 		}
 	}
 
