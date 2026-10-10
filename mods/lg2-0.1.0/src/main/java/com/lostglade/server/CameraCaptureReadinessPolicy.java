@@ -2,22 +2,25 @@ package com.lostglade.server;
 
 /**
  * Determines whether a shadow-world still frame is usable.  A photo must wait
- * for the current shadow content to be rendered and for the section compiler
- * belonging to that shadow world to drain.  This is deliberately not a timer:
- * a small enclosed scene finishes as soon as its few sections are compiled,
- * while a distant scene stays alive until its visible terrain is actually on
- * the GPU.
+ * for the current shadow content to be rendered and for every section in the
+ * current camera view to be compiled.  Work queued for sections behind walls
+ * or outside the frame must not delay a small enclosed photo.
  */
 public final class CameraCaptureReadinessPolicy {
 	private CameraCaptureReadinessPolicy() {
+	}
+
+	/** Scheduling a build clears dirty, but does not install the resulting mesh. */
+	public static boolean sectionPending(boolean dirty, boolean uncompiled) {
+		return dirty || uncompiled;
 	}
 
 	public static boolean isUsable(
 			boolean contentReady,
 			boolean currentContentRendered,
 			int visibleSections,
-			boolean allSectionsRendered
+			int dirtyVisibleSections
 	) {
-		return contentReady && currentContentRendered && visibleSections > 0 && allSectionsRendered;
+		return contentReady && currentContentRendered && visibleSections > 0 && dirtyVisibleSections == 0;
 	}
 }

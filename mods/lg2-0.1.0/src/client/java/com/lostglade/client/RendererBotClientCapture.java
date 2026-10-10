@@ -251,17 +251,19 @@ public final class RendererBotClientCapture {
 				RendererBotShadowWorldManager.RenderReadiness readiness =
 						RendererBotShadowWorldManager.inspectRenderReadiness(capture.payload().renderSessionId());
 				Lg2.LOGGER.warn(
-					"Renderer bot capture {} timed out (contentReady={}, frameRendered={}, allSections={}, queues={}/{}, visibleSections={}, revision={})",
+					"Renderer bot capture {} timed out (contentReady={}, frameRendered={}, allSections={}, queues={}/{}, visibleSections={}, dirtyVisibleSections={}, revision={})",
 					capture.payload().requestId(),
 					readiness.contentReady(),
 					readiness.currentContentRendered(),
 					readiness.allSectionsRendered(),
-						readiness.compileQueueSize(),
-						readiness.uploadQueueSize(),
-						readiness.visibleSections(),
-						readiness.contentRevision()
+					readiness.compileQueueSize(),
+					readiness.uploadQueueSize(),
+					readiness.visibleSections(),
+					readiness.dirtyVisibleSections(),
+					readiness.contentRevision()
 				);
-				capture.forceFinalCapture();
+				sendFailure(capture.payload(), "Photo terrain did not finish loading before the capture deadline");
+				clearPendingCapture(capture.payload().requestId());
 			}
 		}
 		for (LiveStreamSession liveStream : liveStreams) {
@@ -487,7 +489,7 @@ public final class RendererBotClientCapture {
 					client,
 					request,
 					renderTarget -> {
-						if (capture.finalCaptureReady()) {
+						if (capture.finalCaptureReady() && RendererBotShadowWorldManager.inspectRenderReadiness(request.sessionId()).settled()) {
 							dispatchFinalCapture(client, capture, renderTarget);
 						} else {
 							dispatchCaptureReadinessProbe(client, capture, request, renderTarget);
@@ -588,10 +590,11 @@ public final class RendererBotClientCapture {
 		}
 		if (ready) {
 			Lg2.LOGGER.debug(
-					"Renderer bot camera {} settled after {} probe renders (visibleSections={})",
+					"Renderer bot camera {} settled after {} probe renders (visibleSections={}, dirtyVisibleSections={})",
 					capture.payload().requestId(),
 					capture.probeCount(),
-					readiness.visibleSections()
+					readiness.visibleSections(),
+					readiness.dirtyVisibleSections()
 			);
 		}
 	}
@@ -1501,10 +1504,6 @@ public final class RendererBotClientCapture {
 			this.progressPreviewRequested = false;
 		}
 
-		private void forceFinalCapture() {
-			this.finalCaptureReady = true;
-		}
-
 		private int probeCount() {
 			return this.probeCount;
 		}
@@ -1512,6 +1511,7 @@ public final class RendererBotClientCapture {
 		private boolean observeReadinessProbe(RendererBotShadowWorldManager.RenderReadiness readiness) {
 			this.probeCount++;
 			if (readiness == null || !readiness.settled()) {
+				this.finalCaptureReady = false;
 				this.stableProbeCount = 0;
 				this.stableContentRevision = Long.MIN_VALUE;
 				this.stableVisibleSections = -1;

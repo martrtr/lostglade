@@ -9,6 +9,9 @@ import java.util.concurrent.Future;
 /** Diagnostic/readiness view of vanilla's asynchronous visibility graph state. */
 @Mixin(SectionOcclusionGraph.class)
 public interface SectionOcclusionGraphAccessor {
+    @Accessor("needsFrustumUpdate")
+    java.util.concurrent.atomic.AtomicBoolean lg2$getNeedsFrustumUpdate();
+
     @Accessor("needsFullUpdate")
     boolean lg2$needsFullUpdate();
 

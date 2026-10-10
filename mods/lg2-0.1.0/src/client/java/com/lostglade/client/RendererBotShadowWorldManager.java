@@ -171,9 +171,9 @@ public final class RendererBotShadowWorldManager {
 	/**
 	 * Returns the renderer's own completion signal for a shadow-world camera.
 	 * A frame is safe to publish only after current shadow content has rendered,
-	 * at least one terrain section is visible, and this shadow renderer's section
-	 * queues are empty.  Each shadow session owns its own LevelRenderer, so this
-	 * cannot wait on terrain from the player's normal world or another camera.
+	 * at least one terrain section is visible, and every section selected for this
+	 * camera frame is compiled.  The general compiler queue can also hold
+	 * occluded terrain, so it remains diagnostic data rather than a shutter gate.
 	 */
 	public static RenderReadiness inspectRenderReadiness(UUID sessionId) {
 		ShadowRenderSession session = resolveRenderSession(sessionId);
@@ -192,10 +192,17 @@ public final class RendererBotShadowWorldManager {
 			int compileQueueSize = dispatcher.getCompileQueueSize();
 			int uploadQueueSize = dispatcher.getToUpload();
 			int visibleSections = levelRenderer.countRenderedSections();
+			int dirtyVisibleSections = countDirtyVisibleSections(levelRenderer);
+			var graph = (com.lostglade.mixin.client.SectionOcclusionGraphAccessor) levelRenderer.getSectionOcclusionGraph();
+			var graphTask = graph.lg2$getFullUpdateTask();
+			boolean visibilityReady = !graph.lg2$needsFullUpdate()
+					&& (graphTask == null || graphTask.isDone())
+					&& !graph.lg2$getNeedsFrustumUpdate().get();
 			return new RenderReadiness(
-					CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, allSectionsRendered),
+					visibilityReady && CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, dirtyVisibleSections),
 					session.contentRevision(),
 					visibleSections,
+					dirtyVisibleSections,
 					contentReady,
 					currentContentRendered,
 					allSectionsRendered,
@@ -205,6 +212,20 @@ public final class RendererBotShadowWorldManager {
 		} catch (Throwable ignored) {
 			return RenderReadiness.unavailable();
 		}
+	}
+
+	private static int countDirtyVisibleSections(LevelRenderer levelRenderer) {
+		if (levelRenderer == null) return 0;
+		int dirtySections = 0;
+		for (SectionRenderDispatcher.RenderSection section : levelRenderer.getVisibleSections()) {
+			// Vanilla clears dirty when scheduling, BEFORE the asynchronous build
+			// and GPU upload complete. UNCOMPILED persists until the mesh is installed.
+			if (section != null && CameraCaptureReadinessPolicy.sectionPending(section.isDirty(),
+					section.getSectionMesh() == net.minecraft.client.renderer.chunk.CompiledSectionMesh.UNCOMPILED)) {
+				dirtySections++;
+			}
+		}
+		return dirtySections;
 	}
 
 	/** Marks a completed off-screen render for the current shadow-world data. */
@@ -931,6 +952,7 @@ public final class RendererBotShadowWorldManager {
 			boolean settled,
 			long contentRevision,
 			int visibleSections,
+			int dirtyVisibleSections,
 			boolean contentReady,
 			boolean currentContentRendered,
 			boolean allSectionsRendered,
@@ -943,7 +965,7 @@ public final class RendererBotShadowWorldManager {
 		}
 
 		private static RenderReadiness unavailable() {
-			return new RenderReadiness(false, -1L, 0, false, false, false, -1, -1);
+			return new RenderReadiness(false, -1L, 0, 0, false, false, false, -1, -1);
 		}
 	}
 

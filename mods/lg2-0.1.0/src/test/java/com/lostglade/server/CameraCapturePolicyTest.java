@@ -9,7 +9,7 @@ public final class CameraCapturePolicyTest {
 	}
 
 	public static void main(String[] args) throws Exception {
-		readinessWaitsForTheShadowRendererSectionQueue();
+		readinessWaitsForVisibleTerrainOnly();
 		rightClickAirIsTheShutterAndBlockUseKeepsPlacement();
 		progressFramesFillTheSingleMapPreviewAndPhotoTiles();
 		shadowPhotoSessionsFreezeDynamicWorldState();
@@ -24,7 +24,7 @@ public final class CameraCapturePolicyTest {
 		require(client.contains("activeCaptures < LostgladeClientSettings.maxParallelCaptures()") && client.contains("if (!RendererBotClientVideoRecording.hasActiveRecording())") && client.contains("captureToRender != null && (liveStreamToRender == null || captureToRender.finalCaptureReady())"), "a due live stream must render while a photo warms up or its final readback is in flight");
 		require(client.contains("!readiness.settled()") && client.contains("stableVisibleSections != readiness.visibleSections()") && client.contains("CAPTURE_REQUIRED_SETTLED_RENDERS = Math.max(2"), "a still must finish only after received content and the visible terrain section count stabilize");
 		String readiness = Files.readString(Path.of("").toAbsolutePath().resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
-		require(readiness.contains("CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, allSectionsRendered)"), "the final still barrier must wait for the owning shadow renderer's section queue");
+		require(readiness.contains("CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, dirtyVisibleSections)") && readiness.contains("section.isDirty()"), "the final still barrier must wait only for dirty sections in the current camera view");
 	}
 
 	private static void shadowPhotoSessionsFreezeDynamicWorldState() throws Exception {
@@ -46,12 +46,16 @@ public final class CameraCapturePolicyTest {
 		require(server.contains("capture.offerPreview(payload.pixels())") && server.contains("public byte[] pollPreview()"), "server must retain the newest intermediate frame without completing the final photo early");
 	}
 
-	private static void readinessWaitsForTheShadowRendererSectionQueue() {
-		require(!CameraCaptureReadinessPolicy.isUsable(false, true, 8, true), "unready shadow content must not be captured");
-		require(!CameraCaptureReadinessPolicy.isUsable(true, false, 8, true), "a scene must render once before capture");
-		require(!CameraCaptureReadinessPolicy.isUsable(true, true, 0, true), "an empty render target must not become a photo");
-		require(!CameraCaptureReadinessPolicy.isUsable(true, true, 8, false), "a photo must wait while its own shadow terrain sections still compile");
-		require(CameraCaptureReadinessPolicy.isUsable(true, true, 1, true), "an enclosed scene must finish as soon as its small shadow queue drains");
+	private static void readinessWaitsForVisibleTerrainOnly() {
+		require(CameraCaptureReadinessPolicy.sectionPending(true, true), "new section must wait");
+		require(CameraCaptureReadinessPolicy.sectionPending(false, true), "scheduled build or pending upload is not a completed mesh");
+		require(CameraCaptureReadinessPolicy.sectionPending(true, false), "invalidated mesh must wait");
+		require(!CameraCaptureReadinessPolicy.sectionPending(false, false), "installed mesh including compiled empty terrain is ready");
+		require(!CameraCaptureReadinessPolicy.isUsable(false, true, 8, 0), "unready shadow content must not be captured");
+		require(!CameraCaptureReadinessPolicy.isUsable(true, false, 8, 0), "a scene must render once before capture");
+		require(!CameraCaptureReadinessPolicy.isUsable(true, true, 0, 0), "an empty render target must not become a photo");
+		require(!CameraCaptureReadinessPolicy.isUsable(true, true, 8, 1), "a photo must wait while visible terrain sections still compile");
+		require(CameraCaptureReadinessPolicy.isUsable(true, true, 1, 0), "an enclosed scene must finish when its visible terrain is ready even if occluded work remains queued");
 	}
 
 	private static void rightClickAirIsTheShutterAndBlockUseKeepsPlacement() throws Exception {
