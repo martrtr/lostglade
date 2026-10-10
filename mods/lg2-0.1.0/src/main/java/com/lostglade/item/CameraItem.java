@@ -85,6 +85,13 @@ public final class CameraItem extends PolymerBlockItem {
 		if (player instanceof ServerPlayer serverPlayer) {
 			CameraCaptureSystem.suppressNextCameraSwing(serverPlayer, context.getHand());
 		}
+		// A placed camera owns RMB itself: it turns its lens towards the player.
+		// Do not let the held camera item consume this as a placement/capture
+		// action; that was the behaviour in 535c4abb and keeps both the placement
+		// origin and the subsequent aim calculation on the camera block.
+		if (context.getLevel().getBlockState(context.getClickedPos()).getBlock() instanceof CameraBlock) {
+			return InteractionResult.PASS;
+		}
 		if (player != null && player.isShiftKeyDown()) {
 			if (player instanceof ServerPlayer serverPlayer) {
 				return CameraCaptureSystem.tryCapture(serverPlayer, player.getItemInHand(context.getHand()))

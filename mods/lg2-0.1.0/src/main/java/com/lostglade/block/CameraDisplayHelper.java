@@ -115,12 +115,13 @@ final class CameraDisplayHelper {
 		Vec3 origin = captureBaseOrigin;
 		Vec3 forward = CameraBlock.captureOrigin(origin, yaw, pitch).subtract(origin).normalize();
 		Vec3 displayOrigin = origin.add(forward.scale(MODEL_FORWARD_OFFSET));
-		// The fixed item transform uses the model's local forward axis.  It is
-		// opposite to the camera view vector, so turn only the display around.
-		float displayYaw = yaw + 180.0F;
+		// The model's local front must face the same direction as the actual
+		// camera lens.  The former 180-degree compensation made the visible body
+		// face backwards while its capture direction was correct.
+		float displayYaw = yaw;
 		display.setPos(displayOrigin.x, displayOrigin.y, displayOrigin.z);
 		display.setYRot(displayYaw);
-		display.setXRot(-pitch);
+		display.setXRot(pitch);
 		display.setYHeadRot(displayYaw);
 		display.setYBodyRot(displayYaw);
 		display.setItemStack(CameraItem.createDisplayStack());

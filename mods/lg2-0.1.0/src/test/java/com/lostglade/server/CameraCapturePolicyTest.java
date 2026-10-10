@@ -34,6 +34,7 @@ public final class CameraCapturePolicyTest {
 		require(client.contains("PHOTO_WARMUP_INTERVAL_NANOS = 100_000_000L") && client.contains("capture.canScheduleRender(nowNanos)"), "photo warm-up renders must be bounded instead of consuming every client tick");
 		require(client.contains("activeCaptures < LostgladeClientSettings.maxParallelCaptures()") && client.contains("if (!RendererBotClientVideoRecording.hasActiveRecording())") && client.contains("CameraCaptureReadinessPolicy.choosePhoto("), "photo and live stream scheduling must use the fair selection policy");
 		require(client.contains("!readiness.settled()") && client.contains("stableVisibleSections != readiness.visibleSections()") && client.contains("CAPTURE_REQUIRED_SETTLED_RENDERS = Math.max(2"), "a still must finish only after received content and the visible terrain section count stabilize");
+		require(client.contains("FIRST_CAPTURE_RENDER_TIMEOUT_MS") && client.contains("!capture.hasRenderedFrame()") && client.contains("capture.markRenderedFrame()"), "terrain loading must not expire after the renderer has begun producing photo frames");
 		String readiness = Files.readString(Path.of("").toAbsolutePath().resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
 		require(readiness.contains("CameraCaptureReadinessPolicy.isUsable(contentReady, currentContentRendered, visibleSections, dirtyVisibleSections)") && readiness.contains("section.isDirty()"), "the final still barrier must wait only for dirty sections in the current camera view");
 	}
@@ -55,6 +56,7 @@ public final class CameraCapturePolicyTest {
 		require(maps.contains("sendCompletedPhotoMaps(server, job.photoData());"), "progressive photo tiles must be sent to both inventory and framed viewers");
 		require(client.contains("dispatchProgressPreview(client, capture, renderTarget)") && client.contains("now - this.lastProgressPreviewAtMillis < 250L"), "renderer must stream bounded intermediate preview frames while terrain compiles");
 		require(server.contains("capture.offerPreview(payload.pixels())") && server.contains("public byte[] pollPreview()"), "server must retain the newest intermediate frame without completing the final photo early");
+		require(server.contains("applyInitialPreviewTimeout") && !server.contains("capture.fullFuture()\n\t\t\t\t.orTimeout"), "server must time out only an unresponsive renderer, never a compiling full photo");
 	}
 
 	private static void readinessWaitsForVisibleTerrainOnly() {

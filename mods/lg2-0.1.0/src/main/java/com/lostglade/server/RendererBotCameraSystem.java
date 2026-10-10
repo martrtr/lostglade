@@ -1403,7 +1403,7 @@ public final class RendererBotCameraSystem {
 		if (capture == null || !capture.markTimeoutArmed()) {
 			return;
 		}
-		applyTimeout(capture.requestId(), capture, Math.max(45_000L, Lg2Config.get().cameraRendererBotTimeoutMs));
+		applyInitialPreviewTimeout(capture.requestId(), capture, Math.max(45_000L, Lg2Config.get().cameraRendererBotTimeoutMs));
 	}
 
 	public static boolean hasReadyBot(MinecraftServer server) {
@@ -1507,14 +1507,14 @@ public final class RendererBotCameraSystem {
 		return isEntityWithinAnyTrackingTarget(server, viewer.getUUID(), source, horizontalRangeBlocks * horizontalRangeBlocks);
 	}
 
-	private static void applyTimeout(UUID requestId, PendingCapture capture, long timeoutMillis) {
+	/**
+	 * Fail only a renderer that never starts a capture.  Once it has delivered
+	 * the first preview, the remaining full frame is governed by terrain
+	 * readiness and normal print cancellation rather than a wall-clock limit:
+	 * an open view may legitimately need longer than an enclosed one to compile.
+	 */
+	private static void applyInitialPreviewTimeout(UUID requestId, PendingCapture capture, long timeoutMillis) {
 		capture.previewFuture()
-				.orTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
-				.exceptionally(throwable -> {
-					failPending(requestId, capture, throwable);
-					return null;
-				});
-		capture.fullFuture()
 				.orTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
 				.exceptionally(throwable -> {
 					failPending(requestId, capture, throwable);

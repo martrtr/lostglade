@@ -41,10 +41,11 @@ import java.util.concurrent.Executors;
 public final class RendererBotClientCapture {
 	private static final Object LOCK = new Object();
 	private static boolean previousRenderWasPhoto;
-	// The server normally allows 15 seconds for a photo.  This is only a
-	// last-resort failure limit, not a capture delay: a settled camera sends its
-	// frame as soon as its final render is stable.
-	private static final long LOCAL_CAPTURE_TIMEOUT_MS = Long.getLong("lg2.rendererBotLocalCaptureTimeoutMs", 40_000L);
+	// A request which never obtains its first off-screen render is broken (for
+	// example, its renderer was disabled). Once rendering has started, however,
+	// terrain compilation is intentionally unbounded: a distant open view must
+	// finish loading instead of turning into a failed or partial photograph.
+	private static final long FIRST_CAPTURE_RENDER_TIMEOUT_MS = Long.getLong("lg2.rendererBotFirstCaptureRenderTimeoutMs", 40_000L);
 	private static final long LIVE_STREAM_FIRST_FRAME_TIMEOUT_MS = Long.getLong("lg2.rendererBotLiveStreamFirstFrameTimeoutMs", 14_000L);
 	private static final long RECENT_FRAME_TTL_MS = Long.getLong("lg2.rendererBotRecentFrameTtlMs", 175L);
 	private static final int DEFAULT_WARMUP_FRAMES = Math.max(1, Integer.getInteger("lg2.rendererBotWarmupFrames", 2));
@@ -248,7 +249,8 @@ public final class RendererBotClientCapture {
 		// requests queued without converting that intentional pause into a timeout.
 		boolean handVideoActive = RendererBotClientVideoRecording.hasActiveRecording();
 		for (PendingCapture capture : captures) {
-			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= LOCAL_CAPTURE_TIMEOUT_MS) {
+			if (!handVideoActive && capture != null && !capture.hasRenderedFrame()
+					&& now - capture.requestStartedAt() >= FIRST_CAPTURE_RENDER_TIMEOUT_MS) {
 				RendererBotShadowWorldManager.RenderReadiness readiness =
 						RendererBotShadowWorldManager.inspectRenderReadiness(capture.payload().renderSessionId());
 				Lg2.LOGGER.warn(
@@ -263,7 +265,7 @@ public final class RendererBotClientCapture {
 					readiness.dirtyVisibleSections(),
 					readiness.contentRevision()
 				);
-				sendFailure(capture.payload(), "Photo terrain did not finish loading before the capture deadline: " + readiness);
+				sendFailure(capture.payload(), "Renderer bot did not produce an initial photo frame in time: " + readiness);
 				clearPendingCapture(capture.payload().requestId());
 			}
 		}
@@ -503,6 +505,7 @@ public final class RendererBotClientCapture {
 			if (!rendered) {
 				clearPendingCaptureRequested(capture.payload().requestId());
 			} else {
+				capture.markRenderedFrame();
 				RendererClientDiagnostics.cameraFrameRendered();
 			}
 			return rendered;
@@ -1450,6 +1453,7 @@ public final class RendererBotClientCapture {
 		private final RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload;
 		private final long requestStartedAt;
 		private boolean screenshotRequested;
+		private boolean renderedFrame;
 		private boolean finalCaptureReady;
 		private int probeCount;
 		private int stableProbeCount;
@@ -1477,6 +1481,14 @@ public final class RendererBotClientCapture {
 
 		private boolean screenshotRequested() {
 			return this.screenshotRequested;
+		}
+
+		private boolean hasRenderedFrame() {
+			return this.renderedFrame;
+		}
+
+		private void markRenderedFrame() {
+			this.renderedFrame = true;
 		}
 
 		private boolean canScheduleRender(long nowNanos) {

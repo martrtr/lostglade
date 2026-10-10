@@ -1,6 +1,7 @@
 package com.lostglade.server;
 
 import com.lostglade.Lg2;
+import com.lostglade.block.CameraBlock;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.item.CameraPhotoSettings;
 import com.lostglade.item.ModItems;
@@ -65,6 +66,10 @@ public final class CameraCaptureSystem {
 				return InteractionResult.PASS;
 			}
 			CameraPhotoMenuSystem.open(serverPlayer);
+			// Cancelling a predicted break of a placed camera can make the client
+			// briefly restore PLAYER_HEAD's default Steve skin.  The collision head
+			// is intentionally invisible, so immediately resend its Polymer profile.
+			CameraBlock.resendCollisionHead(serverPlayer, pos);
 			return InteractionResult.SUCCESS;
 		});
 		AttackEntityCallback.EVENT.register(CameraCaptureSystem::onAttackEntity);
