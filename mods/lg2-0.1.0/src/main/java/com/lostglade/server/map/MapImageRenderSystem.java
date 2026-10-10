@@ -926,9 +926,15 @@ public final class MapImageRenderSystem {
 		if (server == null || owner == null || photoData == null) {
 			return false;
 		}
+		// A click-drag removes the stack from its slot before the destination slot
+		// is populated. It is still owned by this player while carried by the
+		// active menu, so that short transition must not cancel its render.
+		if (isMatchingPhoto(owner.containerMenu.getCarried(), photoData)
+				|| isMatchingPhoto(owner.inventoryMenu.getCarried(), photoData)) {
+			return true;
+		}
 		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
-			PhotoPrintData stackData = PhotoPrintData.readPhotoItem(owner.getInventory().getItem(slot));
-			if (stackData != null && stackData.samePhoto(photoData)) {
+			if (isMatchingPhoto(owner.getInventory().getItem(slot), photoData)) {
 				return true;
 			}
 		}
@@ -947,6 +953,11 @@ public final class MapImageRenderSystem {
 			}
 		}
 		return false;
+	}
+
+	private static boolean isMatchingPhoto(net.minecraft.world.item.ItemStack stack, PhotoPrintData photoData) {
+		PhotoPrintData stackData = PhotoPrintData.readPhotoItem(stack);
+		return stackData != null && stackData.samePhoto(photoData);
 	}
 
 	private static void ensureExecutor() {

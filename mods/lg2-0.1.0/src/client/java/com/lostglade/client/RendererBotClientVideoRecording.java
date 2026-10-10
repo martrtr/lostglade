@@ -35,7 +35,6 @@ public final class RendererBotClientVideoRecording {
 		return thread;
 	});
 	private static final String DEFAULT_FFMPEG_BIN = "ffmpeg";
-	private static final int REQUIRED_SETTLED_RENDERS = Math.max(1, Integer.getInteger("lg2.rendererBotStableCaptureProbes", 2));
 	private static final long FINISH_TIMEOUT_MS = Long.getLong("lg2.rendererBotVideoFinishTimeoutMs", 30_000L);
 	private static final long STOPPED_WARMUP_TIMEOUT_MS = Long.getLong("lg2.rendererBotVideoStoppedWarmupTimeoutMs", 12_000L);
 	private static final int MIN_RECORDING_FRAMES = Math.max(2, Integer.getInteger("lg2.rendererBotVideoMinFrames", 2));
@@ -109,14 +108,13 @@ public final class RendererBotClientVideoRecording {
 			}
 			RendererClientDiagnostics.cameraVideoStarted(payload.requestId());
 			Lg2.LOGGER.info(
-					"Renderer bot preparing video recording {} at {} fps {}x{} (capture {}x{}, settledRenders={})",
+					"Renderer bot preparing video recording {} at {} fps {}x{} (capture {}x{})",
 					payload.requestId(),
 					targetFps,
 					payload.fullWidth(),
 					payload.fullHeight(),
 					captureWidth,
-					captureHeight,
-					REQUIRED_SETTLED_RENDERS
+					captureHeight
 			);
 		} catch (Exception exception) {
 			sendFailure(payload.requestId(), exception.getMessage());
@@ -658,28 +656,25 @@ public final class RendererBotClientVideoRecording {
 		if (recording == null || recording.payload().requestId() == null) {
 			return;
 		}
-		RendererBotShadowWorldManager.RenderReadiness readiness =
-				RendererBotShadowWorldManager.inspectRenderReadiness(recording.payload().renderSessionId());
 		boolean started = false;
-		int probeCount = 0;
 		synchronized (LOCK) {
 			PendingRecording active = RECORDINGS.get(recording.payload().requestId());
 			if (active != recording) {
 				return;
 			}
 			active.frameInFlight = false;
-			if (active.observeReadinessProbe(readiness)) {
-				active.markRecordingStarted(System.currentTimeMillis());
-				started = true;
-				probeCount = active.readinessProbeCount;
-			}
+			// Video is a live stream, not a still. Waiting for a completely settled
+			// terrain graph can postpone its very first frame indefinitely while
+			// nearby chunks are still compiling. A successful off-screen render is
+			// the only admission condition; later frames naturally include chunks as
+			// they arrive.
+			active.markRecordingStarted(System.currentTimeMillis());
+			started = true;
 		}
 		if (started) {
 			Lg2.LOGGER.info(
-					"Renderer bot started video recording {} after {} settled renders (visibleSections={})",
-					recording.payload().requestId(),
-					probeCount,
-					readiness.visibleSections()
+					"Renderer bot admitted video recording {} after its first rendered frame",
+					recording.payload().requestId()
 			);
 		}
 	}
@@ -907,9 +902,6 @@ public final class RendererBotClientVideoRecording {
 		private final int captureHeight;
 		private byte[] firstPreviewFrame;
 		private byte[] firstFullFrame;
-		private int readinessProbeCount;
-		private int settledRenderCount;
-		private long settledContentRevision = Long.MIN_VALUE;
 		private long recordingStartedAtMs;
 		private volatile boolean stopRequested;
 		private volatile boolean frameInFlight;
@@ -968,22 +960,6 @@ public final class RendererBotClientVideoRecording {
 			}
 			this.recordingStartNotified = true;
 			return true;
-		}
-
-		private boolean observeReadinessProbe(RendererBotShadowWorldManager.RenderReadiness readiness) {
-			this.readinessProbeCount++;
-			if (readiness == null || !readiness.settled()) {
-				this.settledRenderCount = 0;
-				this.settledContentRevision = Long.MIN_VALUE;
-				return false;
-			}
-			if (this.settledContentRevision != readiness.contentRevision()) {
-				this.settledContentRevision = readiness.contentRevision();
-				this.settledRenderCount = 1;
-				return this.settledRenderCount >= REQUIRED_SETTLED_RENDERS;
-			}
-			this.settledRenderCount++;
-			return this.settledRenderCount >= REQUIRED_SETTLED_RENDERS;
 		}
 
 		private void markRecordingStarted(long startedAtMs) {

@@ -7,6 +7,7 @@ import com.lostglade.server.DroneSystem;
 import eu.pb4.polymer.core.api.item.PolymerBlockItem;
 import eu.pb4.polymer.resourcepack.api.PolymerResourcePackUtils;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
@@ -16,6 +17,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
@@ -23,6 +25,9 @@ import xyz.nucleoid.packettweaker.PacketContext;
 
 public final class CameraItem extends PolymerBlockItem {
 	private static final Identifier MODEL_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "camera");
+	private static final Identifier PLACED_MODEL_ID = Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "camera_placed");
+	private static final String DISPLAY_ROOT_TAG = "lg2_camera_display";
+	private static final String DISPLAY_ONLY_TAG = "display_only";
 
 	public CameraItem(CameraBlock block, Item.Properties settings) {
 		super(block, settings, Items.STICK, true);
@@ -43,7 +48,7 @@ public final class CameraItem extends PolymerBlockItem {
 		if (!PolymerResourcePackUtils.hasMainPack(context)) {
 			return null;
 		}
-		return MODEL_ID;
+		return isPlacedDisplayStack(itemStack) ? PLACED_MODEL_ID : MODEL_ID;
 	}
 
 	@Override
@@ -108,9 +113,28 @@ public final class CameraItem extends PolymerBlockItem {
 		return false;
 	}
 
-	/** The placed camera uses the same canonical 3D item model as the handheld one. */
+	/**
+	 * The item-display entity is not an ordinary inventory camera.  Give it a
+	 * display-only marker so its fixed transform can stay compatible with the
+	 * placed-camera pose without changing any first- or third-person transforms.
+	 */
 	public static ItemStack createDisplayStack() {
-		return new ItemStack(ModItems.CAMERA);
+		ItemStack stack = new ItemStack(ModItems.CAMERA);
+		CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> {
+			var displayTag = tag.getCompoundOrEmpty(DISPLAY_ROOT_TAG);
+			displayTag.putBoolean(DISPLAY_ONLY_TAG, true);
+			tag.put(DISPLAY_ROOT_TAG, displayTag);
+		});
+		return stack;
+	}
+
+	private static boolean isPlacedDisplayStack(ItemStack stack) {
+		if (stack == null || stack.isEmpty()) {
+			return false;
+		}
+		CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
+		return customData != null
+				&& customData.copyTag().getCompoundOrEmpty(DISPLAY_ROOT_TAG).getBooleanOr(DISPLAY_ONLY_TAG, false);
 	}
 
 }

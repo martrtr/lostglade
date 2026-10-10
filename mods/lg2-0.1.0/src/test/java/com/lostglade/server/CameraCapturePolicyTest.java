@@ -14,8 +14,19 @@ public final class CameraCapturePolicyTest {
 		progressFramesFillTheSingleMapPreviewAndPhotoTiles();
 		shadowPhotoSessionsFreezeDynamicWorldState();
 		photoWarmupDoesNotMonopolizeLiveStreams();
+		videoBeginsAfterItsFirstRenderedFrame();
 		discardedPrintCancelsBothServerAndRendererWork();
+		placedCameraUsesLegacyPoseWithoutChangingHandheldPose();
 		System.out.println("Camera capture policy checks passed");
+	}
+
+	private static void videoBeginsAfterItsFirstRenderedFrame() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String video = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientVideoRecording.java"));
+		String server = Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraVideoRecordingSystem.java"));
+		require(video.contains("admitted video recording") && video.contains("active.markRecordingStarted(System.currentTimeMillis())"), "a successfully rendered video warm-up frame must admit recording without waiting for terrain to settle");
+		require(!video.contains("REQUIRED_SETTLED_RENDERS") && !video.contains("observeReadinessProbe"), "video warm-up must not inherit still-photo completion gates");
+		require(server.contains("Camera video recording {} failed") && server.contains(".append(Component.literal(\" \" + reason))"), "video failures must retain and show their actual reason");
 	}
 
 	private static void photoWarmupDoesNotMonopolizeLiveStreams() throws Exception {
@@ -92,10 +103,23 @@ public final class CameraCapturePolicyTest {
 		String client = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientCapture.java"));
 		require(maps.contains("isPhotoStillReachable(server, player, job.photoData())") && maps.contains("job.provider().onCancelled(server);"), "map rendering must stop after its print leaves the inventory and frames");
 		require(maps.contains("frameData.samePhoto(photoData)") && maps.contains("stackData.samePhoto(photoData)"), "a print must remain valid only in the author's inventory or an item frame");
+		require(maps.contains("owner.containerMenu.getCarried()") && maps.contains("owner.inventoryMenu.getCarried()"), "moving a print between inventory slots must retain its active render while it is on the player's cursor");
 		require(provider.contains("RendererBotCameraSystem.cancelCapture(this.captureHandle.requestId())"), "camera provider cancellation must reach the renderer request");
 		require(server.contains("public static void cancelCapture(UUID requestId)") && server.contains("RendererBotCaptureCancelS2CPayload"), "server cancellation must remove its pending frame and notify the renderer");
 		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 29"), "capture cancellation must be part of the negotiated renderer protocol");
 		require(client.contains("RendererBotCaptureCancelS2CPayload.TYPE") && client.contains("clearPendingCapture(payload.requestId())"), "renderer cancellation must release pending GPU work");
+	}
+
+	private static void placedCameraUsesLegacyPoseWithoutChangingHandheldPose() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String item = Files.readString(project.resolve("src/main/java/com/lostglade/item/CameraItem.java"));
+		String display = Files.readString(project.resolve("src/main/java/com/lostglade/block/CameraDisplayHelper.java"));
+		String handheldModel = Files.readString(project.resolve("src/main/resources/assets/lg2/models/item/camera.json"));
+		String placedModel = Files.readString(project.resolve("src/main/resources/assets/lg2/models/item/camera_placed.json"));
+		require(item.contains("PLACED_MODEL_ID") && item.contains("DISPLAY_ONLY_TAG") && item.contains("isPlacedDisplayStack(itemStack)"), "the placed display must select its own model instead of changing every camera stack");
+		require(display.contains("float displayYaw = yaw + 180.0F;") && display.contains("display.setXRot(-pitch);"), "placed camera orientation must retain the 535c4abb yaw and pitch formulas");
+		require(placedModel.contains("\"parent\": \"lg2:item/camera\"") && placedModel.contains("\"rotation\": [0, -180, 0]"), "placed camera must inherit the canonical mesh with the original fixed transform");
+		require(handheldModel.contains("\"translation\": [-2.75, 2, 0]") && handheldModel.contains("\"scale\": [0.65, 0.65, 0.65]"), "the current handheld camera pose must remain untouched");
 	}
 
 	private static void require(boolean condition, String message) {

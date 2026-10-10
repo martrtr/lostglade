@@ -205,8 +205,13 @@ public final class CameraVideoRecordingSystem {
 		ServerPlayer player = server.getPlayerList().getPlayer(state.playerId());
 		if (throwable != null || result == null) {
 			state.abortAudioCapture();
+			String reason = throwable == null || throwable.getMessage() == null || throwable.getMessage().isBlank()
+					? "неизвестная причина"
+					: throwable.getMessage();
+			Lg2.LOGGER.warn("Camera video recording {} failed for {}: {}", state.requestId(), state.playerId(), reason, throwable);
 			if (player != null) {
-				Lg2Messages.actionBar(player, "message.lg2.camera.video.failed");
+				Lg2Messages.actionBar(player, Lg2Messages.tr("message.lg2.camera.video.failed")
+						.append(Component.literal(" " + reason)));
 			}
 			return;
 		}
