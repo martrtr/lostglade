@@ -177,21 +177,54 @@ public final class CameraVideoRecordingSystem {
 				continue;
 			}
 			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
-			if (recording.stopRequested()) {
-				if (player != null) {
-					applyRenderingCooldown(player, recording);
-				}
+			if (player == null) {
+				cancelRecording(server, recording, null);
 				continue;
 			}
-			if (player == null
-					|| !player.isAlive()
-					|| DroneSystem.isCameraBlockedByDroneControl(player)
-					|| !isHoldingCameraInAnyHand(player)) {
-				requestStop(server, recording, player != null);
+			// The emitted video print, not the camera item, owns the work. This is
+			// deliberately identical to a photo: moving the print to a chest or
+			// throwing it away cancels, while putting the camera away does not.
+			if (!isIssuedVideoStillReachable(server, player, recording.issuedVideoData())) {
+				cancelRecording(server, recording, player);
+				continue;
+			}
+			if (recording.stopRequested()) {
+				applyRenderingCooldown(player, recording);
+				continue;
+			}
+			if (!player.isAlive()) {
+				cancelRecording(server, recording, player);
+				continue;
+			}
+			if (DroneSystem.isCameraBlockedByDroneControl(player) || !isHoldingCameraInAnyHand(player)) {
+				// Keep the video print and render the path captured so far. The
+				// renderer remains alive while that print stays reachable.
+				requestStop(server, recording, true);
 				continue;
 			}
 			RendererBotCameraSystem.recordVideoCameraPose(recording.requestId(), player);
 		}
+	}
+
+	/** Cancels only after the issued video print leaves its owner's possession. */
+	private static void cancelRecording(MinecraftServer server, ActiveRecording recording, ServerPlayer player) {
+		if (server == null || recording == null) {
+			return;
+		}
+		recording.markStopRequested();
+		// Remove the local state before completing the renderer future: otherwise a
+		// following tick can put the rendering cooldown back on a dropped camera.
+		RECORDINGS_BY_PLAYER.remove(recording.playerId(), recording);
+		recording.abortAudioCapture();
+		CameraAnimatedMapPlaybackSystem.discardPendingVideoPreview(recording.requestId().toString());
+		if (player != null) {
+			CameraCaptureSystem.clearRenderCooldown(player);
+		}
+		RendererBotCameraSystem.cancelVideoRecording(
+				server,
+				recording.requestId(),
+				"Camera video rendering was cancelled because its video print is no longer in the owner's inventory or an item frame"
+		);
 	}
 
 	private static void requestStop(MinecraftServer server, ActiveRecording recording, boolean notifyPlayer) {
@@ -275,6 +308,47 @@ public final class CameraVideoRecordingSystem {
 			return false;
 		}
 		return player.getMainHandItem().is(ModItems.CAMERA) || player.getOffhandItem().is(ModItems.CAMERA);
+	}
+
+	/** Matches the ownership rule for ordinary photo rendering. */
+	private static boolean isIssuedVideoStillReachable(MinecraftServer server, ServerPlayer owner, PhotoPrintData videoData) {
+		// Keep the legacy completion fallback alive if an item could not be issued.
+		if (videoData == null) {
+			return true;
+		}
+		if (server == null || owner == null || !videoData.isVideo()) {
+			return false;
+		}
+		// Moving the print between slots briefly holds it on the menu cursor.
+		if (isMatchingIssuedVideo(owner.containerMenu.getCarried(), videoData)
+				|| isMatchingIssuedVideo(owner.inventoryMenu.getCarried(), videoData)) {
+			return true;
+		}
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			if (isMatchingIssuedVideo(owner.getInventory().getItem(slot), videoData)) {
+				return true;
+			}
+		}
+		for (ServerLevel level : server.getAllLevels()) {
+			var bounds = new net.minecraft.world.phys.AABB(
+					-30_000_000.0D, level.getMinY(), -30_000_000.0D,
+					30_000_000.0D, level.getMaxY(), 30_000_000.0D
+			);
+			for (net.minecraft.world.entity.decoration.ItemFrame frame : level.getEntitiesOfClass(
+					net.minecraft.world.entity.decoration.ItemFrame.class, bounds
+			)) {
+				PhotoPrintData.PlacedPhotoFrameData frameData = PhotoPrintData.readFrameTile(frame.getItem());
+				if (frameData != null && frameData.samePhoto(videoData)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean isMatchingIssuedVideo(ItemStack stack, PhotoPrintData videoData) {
+		PhotoPrintData stackData = PhotoPrintData.readPhotoItem(stack);
+		return stackData != null && stackData.isVideo() && stackData.samePhoto(videoData);
 	}
 
 	private static boolean isHoldingCameraWithMicrophoneInOtherHand(ServerPlayer player) {

@@ -67,6 +67,8 @@ public final class RendererBotShadowWorldManager {
 	private static final long ACTIVE_SESSION_TICK_WINDOW_MS = 2_500L;
 	private static final long SHADOW_DESTROY_GRACE_MS = 10_000L;
 	private static final Map<UUID, ShadowLevelSession> SHADOW_SESSIONS = new HashMap<>();
+	/** Immutable-at-capture video world states, kept independently from the live shadow scene. */
+	private static final Map<UUID, VideoShadowTimeline> VIDEO_TIMELINES = new HashMap<>();
 	private static final Map<UUID, Long> LAST_RENDER_ACTIVITY_AT = new HashMap<>();
 	private static final Map<UUID, Long> PENDING_SESSION_DESTROY_AT = new HashMap<>();
 	private static final ArrayDeque<ShadowLevelSession> DISCONNECT_RETIRED_SESSIONS = new ArrayDeque<>();
@@ -117,6 +119,58 @@ public final class RendererBotShadowWorldManager {
 	public static int loadedChunkCount() {
 		synchronized (LOCK) {
 			return SHADOW_SESSIONS.values().stream().mapToInt(session -> session.chunkPacketFingerprints.size()).sum();
+		}
+	}
+
+	/** Captures the state that was visible when the server sampled a video pose. */
+	public static void captureVideoFrameSnapshot(UUID sessionId, int frameIndex) {
+		if (sessionId == null || frameIndex < 0) {
+			return;
+		}
+		synchronized (LOCK) {
+			VideoShadowTimeline timeline = VIDEO_TIMELINES.get(sessionId);
+			if (timeline != null) {
+				timeline.capture(frameIndex);
+			}
+		}
+	}
+
+	/**
+	 * Rebuilds the private shadow world for one deferred video frame. Incoming
+	 * network updates continue going into the timeline, but cannot mutate this
+	 * restored scene while its terrain is compiling and being rendered.
+	 */
+	public static boolean restoreVideoFrameSnapshot(Minecraft client, UUID sessionId, int frameIndex) {
+		if (client == null || client.getConnection() == null || sessionId == null || frameIndex < 0) {
+			return false;
+		}
+		synchronized (LOCK) {
+			ShadowLevelSession current = SHADOW_SESSIONS.get(sessionId);
+			VideoShadowTimeline timeline = VIDEO_TIMELINES.get(sessionId);
+			VideoShadowTimeline.FrameSnapshot snapshot = timeline == null ? null : timeline.snapshot(frameIndex);
+			if (current == null || snapshot == null || snapshot.chunkNode() == null) {
+				return false;
+			}
+			if (current.restoredVideoFrame() == frameIndex) {
+				return true;
+			}
+			ShadowLevelSession restored = createShadowSession(client, timeline.initPayload());
+			if (restored == null) {
+				return false;
+			}
+			restored.setRestoredVideoFrame(frameIndex);
+			restored.setReplayLocked(true);
+			restored.setFreezeDynamicContent(true);
+			SHADOW_SESSIONS.put(sessionId, restored);
+			closeSession(current);
+			applyState(restored.level(), snapshot.gameTime(), snapshot.dayTime(), snapshot.tickDayTime(), snapshot.raining(), snapshot.rainLevel(), snapshot.thunderLevel());
+			applyViewState(client.getConnection(), restored.level(), snapshot.viewDistance(), snapshot.centerChunkX(), snapshot.centerChunkZ());
+			for (Map.Entry<Long, byte[]> entry : timeline.materializeChunks(snapshot.chunkNode()).entrySet()) {
+				applyChunkBytes(client, restored, entry.getValue());
+			}
+			applyShadowPackets(client, restored, timeline.packetsThrough(snapshot.packetCount()));
+			restored.markContentReadyForReplay();
+			return true;
 		}
 	}
 
@@ -419,6 +473,7 @@ public final class RendererBotShadowWorldManager {
 			for (ShadowLevelSession session : SHADOW_SESSIONS.values()) closeSession(session);
 			while (!DISCONNECT_RETIRED_SESSIONS.isEmpty()) closeSession(DISCONNECT_RETIRED_SESSIONS.removeFirst());
 			SHADOW_SESSIONS.clear();
+			VIDEO_TIMELINES.clear();
 			LAST_RENDER_ACTIVITY_AT.clear();
 			PENDING_SESSION_DESTROY_AT.clear();
 			disconnectRetireTicks = -1;
@@ -429,6 +484,7 @@ public final class RendererBotShadowWorldManager {
 		synchronized (LOCK) {
 			DISCONNECT_RETIRED_SESSIONS.addAll(SHADOW_SESSIONS.values());
 			SHADOW_SESSIONS.clear();
+			VIDEO_TIMELINES.clear();
 			LAST_RENDER_ACTIVITY_AT.clear();
 			PENDING_SESSION_DESTROY_AT.clear();
 			// Camera targets are retired after ~5 s; close their source worlds slightly later.
@@ -481,19 +537,25 @@ public final class RendererBotShadowWorldManager {
 		}
 		runWithShadowSession(client.getConnection(), session, () -> {
 			Camera camera = session.lastCamera();
-			session.level().tickEntities();
-			session.level().tickBlockEntities();
-			session.level().tick(() -> true);
+			if (!session.freezeDynamicContent()) {
+				session.level().tickEntities();
+				session.level().tickBlockEntities();
+				session.level().tick(() -> true);
+			}
 			if (camera != null) {
 				camera.tick();
 				session.levelRenderer().tick(camera);
-				BlockPos blockPos = camera.blockPosition();
-				session.level().animateTick(blockPos.getX(), blockPos.getY(), blockPos.getZ());
-			} else if (session.audioBlockPos() != null) {
+				if (!session.freezeDynamicContent()) {
+					BlockPos blockPos = camera.blockPosition();
+					session.level().animateTick(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+				}
+			} else if (!session.freezeDynamicContent() && session.audioBlockPos() != null) {
 				BlockPos blockPos = session.audioBlockPos();
 				session.level().animateTick(blockPos.getX(), blockPos.getY(), blockPos.getZ());
 			}
-			session.particleEngine().tick();
+			if (!session.freezeDynamicContent()) {
+				session.particleEngine().tick();
+			}
 			RendererBotOffscreenWorldRenderer.tickSessionResources(session.sessionId());
 		});
 	}
@@ -506,12 +568,16 @@ public final class RendererBotShadowWorldManager {
 			ShadowLevelSession existing = SHADOW_SESSIONS.get(payload.sessionId());
 			PENDING_SESSION_DESTROY_AT.remove(payload.sessionId());
 			if (existing != null && existing.matchesWorld(payload)) {
+				VIDEO_TIMELINES.computeIfAbsent(payload.sessionId(), ignored -> new VideoShadowTimeline(payload));
 				// The server may repeat an init packet while it catches up its shadow
 				// synchronisation state.  It is not a new world in that case.  Rebuilding
 				// ClientLevel here drops every received chunk and forces the renderer to
 				// start compiling from zero again, so a continuous video never gets past
 				// the few nearest sections.
 				LAST_RENDER_ACTIVITY_AT.put(payload.sessionId(), System.currentTimeMillis());
+				if (existing.replayLocked()) {
+					return;
+				}
 				applyState(
 						existing.level(),
 						payload.gameTime(),
@@ -521,6 +587,7 @@ public final class RendererBotShadowWorldManager {
 						payload.rainLevel(),
 						payload.thunderLevel()
 				);
+				existing.setFreezeDynamicContent(payload.freezeDynamicContent());
 				// An init packet has no real cache centre (its 0,0 is only used for a
 				// freshly-created level).  Keep the centre supplied by ShadowView;
 				// moving an existing cache back to 0,0 would evict the camera area.
@@ -542,6 +609,7 @@ public final class RendererBotShadowWorldManager {
 				return;
 			}
 			SHADOW_SESSIONS.put(payload.sessionId(), created);
+			VIDEO_TIMELINES.put(payload.sessionId(), new VideoShadowTimeline(payload));
 			LAST_RENDER_ACTIVITY_AT.put(payload.sessionId(), System.currentTimeMillis());
 			applyState(
 					created.level(),
@@ -568,6 +636,16 @@ public final class RendererBotShadowWorldManager {
 		if (session == null) {
 			return;
 		}
+		VideoShadowTimeline timeline;
+		synchronized (LOCK) {
+			timeline = VIDEO_TIMELINES.get(payload.sessionId());
+			if (timeline != null) {
+				timeline.updateState(payload);
+			}
+		}
+		if (session.replayLocked()) {
+			return;
+		}
 		applyState(
 				session.level(),
 				payload.gameTime(),
@@ -588,6 +666,15 @@ public final class RendererBotShadowWorldManager {
 			session = SHADOW_SESSIONS.get(payload.sessionId());
 		}
 		if (session == null) {
+			return;
+		}
+		synchronized (LOCK) {
+			VideoShadowTimeline timeline = VIDEO_TIMELINES.get(payload.sessionId());
+			if (timeline != null) {
+				timeline.updateView(payload);
+			}
+		}
+		if (session.replayLocked()) {
 			return;
 		}
 		if (session.appliedViewDistance() != payload.viewDistance()
@@ -611,6 +698,15 @@ public final class RendererBotShadowWorldManager {
 		}
 		ClientboundLevelChunkWithLightPacket packet = RendererBotShadowPacketCodec.decodeChunkPacket(client.getConnection().registryAccess(), payload.packetBytes());
 		ChunkPos chunkPos = new ChunkPos(packet.getX(), packet.getZ());
+		synchronized (LOCK) {
+			VideoShadowTimeline timeline = VIDEO_TIMELINES.get(payload.sessionId());
+			if (timeline != null) {
+				timeline.putChunk(chunkPos, payload.packetBytes());
+			}
+		}
+		if (session.replayLocked()) {
+			return;
+		}
 		if (!session.isChunkDataNew(chunkPos, payload.packetBytes())) {
 			return;
 		}
@@ -632,6 +728,15 @@ public final class RendererBotShadowWorldManager {
 			session = SHADOW_SESSIONS.get(payload.sessionId());
 		}
 		if (session == null) {
+			return;
+		}
+		synchronized (LOCK) {
+			VideoShadowTimeline timeline = VIDEO_TIMELINES.get(payload.sessionId());
+			if (timeline != null) {
+				timeline.forgetChunk(new ChunkPos(payload.chunkX(), payload.chunkZ()));
+			}
+		}
+		if (session.replayLocked()) {
 			return;
 		}
 		ClientboundForgetLevelChunkPacket packet = new ClientboundForgetLevelChunkPacket(new ChunkPos(payload.chunkX(), payload.chunkZ()));
@@ -667,8 +772,38 @@ public final class RendererBotShadowWorldManager {
 		if (session == null) {
 			return;
 		}
+		synchronized (LOCK) {
+			VideoShadowTimeline timeline = VIDEO_TIMELINES.get(payload.sessionId());
+			if (timeline != null) {
+				timeline.appendPackets(payload.packets());
+			}
+		}
+		if (!session.replayLocked()) {
+			applyShadowPackets(client, session, payload.packets());
+		}
+	}
+
+	private static void applyChunkBytes(Minecraft client, ShadowLevelSession session, byte[] packetBytes) {
+		if (client == null || client.getConnection() == null || session == null || packetBytes == null) {
+			return;
+		}
+		ClientboundLevelChunkWithLightPacket packet = RendererBotShadowPacketCodec.decodeChunkPacket(client.getConnection().registryAccess(), packetBytes);
+		ChunkPos chunkPos = new ChunkPos(packet.getX(), packet.getZ());
 		runWithShadowSession(client.getConnection(), session, () -> {
-			for (RendererBotPayloads.ShadowPacketData packetData : payload.packets()) {
+			client.getConnection().handleLevelChunkWithLight(packet);
+			session.level().pollLightUpdates();
+		});
+		session.rememberChunkData(chunkPos, packetBytes);
+		session.levelRenderer().onChunkReadyToRender(chunkPos);
+		session.markContentChanged();
+	}
+
+	private static void applyShadowPackets(Minecraft client, ShadowLevelSession session, List<RendererBotPayloads.ShadowPacketData> packets) {
+		if (client == null || client.getConnection() == null || session == null || packets == null || packets.isEmpty()) {
+			return;
+		}
+		runWithShadowSession(client.getConnection(), session, () -> {
+			for (RendererBotPayloads.ShadowPacketData packetData : packets) {
 				Packet<ClientGamePacketListener> packet = RendererBotShadowPacketCodec.decodePacket(client.getConnection().registryAccess(), packetData);
 				RendererBotShadowLevel scene = (RendererBotShadowLevel) session.level();
 				if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket info) {
@@ -710,6 +845,7 @@ public final class RendererBotShadowWorldManager {
 			}
 			PENDING_SESSION_DESTROY_AT.remove(sessionId);
 			ShadowLevelSession removed = SHADOW_SESSIONS.remove(sessionId);
+			VIDEO_TIMELINES.remove(sessionId);
 			LAST_RENDER_ACTIVITY_AT.remove(sessionId);
 			closeSession(removed);
 			expiredSessionIds.add(sessionId);
@@ -778,7 +914,8 @@ public final class RendererBotShadowWorldManager {
 				level,
 				levelRenderer,
 				featureRenderDispatcher,
-				particleEngine
+				particleEngine,
+				payload.freezeDynamicContent()
 		);
 	}
 
@@ -989,6 +1126,84 @@ public final class RendererBotShadowWorldManager {
 		}
 	}
 
+	/** Delta-compressed timeline: every frame points to the latest changed-chunk node. */
+	private static final class VideoShadowTimeline {
+		private final RendererBotPayloads.RendererBotShadowLevelInitS2CPayload initPayload;
+		private final Map<Integer, FrameSnapshot> frames = new HashMap<>();
+		private final List<RendererBotPayloads.ShadowPacketData> packets = new ArrayList<>();
+		private ChunkNode latestChunk;
+		private long gameTime;
+		private long dayTime;
+		private boolean tickDayTime;
+		private boolean raining;
+		private float rainLevel;
+		private float thunderLevel;
+		private int viewDistance;
+		private int centerChunkX;
+		private int centerChunkZ;
+
+		private VideoShadowTimeline(RendererBotPayloads.RendererBotShadowLevelInitS2CPayload initPayload) {
+			this.initPayload = initPayload;
+			this.gameTime = initPayload.gameTime();
+			this.dayTime = initPayload.dayTime();
+			this.tickDayTime = initPayload.tickDayTime();
+			this.raining = initPayload.raining();
+			this.rainLevel = initPayload.rainLevel();
+			this.thunderLevel = initPayload.thunderLevel();
+			this.viewDistance = initPayload.viewDistance();
+		}
+
+		private RendererBotPayloads.RendererBotShadowLevelInitS2CPayload initPayload() { return this.initPayload; }
+		private void updateState(RendererBotPayloads.RendererBotShadowLevelStateS2CPayload state) {
+			this.gameTime = state.gameTime(); this.dayTime = state.dayTime(); this.tickDayTime = state.tickDayTime();
+			this.raining = state.raining(); this.rainLevel = state.rainLevel(); this.thunderLevel = state.thunderLevel();
+		}
+		private void updateView(RendererBotPayloads.RendererBotShadowViewS2CPayload view) {
+			this.viewDistance = view.viewDistance(); this.centerChunkX = view.centerChunkX(); this.centerChunkZ = view.centerChunkZ();
+		}
+		private void putChunk(ChunkPos pos, byte[] bytes) {
+			if (pos != null && bytes != null) {
+				this.latestChunk = new ChunkNode(this.latestChunk, pos.toLong(), bytes.clone());
+				// The pose packet may arrive a tick before its initial chunk packet.
+				// Fill only such incomplete captures; never overwrite a real historic
+				// snapshot after it has obtained its first world data.
+				this.frames.replaceAll((index, snapshot) -> snapshot.chunkNode() == null
+						? snapshot.withChunkNode(this.latestChunk)
+						: snapshot);
+			}
+		}
+		private void forgetChunk(ChunkPos pos) {
+			if (pos != null) this.latestChunk = new ChunkNode(this.latestChunk, pos.toLong(), null);
+		}
+		private void appendPackets(List<RendererBotPayloads.ShadowPacketData> updates) {
+			if (updates == null) return;
+			for (RendererBotPayloads.ShadowPacketData packet : updates) {
+				if (packet != null && packet.packetBytes() != null) this.packets.add(new RendererBotPayloads.ShadowPacketData(packet.packetTypeId(), packet.packetBytes().clone()));
+			}
+		}
+		private void capture(int frameIndex) {
+			FrameSnapshot snapshot = new FrameSnapshot(this.latestChunk, this.packets.size(), this.gameTime, this.dayTime, this.tickDayTime, this.raining, this.rainLevel, this.thunderLevel, this.viewDistance, this.centerChunkX, this.centerChunkZ);
+			FrameSnapshot existing = this.frames.get(frameIndex);
+			if (existing == null || existing.chunkNode() == null) this.frames.put(frameIndex, snapshot);
+		}
+		private FrameSnapshot snapshot(int frameIndex) { return this.frames.get(frameIndex); }
+		private List<RendererBotPayloads.ShadowPacketData> packetsThrough(int count) { return List.copyOf(this.packets.subList(0, Math.min(Math.max(0, count), this.packets.size()))); }
+		private Map<Long, byte[]> materializeChunks(ChunkNode node) {
+			Map<Long, byte[]> result = new HashMap<>();
+			for (ChunkNode current = node; current != null; current = current.previous()) {
+				if (result.containsKey(current.chunkLong())) continue;
+				if (current.packetBytes() != null) result.put(current.chunkLong(), current.packetBytes());
+			}
+			return result;
+		}
+		private record ChunkNode(ChunkNode previous, long chunkLong, byte[] packetBytes) { }
+		private record FrameSnapshot(ChunkNode chunkNode, int packetCount, long gameTime, long dayTime, boolean tickDayTime, boolean raining, float rainLevel, float thunderLevel, int viewDistance, int centerChunkX, int centerChunkZ) {
+			private FrameSnapshot withChunkNode(ChunkNode chunkNode) {
+				return new FrameSnapshot(chunkNode, this.packetCount, this.gameTime, this.dayTime, this.tickDayTime, this.raining, this.rainLevel, this.thunderLevel, this.viewDistance, this.centerChunkX, this.centerChunkZ);
+			}
+		}
+	}
+
 	private static final class ShadowLevelSession {
 		private final UUID sessionId;
 		private final String dimensionId;
@@ -996,6 +1211,9 @@ public final class RendererBotShadowWorldManager {
 		private final LevelRenderer levelRenderer;
 		private final FeatureRenderDispatcher featureRenderDispatcher;
 		private final ParticleEngine particleEngine;
+		private boolean freezeDynamicContent;
+		private boolean replayLocked;
+		private int restoredVideoFrame = -1;
 		private final Map<Long, Long> chunkPacketFingerprints = new HashMap<>();
 		private Camera lastCamera;
 		private BlockPos audioBlockPos;
@@ -1013,7 +1231,8 @@ public final class RendererBotShadowWorldManager {
 				ClientLevel level,
 				LevelRenderer levelRenderer,
 				FeatureRenderDispatcher featureRenderDispatcher,
-				ParticleEngine particleEngine
+				ParticleEngine particleEngine,
+				boolean freezeDynamicContent
 		) {
 			this.sessionId = sessionId;
 			this.dimensionId = dimensionId;
@@ -1021,6 +1240,7 @@ public final class RendererBotShadowWorldManager {
 			this.levelRenderer = levelRenderer;
 			this.featureRenderDispatcher = featureRenderDispatcher;
 			this.particleEngine = particleEngine;
+			this.freezeDynamicContent = freezeDynamicContent;
 		}
 
 		private long contentRevision() {
@@ -1097,6 +1317,20 @@ public final class RendererBotShadowWorldManager {
 		private UUID sessionId() {
 			return this.sessionId;
 		}
+
+		private boolean freezeDynamicContent() {
+			return this.freezeDynamicContent;
+		}
+
+		private void setFreezeDynamicContent(boolean freezeDynamicContent) {
+			this.freezeDynamicContent = freezeDynamicContent;
+		}
+
+		private boolean replayLocked() { return this.replayLocked; }
+		private void setReplayLocked(boolean replayLocked) { this.replayLocked = replayLocked; }
+		private int restoredVideoFrame() { return this.restoredVideoFrame; }
+		private void setRestoredVideoFrame(int restoredVideoFrame) { this.restoredVideoFrame = restoredVideoFrame; }
+		private void markContentReadyForReplay() { this.serverReadyContentRevision = this.contentRevision; this.serverReadyRevision++; }
 
 		private boolean matchesWorld(RendererBotPayloads.RendererBotShadowLevelInitS2CPayload payload) {
 			// A render-session id is the stable identity of the shadow world. Server

@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RendererBotPayloads {
 	// Map-tile transport was removed from the renderer-bot protocol. Older clients
 	// must not accept this stream.
-	public static final int PROTOCOL_VERSION = 33;
+	public static final int PROTOCOL_VERSION = 35;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_VIDEO_CAMERA_FRAMES = 12_000;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
@@ -87,6 +87,7 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playS2C().register(RendererBotItemIconRequestS2CPayload.TYPE, RendererBotItemIconRequestS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().registerLarge(RendererBotVideoRecordingStartS2CPayload.TYPE, RendererBotVideoRecordingStartS2CPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingStopS2CPayload.TYPE, RendererBotVideoRecordingStopS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingCancelS2CPayload.TYPE, RendererBotVideoRecordingCancelS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameS2CPayload.TYPE, RendererBotVideoRecordingFrameS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameReadyS2CPayload.TYPE, RendererBotVideoRecordingFrameReadyS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotAudioCaptureStartS2CPayload.TYPE, RendererBotAudioCaptureStartS2CPayload.STREAM_CODEC);
@@ -867,6 +868,26 @@ public final class RendererBotPayloads {
 		}
 	}
 
+	/** Stops an invalid recording without sealing or encoding its partial video. */
+	public record RendererBotVideoRecordingCancelS2CPayload(UUID requestId) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingCancelS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_cancel"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingCancelS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingCancelS2CPayload::write, RendererBotVideoRecordingCancelS2CPayload::new);
+
+		public RendererBotVideoRecordingCancelS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingCancelS2CPayload> type() {
+			return TYPE;
+		}
+	}
+
 	/** Sent only after the renderer client has written the first real video frame. */
 	public record RendererBotVideoRecordingStartedC2SPayload(UUID requestId) implements CustomPacketPayload {
 		public static final Type<RendererBotVideoRecordingStartedC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_started"));
@@ -1012,7 +1033,8 @@ public final class RendererBotPayloads {
 			float thunderLevel,
 			int seaLevel,
 			int viewDistance,
-			int simulationDistance
+			int simulationDistance,
+			boolean freezeDynamicContent
 	) implements CustomPacketPayload {
 		public static final Type<RendererBotShadowLevelInitS2CPayload> TYPE = new Type<>(id("renderer_bot_shadow_level_init"));
 		public static final StreamCodec<FriendlyByteBuf, RendererBotShadowLevelInitS2CPayload> STREAM_CODEC =
@@ -1036,7 +1058,8 @@ public final class RendererBotPayloads {
 					buffer.readFloat(),
 					buffer.readVarInt(),
 					buffer.readVarInt(),
-					buffer.readVarInt()
+					buffer.readVarInt(),
+					buffer.readBoolean()
 			);
 		}
 
@@ -1058,6 +1081,7 @@ public final class RendererBotPayloads {
 			buffer.writeVarInt(this.seaLevel);
 			buffer.writeVarInt(this.viewDistance);
 			buffer.writeVarInt(this.simulationDistance);
+			buffer.writeBoolean(this.freezeDynamicContent);
 		}
 
 		@Override

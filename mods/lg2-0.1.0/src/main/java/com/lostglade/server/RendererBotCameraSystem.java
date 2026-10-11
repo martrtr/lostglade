@@ -1296,6 +1296,29 @@ public final class RendererBotCameraSystem {
 		}
 	}
 
+	/**
+	 * Aborts a recording that is no longer valid (for example, its owner dropped
+	 * the camera). Unlike {@link #stopVideoRecording(MinecraftServer, UUID)}, this
+	 * deliberately does not seal the pose stream or start the deferred replay.
+	 */
+	public static void cancelVideoRecording(MinecraftServer server, UUID requestId, String reason) {
+		if (server == null || requestId == null) {
+			return;
+		}
+		PendingVideoRecording recording = PENDING_VIDEO_RECORDINGS.get(requestId);
+		if (recording == null) {
+			return;
+		}
+		ServerPlayer bot = server.getPlayerList().getPlayer(recording.botUuid());
+		if (recording.clientStartSent() && bot != null
+				&& ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingCancelS2CPayload.TYPE)) {
+			ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingCancelS2CPayload(requestId));
+		}
+		failVideoRecording(requestId, recording, reason == null || reason.isBlank()
+				? "Camera video recording was cancelled"
+				: reason);
+	}
+
 	public static int videoFrameCount(UUID requestId) {
 		PendingVideoRecording recording = requestId == null ? null : PENDING_VIDEO_RECORDINGS.get(requestId);
 		return recording == null ? 0 : recording.cameraFrames().size();
@@ -1401,6 +1424,15 @@ public final class RendererBotCameraSystem {
 					recording.cameraFrames()
 			));
 			recording.markClientStartSent();
+			// The operator can end (or put away) the camera before the shadow
+			// session has become ready enough to send this start packet. In that
+			// case stopVideoRecording could not send the seal yet. Send it now,
+			// after Start in the same reliable stream, so the client replays the
+			// captured initial path instead of waiting for poses forever at 0%.
+			if (recording.stopRequested()
+					&& ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload.TYPE)) {
+				ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(recording.requestId()));
+			}
 			armVideoRecordingTimeout(recording);
 			// Later operator poses are appended while the renderer works on the
 			// beginning of the recording in parallel.
@@ -3272,7 +3304,8 @@ public final class RendererBotCameraSystem {
 						thunderLevel,
 						level.getSeaLevel(),
 						desiredState.viewDistance(),
-						Math.max(2, level.getServer().getPlayerList().getSimulationDistance())
+						Math.max(2, level.getServer().getPlayerList().getSimulationDistance()),
+						desiredState.freezeDynamicContent()
 				)
 		);
 	}

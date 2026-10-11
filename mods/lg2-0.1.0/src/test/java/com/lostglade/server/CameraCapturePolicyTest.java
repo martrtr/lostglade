@@ -16,6 +16,8 @@ public final class CameraCapturePolicyTest {
 		photoWarmupDoesNotMonopolizeLiveStreams();
 		videoBeginsAfterItsFirstRenderedFrame();
 		videoRecordsOperatorPathBeforeDeferredTerrainReplay();
+		videoFrameTimelineRestoresHistoricShadowState();
+		droppedCameraCancelsVideoAndReleasesCooldown();
 		discardedPrintCancelsBothServerAndRendererWork();
 		placedCameraUsesLegacyPoseWithoutChangingHandheldPose();
 		System.out.println("Camera capture policy checks passed");
@@ -44,8 +46,34 @@ public final class CameraCapturePolicyTest {
 		require(Files.readString(project.resolve("src/main/java/com/lostglade/server/map/MapImageRenderSystem.java")).contains("updatePhotoItemsInInventories(server, job.photoData(), progressName)") && recording.contains("clearRenderCooldown"), "photo prints must receive progress titles and all camera render paths must release their cooldowns");
 		require(server.contains("recording.clientStartSent()") && server.contains("recording.beginDeferredRender()") && server.contains("resolveVideoRecordingTarget"), "the renderer must start while recording and retain one sliding shadow session through its final replay tail");
 		require(server.contains("This seals the streamed pose list") && server.contains("RendererBotVideoRecordingFrameS2CPayload"), "the stop packet must seal a streaming recording instead of cancelling it, and later poses must be appended");
+		require(server.contains("if (recording.stopRequested()") && server.contains("captured initial path instead of waiting for poses forever at 0%") && server.contains("new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(recording.requestId())"), "a recording stopped before renderer start must send its delayed seal immediately after the start packet");
 		require(client.contains("!readiness.settled()") && client.contains("sendReplayProgress") && client.contains("advanceAfterEncodedFrame"), "each deferred video pose must wait for fully compiled visible terrain before requesting the next one");
-		require(payloads.contains("VideoCameraFrame") && payloads.contains("RendererBotVideoRecordingFrameS2CPayload") && payloads.contains("RendererBotVideoRecordingPreviewFrameC2SPayload") && payloads.contains("RendererBotVideoRecordingProgressC2SPayload") && payloads.contains("RendererBotVideoRecordingFrameReadyS2CPayload") && payloads.contains("PROTOCOL_VERSION = 33"), "streamed replay poses, preview frames, and readiness acknowledgements must be part of the renderer protocol");
+		require(client.contains("encoderCompatibleDimension") && client.contains("(dimension & 1) == 0") && client.contains("libx264's yuv420p output needs an even width and height"), "offscreen video dimensions must be encoder-compatible instead of producing a closed ffmpeg input stream for odd aspect ratios");
+		require(payloads.contains("VideoCameraFrame") && payloads.contains("RendererBotVideoRecordingFrameS2CPayload") && payloads.contains("RendererBotVideoRecordingPreviewFrameC2SPayload") && payloads.contains("RendererBotVideoRecordingProgressC2SPayload") && payloads.contains("RendererBotVideoRecordingFrameReadyS2CPayload") && payloads.contains("PROTOCOL_VERSION = 35"), "streamed replay poses, preview frames, and readiness acknowledgements must be part of the renderer protocol");
+	}
+
+	private static void droppedCameraCancelsVideoAndReleasesCooldown() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String recording = Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraVideoRecordingSystem.java"));
+		String server = Files.readString(project.resolve("src/main/java/com/lostglade/server/RendererBotCameraSystem.java"));
+		String payloads = Files.readString(project.resolve("src/main/java/com/lostglade/network/RendererBotPayloads.java"));
+		String client = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientVideoRecording.java"));
+		String maps = Files.readString(project.resolve("src/main/java/com/lostglade/server/map/MapImageRenderSystem.java"));
+		int lostCameraCheck = recording.indexOf("if (!isIssuedVideoStillReachable(server, player, recording.issuedVideoData()))");
+		int replayCooldown = recording.indexOf("if (recording.stopRequested())");
+		require(lostCameraCheck >= 0 && replayCooldown > lostCameraCheck && recording.contains("isIssuedVideoStillReachable") && recording.contains("owner.containerMenu.getCarried()") && recording.contains("frameData.samePhoto(videoData)") && recording.contains("requestStop(server, recording, true)") && recording.contains("RECORDINGS_BY_PLAYER.remove(recording.playerId(), recording)") && recording.contains("CameraCaptureSystem.clearRenderCooldown(player)"), "the issued video print must own both live and deferred rendering; only losing that print may cancel its work and cooldown");
+		require(server.contains("public static void cancelVideoRecording") && server.contains("RendererBotVideoRecordingCancelS2CPayload") && server.contains("failVideoRecording(requestId, recording"), "video cancellation must stop both server replay scheduling and the volunteer renderer request");
+		require(payloads.contains("RendererBotVideoRecordingCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 35") && client.contains("RendererBotVideoRecordingCancelS2CPayload.TYPE") && client.contains("private static void cancelRecording(UUID requestId)"), "video cancellation must be a negotiated server-to-renderer cleanup path");
+		require(maps.contains("PENDING_CAMERA_COOLDOWN_CLEARS.add(playerId)") && maps.contains("CameraCaptureSystem.clearRenderCooldown(player)"), "every finished, failed, or discarded photo job must release its camera cooldown");
+	}
+
+	private static void videoFrameTimelineRestoresHistoricShadowState() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String shadow = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
+		String video = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientVideoRecording.java"));
+		require(video.contains("captureVideoFrameSnapshot") && video.contains("restoreVideoFrameSnapshot"), "video frames must capture and restore their own shadow-world state instead of rendering the final live world");
+		require(shadow.contains("class VideoShadowTimeline") && shadow.contains("Delta-compressed timeline") && shadow.contains("timeline.putChunk") && shadow.contains("timeline.appendPackets") && shadow.contains("setReplayLocked(true)"), "the shadow timeline must retain chunk deltas and entity/transient packets while isolating the replay scene from live updates");
+		require(shadow.contains("applyState(restored.level(), snapshot.gameTime()") && shadow.contains("applyShadowPackets(client, restored, timeline.packetsThrough") && shadow.contains("materializeChunks(snapshot.chunkNode())"), "restoring a video frame must rebuild terrain, time/weather, and tracked entity packets from its historic snapshot");
 	}
 
 	private static void photoWarmupDoesNotMonopolizeLiveStreams() throws Exception {
@@ -71,10 +99,12 @@ public final class CameraCapturePolicyTest {
 
 	private static void shadowPhotoSessionsFreezeDynamicWorldState() throws Exception {
 		String server = Files.readString(Path.of("").toAbsolutePath().resolve("src/main/java/com/lostglade/server/RendererBotCameraSystem.java"));
+		String client = Files.readString(Path.of("").toAbsolutePath().resolve("src/client/java/com/lostglade/client/RendererBotShadowWorldManager.java"));
 		require(server.contains("snapshotState.markDynamicContentFrozen()"), "still captures must explicitly opt into a frozen shadow session");
 		require(server.contains("activeState.freezeDynamicContent() && activeState.lastGameTime() != Long.MIN_VALUE"), "time and weather must be sent only once to a frozen photo session");
 		require(server.contains("activeState.freezeDynamicContent() && activeState.entitySnapshotSent()"), "entities must be paired once and then stop moving in a photo session");
 		require(server.contains("!activeState.freezeDynamicContent() && DIRTY_SHADOW_CHUNKS.contains") && server.contains("activeState == null || activeState.freezeDynamicContent()"), "dynamic block and transient packets must not mutate the frozen photo scene");
+		require(server.contains("desiredState.freezeDynamicContent()") && client.contains("if (!session.freezeDynamicContent())") && client.contains("payload.freezeDynamicContent()"), "the client shadow scene must freeze entity, block, particle, and animate ticks as well as the server stream");
 	}
 
 	private static void progressFramesFillTheSingleMapPreviewAndPhotoTiles() throws Exception {
@@ -126,7 +156,7 @@ public final class CameraCapturePolicyTest {
 		require(maps.contains("owner.containerMenu.getCarried()") && maps.contains("owner.inventoryMenu.getCarried()"), "moving a print between inventory slots must retain its active render while it is on the player's cursor");
 		require(provider.contains("RendererBotCameraSystem.cancelCapture(this.captureHandle.requestId())"), "camera provider cancellation must reach the renderer request");
 		require(server.contains("public static void cancelCapture(UUID requestId)") && server.contains("RendererBotCaptureCancelS2CPayload"), "server cancellation must remove its pending frame and notify the renderer");
-		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 33"), "capture cancellation must be part of the negotiated renderer protocol");
+		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 35"), "capture cancellation must be part of the negotiated renderer protocol");
 		require(client.contains("RendererBotCaptureCancelS2CPayload.TYPE") && client.contains("clearPendingCapture(payload.requestId())"), "renderer cancellation must release pending GPU work");
 	}
 

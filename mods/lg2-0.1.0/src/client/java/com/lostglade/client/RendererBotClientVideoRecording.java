@@ -78,6 +78,10 @@ public final class RendererBotClientVideoRecording {
 				(payload, context) -> context.client().execute(() -> requestStop(payload.requestId()))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoRecordingCancelS2CPayload.TYPE,
+				(payload, context) -> context.client().execute(() -> cancelRecording(payload.requestId()))
+		);
+		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoRecordingFrameS2CPayload.TYPE,
 				(payload, context) -> context.client().execute(() -> appendCameraFrame(payload))
 		);
@@ -128,6 +132,9 @@ public final class RendererBotClientVideoRecording {
 				}
 				RECORDINGS.put(payload.requestId(), recording);
 			}
+			for (int frameIndex = 0; frameIndex < payload.cameraFrames().size(); frameIndex++) {
+				RendererBotShadowWorldManager.captureVideoFrameSnapshot(payload.renderSessionId(), frameIndex);
+			}
 			RendererClientDiagnostics.cameraVideoStarted(payload.requestId());
 			Lg2.LOGGER.info(
 					"Renderer bot preparing video recording {} at {} fps {}x{} (capture {}x{})",
@@ -158,6 +165,34 @@ public final class RendererBotClientVideoRecording {
 		}
 	}
 
+	private static void cancelRecording(UUID requestId) {
+		if (requestId == null) {
+			return;
+		}
+		// The server has already completed this request exceptionally, so this is
+		// local cleanup only; it must never turn a cancellation into another error.
+		PendingRecording current;
+		synchronized (LOCK) {
+			EARLY_FRAME_READY.remove(requestId);
+			EARLY_VIDEO_FRAMES.remove(requestId);
+			EARLY_SEALS.remove(requestId);
+			current = RECORDINGS.remove(requestId);
+		}
+		if (current == null) {
+			return;
+		}
+		try {
+			current.encoderInput.close();
+		} catch (IOException ignored) {
+		}
+		current.encoderProcess.destroyForcibly();
+		try {
+			Files.deleteIfExists(current.tempPath());
+			Files.deleteIfExists(current.finalPath());
+		} catch (IOException ignored) {
+		}
+	}
+
 	private static void appendCameraFrame(RendererBotPayloads.RendererBotVideoRecordingFrameS2CPayload payload) {
 		if (payload == null || payload.requestId() == null || payload.frame() == null || payload.frameIndex() < 0) {
 			return;
@@ -166,6 +201,7 @@ public final class RendererBotClientVideoRecording {
 			PendingRecording recording = RECORDINGS.get(payload.requestId());
 			if (recording != null) {
 				recording.appendCameraFrame(payload.frameIndex(), payload.frame());
+				RendererBotShadowWorldManager.captureVideoFrameSnapshot(recording.payload().renderSessionId(), payload.frameIndex());
 			} else {
 				EARLY_VIDEO_FRAMES.computeIfAbsent(payload.requestId(), ignored -> new HashMap<>()).put(payload.frameIndex(), payload.frame());
 			}
@@ -290,6 +326,14 @@ public final class RendererBotClientVideoRecording {
 	}
 
 	private static void completeDeferredReplayRender(Minecraft client, PendingRecording recording, RenderTarget renderTarget) {
+		if (!RendererBotShadowWorldManager.restoreVideoFrameSnapshot(
+				client,
+				recording.payload().renderSessionId(),
+				recording.currentFrameIndex()
+		)) {
+			clearRecordingFrameInFlight(recording.payload().requestId());
+			return;
+		}
 		RendererBotShadowWorldManager.RenderReadiness readiness =
 				RendererBotShadowWorldManager.inspectRenderReadiness(recording.payload().renderSessionId());
 		if (readiness == null || !readiness.settled()) {
@@ -688,12 +732,18 @@ public final class RendererBotClientVideoRecording {
 		double minScale = Math.max(MIN_RENDER_WIDTH / (double) fullWidth, MIN_RENDER_HEIGHT / (double) fullHeight);
 		double maxScale = Math.min(MAX_RENDER_WIDTH / (double) fullWidth, MAX_RENDER_HEIGHT / (double) fullHeight);
 		double scale = Math.max(1.0D, Math.min(maxScale, Math.max(minScale, TARGET_RENDER_SCALE)));
-		return Math.clamp((int) Math.round(fullWidth * scale), 1, MAX_RENDER_WIDTH);
+		return encoderCompatibleDimension((int) Math.round(fullWidth * scale), MAX_RENDER_WIDTH);
 	}
 
 	private static int computeRenderHeight(RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload payload, int renderWidth) {
 		double aspect = Math.max(1.0D, payload.fullHeight()) / (double) Math.max(1.0D, payload.fullWidth());
-		return Math.clamp((int) Math.round(renderWidth * aspect), 1, MAX_RENDER_HEIGHT);
+		return encoderCompatibleDimension((int) Math.round(renderWidth * aspect), MAX_RENDER_HEIGHT);
+	}
+
+	/** libx264's yuv420p output needs an even width and height. */
+	private static int encoderCompatibleDimension(int value, int maximum) {
+		int dimension = Math.clamp(value, 2, Math.max(2, maximum));
+		return (dimension & 1) == 0 ? dimension : Math.max(2, dimension - 1);
 	}
 
 	private static byte[] argbToRgb(int[] pixels) {
@@ -938,6 +988,10 @@ public final class RendererBotClientVideoRecording {
 
 		private RendererBotPayloads.VideoCameraFrame currentCameraFrame() {
 			return this.cameraFrames.get(Math.clamp(this.nextFrameIndex, 0, this.cameraFrames.size() - 1));
+		}
+
+		private int currentFrameIndex() {
+			return this.nextFrameIndex;
 		}
 
 		/** Returns the next pose that must be prepared by the server, or -1 while awaiting one. */
