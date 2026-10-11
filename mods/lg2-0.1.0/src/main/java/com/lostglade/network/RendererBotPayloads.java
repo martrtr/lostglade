@@ -17,13 +17,44 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RendererBotPayloads {
 	// Map-tile transport was removed from the renderer-bot protocol. Older clients
 	// must not accept this stream.
-	public static final int PROTOCOL_VERSION = 29;
+	public static final int PROTOCOL_VERSION = 31;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
+	private static final int MAX_VIDEO_CAMERA_FRAMES = 12_000;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
 	private static final int MAX_HIDDEN_CAMERA_ENTITIES = 32;
 	private static final AtomicBoolean REGISTERED = new AtomicBoolean(false);
 
 	private RendererBotPayloads() {
+	}
+
+	private static List<VideoCameraFrame> readVideoCameraFrames(FriendlyByteBuf buffer) {
+		int size = buffer.readVarInt();
+		if (size < 1 || size > MAX_VIDEO_CAMERA_FRAMES) {
+			throw new IllegalArgumentException("Invalid deferred video camera frame count: " + size);
+		}
+		List<VideoCameraFrame> frames = new ArrayList<>(size);
+		for (int index = 0; index < size; index++) {
+			frames.add(new VideoCameraFrame(buffer.readDouble(), buffer.readDouble(), buffer.readDouble(), buffer.readFloat(), buffer.readFloat()));
+		}
+		return List.copyOf(frames);
+	}
+
+	private static void writeVideoCameraFrames(FriendlyByteBuf buffer, List<VideoCameraFrame> frames) {
+		List<VideoCameraFrame> safeFrames = frames == null ? List.of() : frames;
+		if (safeFrames.isEmpty() || safeFrames.size() > MAX_VIDEO_CAMERA_FRAMES) {
+			throw new IllegalArgumentException("Invalid deferred video camera frame count: " + safeFrames.size());
+		}
+		buffer.writeVarInt(safeFrames.size());
+		for (VideoCameraFrame frame : safeFrames) {
+			if (frame == null) {
+				throw new IllegalArgumentException("Deferred video contains a null camera frame");
+			}
+			buffer.writeDouble(frame.x());
+			buffer.writeDouble(frame.y());
+			buffer.writeDouble(frame.z());
+			buffer.writeFloat(frame.yaw());
+			buffer.writeFloat(frame.pitch());
+		}
 	}
 
 	public static void registerPayloadTypes() {
@@ -37,6 +68,7 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotLiveFrameC2SPayload.TYPE, RendererBotLiveFrameC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotItemIconC2SPayload.TYPE, RendererBotItemIconC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingStartedC2SPayload.TYPE, RendererBotVideoRecordingStartedC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingProgressC2SPayload.TYPE, RendererBotVideoRecordingProgressC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingCompleteC2SPayload.TYPE, RendererBotVideoRecordingCompleteC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoFileChunkC2SPayload.TYPE, RendererBotVideoFileChunkC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotAudioFrameC2SPayload.TYPE, RendererBotAudioFrameC2SPayload.STREAM_CODEC);
@@ -51,8 +83,10 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamPoseS2CPayload.TYPE, RendererBotLiveStreamPoseS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotLiveStreamStopS2CPayload.TYPE, RendererBotLiveStreamStopS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotItemIconRequestS2CPayload.TYPE, RendererBotItemIconRequestS2CPayload.STREAM_CODEC);
-		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingStartS2CPayload.TYPE, RendererBotVideoRecordingStartS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().registerLarge(RendererBotVideoRecordingStartS2CPayload.TYPE, RendererBotVideoRecordingStartS2CPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingStopS2CPayload.TYPE, RendererBotVideoRecordingStopS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameS2CPayload.TYPE, RendererBotVideoRecordingFrameS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameReadyS2CPayload.TYPE, RendererBotVideoRecordingFrameReadyS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotAudioCaptureStartS2CPayload.TYPE, RendererBotAudioCaptureStartS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotAudioCaptureStopS2CPayload.TYPE, RendererBotAudioCaptureStopS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotShadowLevelInitS2CPayload.TYPE, RendererBotShadowLevelInitS2CPayload.STREAM_CODEC);
@@ -673,7 +707,8 @@ public final class RendererBotPayloads {
 			int fullHeight,
 			int fovDegrees,
 			int targetFps,
-			int maxDurationSeconds
+			int maxDurationSeconds,
+			List<VideoCameraFrame> cameraFrames
 	) implements CustomPacketPayload {
 		public static final Type<RendererBotVideoRecordingStartS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_start"));
 		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingStartS2CPayload> STREAM_CODEC =
@@ -696,7 +731,8 @@ public final class RendererBotPayloads {
 					buffer.readVarInt(),
 					buffer.readVarInt(),
 					buffer.readVarInt(),
-					buffer.readVarInt()
+					buffer.readVarInt(),
+					readVideoCameraFrames(buffer)
 			);
 		}
 
@@ -720,10 +756,67 @@ public final class RendererBotPayloads {
 			buffer.writeVarInt(this.fovDegrees);
 			buffer.writeVarInt(this.targetFps);
 			buffer.writeVarInt(this.maxDurationSeconds);
+			writeVideoCameraFrames(buffer, this.cameraFrames);
 		}
 
 		@Override
 		public Type<RendererBotVideoRecordingStartS2CPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** One fixed camera pose in the deferred hand-camera replay. */
+	public record VideoCameraFrame(double x, double y, double z, float yaw, float pitch) {
+	}
+
+	/** Appends one operator pose while a hand-camera recording is still open. */
+	public record RendererBotVideoRecordingFrameS2CPayload(UUID requestId, int frameIndex, VideoCameraFrame frame) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingFrameS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_frame"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingFrameS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingFrameS2CPayload::write, RendererBotVideoRecordingFrameS2CPayload::new);
+
+		public RendererBotVideoRecordingFrameS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readVarInt(), new VideoCameraFrame(
+					buffer.readDouble(), buffer.readDouble(), buffer.readDouble(), buffer.readFloat(), buffer.readFloat()
+			));
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeVarInt(this.frameIndex);
+			if (this.frame == null) {
+				throw new IllegalArgumentException("Video recording frame is missing");
+			}
+			buffer.writeDouble(this.frame.x());
+			buffer.writeDouble(this.frame.y());
+			buffer.writeDouble(this.frame.z());
+			buffer.writeFloat(this.frame.yaw());
+			buffer.writeFloat(this.frame.pitch());
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingFrameS2CPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** Server admits this replay pose once its shadow chunks have been queued. */
+	public record RendererBotVideoRecordingFrameReadyS2CPayload(UUID requestId, int frameIndex) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingFrameReadyS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_frame_ready"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingFrameReadyS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingFrameReadyS2CPayload::write, RendererBotVideoRecordingFrameReadyS2CPayload::new);
+
+		public RendererBotVideoRecordingFrameReadyS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readVarInt());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeVarInt(this.frameIndex);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingFrameReadyS2CPayload> type() {
 			return TYPE;
 		}
 	}
@@ -763,6 +856,27 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotVideoRecordingStartedC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** Renderer asks the server to slide the retained shadow session to the next replay pose. */
+	public record RendererBotVideoRecordingProgressC2SPayload(UUID requestId, int frameIndex) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingProgressC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_progress"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingProgressC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingProgressC2SPayload::write, RendererBotVideoRecordingProgressC2SPayload::new);
+
+		public RendererBotVideoRecordingProgressC2SPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readVarInt());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeVarInt(this.frameIndex);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingProgressC2SPayload> type() {
 			return TYPE;
 		}
 	}

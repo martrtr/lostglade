@@ -367,6 +367,22 @@ public final class RendererBotCameraSystem {
 				}
 		);
 		ServerPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoRecordingProgressC2SPayload.TYPE,
+				(payload, context) -> {
+					MinecraftServer server = context.player().level().getServer();
+					if (server == null) {
+						return;
+					}
+					server.execute(() -> {
+						PendingVideoRecording recording = PENDING_VIDEO_RECORDINGS.get(payload.requestId());
+						if (recording != null && recording.botUuid().equals(context.player().getUUID())) {
+							recording.advanceReplayFrame(payload.frameIndex());
+							CameraVideoRecordingSystem.notifyRenderingProgress(server, payload.requestId(), payload.frameIndex());
+						}
+					});
+				}
+		);
+		ServerPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoFileChunkC2SPayload.TYPE,
 				(payload, context) -> {
 					MinecraftServer server = context.player().level().getServer();
@@ -1239,14 +1255,53 @@ public final class RendererBotCameraSystem {
 			return;
 		}
 		recording.markStopRequested();
-		if (!recording.clientStartSent()) {
-			return;
-		}
+		recording.beginDeferredRender();
 		ServerPlayer bot = server.getPlayerList().getPlayer(recording.botUuid());
-		if (bot == null || !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload.TYPE)) {
+		if (recording.clientStartSent() && bot != null
+				&& ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload.TYPE)) {
+			// This seals the streamed pose list. It is not a renderer cancellation.
+			ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(requestId));
+		}
+	}
+
+	public static int videoFrameCount(UUID requestId) {
+		PendingVideoRecording recording = requestId == null ? null : PENDING_VIDEO_RECORDINGS.get(requestId);
+		return recording == null ? 0 : recording.cameraFrames().size();
+	}
+
+	/** Samples the operator and streams each pose to the volunteer renderer immediately. */
+	public static void recordVideoCameraPose(UUID requestId, ServerPlayer operator) {
+		if (requestId == null || operator == null) {
 			return;
 		}
-		ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(requestId));
+		PendingVideoRecording recording = PENDING_VIDEO_RECORDINGS.get(requestId);
+		if (recording != null) {
+			sendRecordedVideoFrame(recording, recording.recordCameraPose(operator, false));
+		}
+	}
+
+	/** Captures the exact final operator pose before switching to deferred replay. */
+	public static void finishVideoCameraPath(UUID requestId, ServerPlayer operator) {
+		if (requestId == null || operator == null) {
+			return;
+		}
+		PendingVideoRecording recording = PENDING_VIDEO_RECORDINGS.get(requestId);
+		if (recording != null) {
+			sendRecordedVideoFrame(recording, recording.recordCameraPose(operator, true));
+		}
+	}
+
+	private static void sendRecordedVideoFrame(PendingVideoRecording recording, RecordedVideoFrame frame) {
+		if (recording == null || frame == null || !recording.clientStartSent()) {
+			return;
+		}
+		ServerPlayer bot = recording.server().getPlayerList().getPlayer(recording.botUuid());
+		if (bot == null || !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingFrameS2CPayload.TYPE)) {
+			return;
+		}
+		ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingFrameS2CPayload(
+				recording.requestId(), frame.index(), frame.frame()
+		));
 	}
 
 	private static PendingVideoRecording selectVideoRecordingForRenderer(UUID botUuid) {
@@ -1310,14 +1365,13 @@ public final class RendererBotCameraSystem {
 					recording.fullHeight(),
 					recording.fovDegrees(),
 					recording.targetFps(),
-					recording.maxDurationSeconds()
+					recording.maxDurationSeconds(),
+					recording.cameraFrames()
 			));
 			recording.markClientStartSent();
 			armVideoRecordingTimeout(recording);
-			if (recording.stopRequested()
-					&& ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload.TYPE)) {
-				ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingStopS2CPayload(recording.requestId()));
-			}
+			// Later operator poses are appended while the renderer works on the
+			// beginning of the recording in parallel.
 		} catch (RuntimeException exception) {
 			failVideoRecording(recording.requestId(), recording, "Не удалось запустить запись на клиенте камеры");
 		}
@@ -1329,7 +1383,10 @@ public final class RendererBotCameraSystem {
 		}
 		long timeoutMillis = Math.max(5_000L, Lg2Config.get().cameraRendererBotTimeoutMs);
 		recording.completionFuture()
-				.orTimeout(Math.max(timeoutMillis, recording.maxDurationSeconds() * 1_000L + 30_000L), TimeUnit.MILLISECONDS)
+				// Deferred replay renders each recorded pose only after its visible
+				// terrain settles. It is intentionally slower than capture duration,
+				// but remains bounded if a renderer disappears.
+				.orTimeout(Math.max(timeoutMillis, recording.maxDurationSeconds() * 5_000L + 60_000L), TimeUnit.MILLISECONDS)
 				.exceptionally(throwable -> {
 					if (PENDING_VIDEO_RECORDINGS.remove(recording.requestId(), recording)) {
 						MinecraftServer callbackServer = recording.server();
@@ -3011,7 +3068,7 @@ public final class RendererBotCameraSystem {
 			if (recording == null || recording != rendererVideo) {
 				continue;
 			}
-			ScheduledServiceTarget target = resolveServiceTarget(server, recording.dimension(), recording.x(), recording.y(), recording.z(), recording.yaw(), recording.pitch(), recording.followEntityUuid());
+			ScheduledServiceTarget target = resolveVideoRecordingTarget(server, recording);
 			if (target == null || target.level() == null) {
 				failVideoRecording(entry.getKey(), recording, "Renderer bot recording target is unavailable");
 				continue;
@@ -3106,7 +3163,27 @@ public final class RendererBotCameraSystem {
 		syncShadowLevelState(bot, desiredState, activeState);
 		boolean allRequiredChunksQueued = syncShadowChunks(bot, desiredState, activeState, consumedDirtyChunks);
 		sendShadowContentReady(bot, activeState, allRequiredChunksQueued);
+		sendDeferredVideoFrameReady(bot, key, allRequiredChunksQueued);
 		syncShadowEntities(bot, desiredState, activeState);
+	}
+
+	private static void sendDeferredVideoFrameReady(ServerPlayer bot, ShadowSyncKey key, boolean allRequiredChunksQueued) {
+		if (bot == null || key == null || !allRequiredChunksQueued
+				|| !ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotVideoRecordingFrameReadyS2CPayload.TYPE)) {
+			return;
+		}
+		for (PendingVideoRecording recording : PENDING_VIDEO_RECORDINGS.values()) {
+			if (recording == null
+					|| !recording.clientStartSent()
+					|| !bot.getUUID().equals(recording.botUuid())
+					|| !key.sessionId().equals(recording.renderSessionId())
+					|| !recording.markReplayFrameReadySent()) {
+				continue;
+			}
+			ServerPlayNetworking.send(bot, new RendererBotPayloads.RendererBotVideoRecordingFrameReadyS2CPayload(
+					recording.requestId(), recording.replayFrameIndex()
+			));
+		}
 	}
 
 	private static void syncShadowLevelInit(ServerPlayer bot, ShadowDesiredState desiredState, ShadowDimensionSyncState activeState) {
@@ -3902,6 +3979,22 @@ public final class RendererBotCameraSystem {
 			return null;
 		}
 		return new ScheduledServiceTarget(level, x, y, z, yaw, pitch, null);
+	}
+
+	private static ScheduledServiceTarget resolveVideoRecordingTarget(MinecraftServer server, PendingVideoRecording recording) {
+		if (recording == null) {
+			return null;
+		}
+		if (!recording.clientStartSent()) {
+			return resolveServiceTarget(
+					server, recording.dimension(), recording.x(), recording.y(), recording.z(),
+					recording.yaw(), recording.pitch(), recording.followEntityUuid()
+			);
+		}
+		RendererBotPayloads.VideoCameraFrame frame = recording.replayFrame();
+		return frame == null ? null : resolveServiceTarget(
+				server, recording.dimension(), frame.x(), frame.y(), frame.z(), frame.yaw(), frame.pitch(), null
+		);
 	}
 
 	private static Entity resolveFollowEntity(MinecraftServer server, ResourceKey<Level> dimension, UUID followEntityUuid) {
@@ -5013,11 +5106,16 @@ public final class RendererBotCameraSystem {
 		private final int fullHeight;
 		private final int maxDurationSeconds;
 		private final CompletableFuture<VideoRecordingResult> completionFuture;
+		private final List<RendererBotPayloads.VideoCameraFrame> cameraFrames = new ArrayList<>();
 		private final long queuedAtMillis;
 		private volatile long lastDispatchAtMillis;
 		private volatile boolean stopRequested;
+		private volatile boolean deferredRenderRequested;
 		private volatile boolean clientStartSent;
 		private volatile boolean timeoutArmed;
+		private long lastPoseSampleAtMillis;
+		private int replayFrameIndex;
+		private int replayFrameReadySent = -1;
 
 		private PendingVideoRecording(
 				UUID requestId,
@@ -5058,10 +5156,14 @@ public final class RendererBotCameraSystem {
 			this.maxDurationSeconds = maxDurationSeconds;
 			this.completionFuture = completionFuture;
 			this.queuedAtMillis = System.currentTimeMillis();
+			this.cameraFrames.add(new RendererBotPayloads.VideoCameraFrame(x, y, z, yaw, pitch));
 			this.lastDispatchAtMillis = 0L;
 			this.stopRequested = false;
+			this.deferredRenderRequested = false;
 			this.clientStartSent = false;
 			this.timeoutArmed = false;
+			this.lastPoseSampleAtMillis = this.queuedAtMillis;
+			this.replayFrameIndex = 0;
 		}
 
 		private UUID requestId() {
@@ -5138,6 +5240,71 @@ public final class RendererBotCameraSystem {
 
 		private boolean stopRequested() {
 			return this.stopRequested;
+		}
+
+		private boolean deferredRenderRequested() {
+			return this.deferredRenderRequested;
+		}
+
+		private synchronized List<RendererBotPayloads.VideoCameraFrame> cameraFrames() {
+			return List.copyOf(this.cameraFrames);
+		}
+
+		private synchronized RecordedVideoFrame recordCameraPose(ServerPlayer operator, boolean force) {
+			if (operator == null || this.deferredRenderRequested || operator.level().dimension() != this.dimension) {
+				return null;
+			}
+			long now = System.currentTimeMillis();
+			long interval = Math.max(1L, 1_000L / Math.max(1, this.targetFps));
+			if ((!force && now - this.lastPoseSampleAtMillis < interval) || this.cameraFrames.size() >= this.targetFps * this.maxDurationSeconds) {
+				return null;
+			}
+			RendererBotPayloads.VideoCameraFrame frame = new RendererBotPayloads.VideoCameraFrame(
+					operator.getX(), operator.getY(), operator.getZ(), operator.getYRot(), operator.getXRot()
+			);
+			int index = this.cameraFrames.size();
+			this.cameraFrames.add(frame);
+			this.lastPoseSampleAtMillis = now;
+			return new RecordedVideoFrame(index, frame);
+		}
+
+		private synchronized void beginDeferredRender() {
+			if (this.deferredRenderRequested) {
+				return;
+			}
+			if (this.cameraFrames.size() == 1) {
+				this.cameraFrames.add(this.cameraFrames.getFirst());
+			}
+			this.deferredRenderRequested = true;
+			this.replayFrameIndex = 0;
+			this.replayFrameReadySent = -1;
+		}
+
+		private synchronized RendererBotPayloads.VideoCameraFrame replayFrame() {
+			if (this.cameraFrames.isEmpty() || this.replayFrameIndex < 0 || this.replayFrameIndex >= this.cameraFrames.size()) {
+				return null;
+			}
+			return this.cameraFrames.get(this.replayFrameIndex);
+		}
+
+		private synchronized int replayFrameIndex() {
+			return this.replayFrameIndex;
+		}
+
+		private synchronized void advanceReplayFrame(int frameIndex) {
+			if (frameIndex < this.replayFrameIndex) {
+				return;
+			}
+			this.replayFrameIndex = frameIndex;
+			this.replayFrameReadySent = -1;
+		}
+
+		private synchronized boolean markReplayFrameReadySent() {
+			if (this.replayFrameReadySent == this.replayFrameIndex) {
+				return false;
+			}
+			this.replayFrameReadySent = this.replayFrameIndex;
+			return true;
 		}
 
 		private long queuedAtMillis() {
@@ -5512,6 +5679,9 @@ public final class RendererBotCameraSystem {
 			float pitch,
 			Entity followTarget
 	) {
+	}
+
+	private record RecordedVideoFrame(int index, RendererBotPayloads.VideoCameraFrame frame) {
 	}
 
 	public record VideoRecordingResult(

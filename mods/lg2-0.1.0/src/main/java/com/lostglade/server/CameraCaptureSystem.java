@@ -127,6 +127,10 @@ public final class CameraCaptureSystem {
 			}
 			return CameraVideoRecordingSystem.toggleRecording(player, settings);
 		}
+		if (CameraVideoRecordingSystem.isRecording(player.getUUID())) {
+			player.displayClientMessage(cameraBusyMessage(player), true);
+			return false;
+		}
 		if (MapImageRenderSystem.hasActiveRender(player.getUUID())) {
 			player.displayClientMessage(cameraBusyMessage(player), true);
 			return false;

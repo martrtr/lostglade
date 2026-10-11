@@ -137,6 +137,30 @@ public final class CameraAnimatedMapPlaybackSystem {
 		return item;
 	}
 
+	/** Fills the maps allocated for an already-issued video print once its renderer finishes. */
+	public static boolean applyCompletedVideoMaps(ServerPlayer player, PhotoPrintData data, byte[] previewPixels, byte[] fullPixels) {
+		if (player == null || player.level() == null || data == null || !data.isVideo()) {
+			return false;
+		}
+		ServerLevel mapLevel = photoMapLevel(player.level().getServer(), (ServerLevel) player.level());
+		MapItemSavedData previewMap = mapLevel.getMapData(new MapId(data.previewMapId()));
+		MapItemSavedData[] fullMaps = new MapItemSavedData[data.mapIds().length];
+		for (int index = 0; index < data.mapIds().length; index++) {
+			fullMaps[index] = mapLevel.getMapData(new MapId(data.mapIds()[index]));
+			if (fullMaps[index] == null) {
+				return false;
+			}
+		}
+		if (previewPixels != null && previewPixels.length >= MAP_SIZE * MAP_SIZE) {
+			applyFrameToMap(previewMap, previewPixels);
+			sendPreviewToPlayer(player, new MapId(data.previewMapId()), previewMap);
+		}
+		if (fullPixels != null && fullPixels.length >= data.mapsWide() * data.mapsHigh() * MAP_SIZE * MAP_SIZE) {
+			applyWholeFrame(fullMaps, data.mapsWide(), data.mapsHigh(), fullPixels);
+		}
+		return true;
+	}
+
 	public static void registerPlacedVideo(ServerLevel level, PhotoPrintData.PlacedPhotoFrameData frameData) {
 		if (level == null || frameData == null) {
 			return;
@@ -361,6 +385,12 @@ public final class CameraAnimatedMapPlaybackSystem {
 
 	private static VideoPlaybackSession ensureSession(PlaybackKey key) {
 		if (key == null || key.sourceKey().isBlank()) {
+			return null;
+		}
+		// A hand-camera video print is issued before its renderer has written the
+		// final MP4. It is valid to hold or frame that print while it is still at
+		// 0–99%; simply leave its static preview alone until the source appears.
+		if (!Files.isRegularFile(CameraMediaCache.videoSourcePath(key.sourceKey()))) {
 			return null;
 		}
 		VideoPlaybackSession existing = PLAYBACKS.get(key);

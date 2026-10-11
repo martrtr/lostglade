@@ -4,6 +4,7 @@ import com.lostglade.Lg2;
 import com.lostglade.block.ModBlocks;
 import com.lostglade.item.CameraPhotoSettings;
 import com.lostglade.item.ModItems;
+import com.lostglade.item.PhotoPrintData;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.network.chat.Component;
@@ -62,6 +63,10 @@ public final class CameraVideoRecordingSystem {
 		}
 		ActiveRecording current = RECORDINGS_BY_PLAYER.get(player.getUUID());
 		if (current != null) {
+			if (current.stopRequested()) {
+				Lg2Messages.actionBar(player, "message.lg2.camera.video.stopping");
+				return true;
+			}
 			long elapsedMs = System.currentTimeMillis() - current.startedAtMs();
 			if (elapsedMs < MIN_STOP_DELAY_MS) {
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.starting");
@@ -93,16 +98,36 @@ public final class CameraVideoRecordingSystem {
 				settings.mapsHigh(),
 				System.currentTimeMillis()
 		);
+		ItemStack pendingVideo = CameraAnimatedMapPlaybackSystem.createVideoItem(
+				player,
+				CameraCaptureSystem.createQueuedPhotoName(0),
+				settings.mapsWide(),
+				settings.mapsHigh(),
+				handle.requestId().toString(),
+				0L,
+				TARGET_FPS,
+				null,
+				null
+		);
+		if (!pendingVideo.isEmpty()) {
+			state.setIssuedVideoData(PhotoPrintData.readPhotoItem(pendingVideo));
+			giveOrDrop(player, pendingVideo);
+			ServerMechanicsGateSystem.syncPlayerInventory(player);
+		}
 		RECORDINGS_BY_PLAYER.put(player.getUUID(), state);
+		state.markStartedFeedbackSent();
+		state.startAudioCapture(player);
+		RendererBotCameraSystem.recordVideoCameraPose(handle.requestId(), player);
 		handle.completionFuture().whenComplete((result, throwable) -> {
 			MinecraftServer server = player.level().getServer();
 			if (server != null) {
 				server.execute(() -> finishRecording(server, state, result, throwable));
 			}
 		});
-		// The renderer still has to warm its shadow world. The definitive "started"
-		// feedback is sent only after the first real frame reaches the encoder.
-		Lg2Messages.actionBar(player, "message.lg2.camera.video.starting");
+		// The volunteer renderer receives and renders the path immediately. It is
+		// never the operator's client, so this does not consume operator FPS.
+		Lg2Messages.actionBar(player, "message.lg2.camera.video.started");
+		CameraCaptureSystem.notifyShutterCaptured(player);
 		return true;
 	}
 
@@ -148,16 +173,24 @@ public final class CameraVideoRecordingSystem {
 			return;
 		}
 		for (ActiveRecording recording : RECORDINGS_BY_PLAYER.values()) {
-			if (recording == null || recording.stopRequested()) {
+			if (recording == null) {
 				continue;
 			}
 			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
+			if (recording.stopRequested()) {
+				if (player != null) {
+					applyRenderingCooldown(player, recording);
+				}
+				continue;
+			}
 			if (player == null
 					|| !player.isAlive()
 					|| DroneSystem.isCameraBlockedByDroneControl(player)
 					|| !isHoldingCameraInAnyHand(player)) {
 				requestStop(server, recording, player != null);
+				continue;
 			}
+			RendererBotCameraSystem.recordVideoCameraPose(recording.requestId(), player);
 		}
 	}
 
@@ -166,11 +199,66 @@ public final class CameraVideoRecordingSystem {
 			return;
 		}
 		recording.markStopRequested();
+		ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
+		if (player != null) {
+			RendererBotCameraSystem.finishVideoCameraPath(recording.requestId(), player);
+			recording.beginRenderEstimate(RendererBotCameraSystem.videoFrameCount(recording.requestId()));
+			updateIssuedVideoTitle(player, recording, 0);
+			applyRenderingCooldown(player, recording);
+		}
 		RendererBotCameraSystem.stopVideoRecording(server, recording.requestId());
 		if (notifyPlayer) {
-			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
 			if (player != null) {
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.stopping");
+			}
+		}
+	}
+
+	private static void applyRenderingCooldown(ServerPlayer player, ActiveRecording recording) {
+		if (player == null) {
+			return;
+		}
+		ItemStack cameraStack = player.getMainHandItem().is(ModItems.CAMERA)
+				? player.getMainHandItem()
+				: player.getOffhandItem();
+		if (cameraStack.is(ModItems.CAMERA)) {
+			player.getCooldowns().addCooldown(cameraStack, recording == null ? 20 : recording.estimatedCooldownTicks());
+		}
+	}
+
+	/** Called by the renderer after each encoded pose; the issued print keeps a real progress title. */
+	public static void notifyRenderingProgress(MinecraftServer server, UUID requestId, int completedFrames) {
+		if (server == null || requestId == null) {
+			return;
+		}
+		for (ActiveRecording recording : RECORDINGS_BY_PLAYER.values()) {
+			if (recording == null || !requestId.equals(recording.requestId()) || !recording.stopRequested()) {
+				continue;
+			}
+			int progress = recording.recordRenderedFrames(completedFrames);
+			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
+			if (player != null && progress >= 0) {
+				updateIssuedVideoTitle(player, recording, progress);
+				applyRenderingCooldown(player, recording);
+			}
+			return;
+		}
+	}
+
+	private static void updateIssuedVideoTitle(ServerPlayer player, ActiveRecording recording, int progressPercent) {
+		if (player == null || recording == null) {
+			return;
+		}
+		int progress = Math.clamp(progressPercent, 0, 100);
+		Component title = progress >= 100
+				? CameraCaptureSystem.createCompletedPhotoName(player.level().getServer())
+				: CameraCaptureSystem.createQueuedPhotoName(progress);
+		String sourceKey = recording.requestId().toString();
+		for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+			ItemStack stack = player.getInventory().getItem(slot);
+			PhotoPrintData data = PhotoPrintData.readPhotoItem(stack);
+			if (data != null && data.isVideo() && sourceKey.equals(data.sourceKey())) {
+				stack.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, title.copy());
 			}
 		}
 	}
@@ -243,25 +331,31 @@ public final class CameraVideoRecordingSystem {
 			state.deleteAudioCapture();
 		}
 
-		ItemStack videoItem = CameraAnimatedMapPlaybackSystem.createVideoItem(
-				player,
-				CameraCaptureSystem.createCompletedPhotoName(server),
-				state.mapsWide(),
-				state.mapsHigh(),
-				state.requestId().toString(),
-				result.durationMs(),
-				Math.max(1, result.fps()),
-				result.previewPixels(),
-				result.fullPixels()
-		);
-		if (videoItem.isEmpty()) {
-			if (player != null) {
+		PhotoPrintData issuedVideo = state.issuedVideoData();
+		if (issuedVideo != null) {
+			if (!CameraAnimatedMapPlaybackSystem.applyCompletedVideoMaps(player, issuedVideo, result.previewPixels(), result.fullPixels())) {
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.map_failed");
+				return;
 			}
-			return;
+			updateIssuedVideoTitle(player, state, 100);
+		} else {
+			ItemStack videoItem = CameraAnimatedMapPlaybackSystem.createVideoItem(
+					player,
+					CameraCaptureSystem.createCompletedPhotoName(server),
+					state.mapsWide(),
+					state.mapsHigh(),
+					state.requestId().toString(),
+					result.durationMs(),
+					Math.max(1, result.fps()),
+					result.previewPixels(),
+					result.fullPixels()
+			);
+			if (videoItem.isEmpty()) {
+				Lg2Messages.actionBar(player, "message.lg2.camera.video.map_failed");
+				return;
+			}
+			giveOrDrop(player, videoItem);
 		}
-
-		giveOrDrop(player, videoItem);
 		ServerMechanicsGateSystem.syncPlayerInventory(player);
 		Lg2Messages.actionBar(
 				player,
@@ -389,8 +483,13 @@ public final class CameraVideoRecordingSystem {
 		private final int mapsHigh;
 		private final long startedAtMs;
 		private HandCameraAudioTrack audioTrack;
+		private PhotoPrintData issuedVideoData;
 		private volatile boolean stopRequested;
 		private boolean startedFeedbackSent;
+		private int renderFrameTotal;
+		private int renderedFrames;
+		private long renderStartedAtMs;
+		private int lastTitleProgress = -1;
 
 		private ActiveRecording(
 				UUID playerId,
@@ -413,8 +512,12 @@ public final class CameraVideoRecordingSystem {
 			this.mapsHigh = mapsHigh;
 			this.startedAtMs = startedAtMs;
 			this.audioTrack = null;
+			this.issuedVideoData = null;
 			this.stopRequested = false;
 			this.startedFeedbackSent = false;
+			this.renderFrameTotal = 0;
+			this.renderedFrames = 0;
+			this.renderStartedAtMs = 0L;
 		}
 
 		private UUID playerId() {
@@ -459,6 +562,47 @@ public final class CameraVideoRecordingSystem {
 
 		private void markStopRequested() {
 			this.stopRequested = true;
+		}
+
+		private synchronized void setIssuedVideoData(PhotoPrintData data) {
+			this.issuedVideoData = data;
+		}
+
+		private synchronized PhotoPrintData issuedVideoData() {
+			return this.issuedVideoData;
+		}
+
+		private synchronized void beginRenderEstimate(int totalFrames) {
+			this.renderFrameTotal = Math.max(1, totalFrames);
+			this.renderedFrames = 0;
+			this.renderStartedAtMs = System.currentTimeMillis();
+			this.lastTitleProgress = -1;
+		}
+
+		/** @return a changed percent, or -1 when the visible title does not need an update. */
+		private synchronized int recordRenderedFrames(int completedFrames) {
+			if (this.renderFrameTotal <= 0) {
+				return -1;
+			}
+			this.renderedFrames = Math.clamp(completedFrames, 0, this.renderFrameTotal);
+			int progress = (int) Math.floor(this.renderedFrames * 100.0D / this.renderFrameTotal);
+			if (progress == this.lastTitleProgress) {
+				return -1;
+			}
+			this.lastTitleProgress = progress;
+			return progress;
+		}
+
+		private synchronized int estimatedCooldownTicks() {
+			if (this.renderFrameTotal <= 0) {
+				return 20;
+			}
+			int remaining = Math.max(0, this.renderFrameTotal - this.renderedFrames);
+			long perFrameMs = this.renderedFrames > 0 && this.renderStartedAtMs > 0L
+					? Math.max(100L, (System.currentTimeMillis() - this.renderStartedAtMs) / this.renderedFrames)
+					: 2_000L;
+			long estimatedMs = Math.min(30L * 60_000L, remaining * perFrameMs + 10_000L);
+			return Math.max(20, (int) Math.min(Integer.MAX_VALUE, (estimatedMs + 49L) / 50L));
 		}
 
 		private synchronized boolean markStartedFeedbackSent() {

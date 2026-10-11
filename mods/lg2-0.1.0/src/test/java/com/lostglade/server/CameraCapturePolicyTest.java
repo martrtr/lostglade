@@ -15,6 +15,7 @@ public final class CameraCapturePolicyTest {
 		shadowPhotoSessionsFreezeDynamicWorldState();
 		photoWarmupDoesNotMonopolizeLiveStreams();
 		videoBeginsAfterItsFirstRenderedFrame();
+		videoRecordsOperatorPathBeforeDeferredTerrainReplay();
 		discardedPrintCancelsBothServerAndRendererWork();
 		placedCameraUsesLegacyPoseWithoutChangingHandheldPose();
 		System.out.println("Camera capture policy checks passed");
@@ -24,9 +25,24 @@ public final class CameraCapturePolicyTest {
 		Path project = Path.of("").toAbsolutePath();
 		String video = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientVideoRecording.java"));
 		String server = Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraVideoRecordingSystem.java"));
-		require(video.contains("admitted video recording") && video.contains("active.markRecordingStarted(System.currentTimeMillis())"), "a successfully rendered video warm-up frame must admit recording without waiting for terrain to settle");
-		require(!video.contains("REQUIRED_SETTLED_RENDERS") && !video.contains("observeReadinessProbe"), "video warm-up must not inherit still-photo completion gates");
+		require(video.contains("completeDeferredReplayRender") && video.contains("appendCameraFrame") && video.contains("seal()"), "video replay must keep one explicit render path while accepting poses during recording");
+		require(!video.contains("REQUIRED_SETTLED_RENDERS") && !video.contains("observeReadinessProbe"), "deferred video must not inherit obsolete live-recording warm-up gates");
 		require(server.contains("Camera video recording {} failed") && server.contains(".append(Component.literal(\" \" + reason))"), "video failures must retain and show their actual reason");
+	}
+
+	private static void videoRecordsOperatorPathBeforeDeferredTerrainReplay() throws Exception {
+		Path project = Path.of("").toAbsolutePath();
+		String server = Files.readString(project.resolve("src/main/java/com/lostglade/server/RendererBotCameraSystem.java"));
+		String recording = Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraVideoRecordingSystem.java"));
+		String client = Files.readString(project.resolve("src/client/java/com/lostglade/client/RendererBotClientVideoRecording.java"));
+		String payloads = Files.readString(project.resolve("src/main/java/com/lostglade/network/RendererBotPayloads.java"));
+		require(recording.contains("recordVideoCameraPose") && recording.contains("finishVideoCameraPath") && recording.contains("applyRenderingCooldown"), "the operator path must be recorded before rendering and the camera must remain cooling down during replay");
+		require(recording.contains("createQueuedPhotoName(0)") && recording.contains("notifyRenderingProgress") && recording.contains("estimatedCooldownTicks"), "a video print must be issued immediately, report render percent, and keep a progress-aware cooldown");
+		require(Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraAnimatedMapPlaybackSystem.java")).contains("Files.isRegularFile(CameraMediaCache.videoSourcePath(key.sourceKey()))"), "an issued but unfinished video print must not attempt to open a missing MP4");
+		require(server.contains("recording.clientStartSent()") && server.contains("recording.beginDeferredRender()") && server.contains("resolveVideoRecordingTarget"), "the renderer must start while recording and retain one sliding shadow session through its final replay tail");
+		require(server.contains("This seals the streamed pose list") && server.contains("RendererBotVideoRecordingFrameS2CPayload"), "the stop packet must seal a streaming recording instead of cancelling it, and later poses must be appended");
+		require(client.contains("!readiness.settled()") && client.contains("sendReplayProgress") && client.contains("advanceAfterEncodedFrame"), "each deferred video pose must wait for fully compiled visible terrain before requesting the next one");
+		require(payloads.contains("VideoCameraFrame") && payloads.contains("RendererBotVideoRecordingFrameS2CPayload") && payloads.contains("RendererBotVideoRecordingProgressC2SPayload") && payloads.contains("RendererBotVideoRecordingFrameReadyS2CPayload") && payloads.contains("PROTOCOL_VERSION = 31"), "streamed replay poses and readiness acknowledgements must be part of the renderer protocol");
 	}
 
 	private static void photoWarmupDoesNotMonopolizeLiveStreams() throws Exception {
@@ -106,7 +122,7 @@ public final class CameraCapturePolicyTest {
 		require(maps.contains("owner.containerMenu.getCarried()") && maps.contains("owner.inventoryMenu.getCarried()"), "moving a print between inventory slots must retain its active render while it is on the player's cursor");
 		require(provider.contains("RendererBotCameraSystem.cancelCapture(this.captureHandle.requestId())"), "camera provider cancellation must reach the renderer request");
 		require(server.contains("public static void cancelCapture(UUID requestId)") && server.contains("RendererBotCaptureCancelS2CPayload"), "server cancellation must remove its pending frame and notify the renderer");
-		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 29"), "capture cancellation must be part of the negotiated renderer protocol");
+		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 31"), "capture cancellation must be part of the negotiated renderer protocol");
 		require(client.contains("RendererBotCaptureCancelS2CPayload.TYPE") && client.contains("clearPendingCapture(payload.requestId())"), "renderer cancellation must release pending GPU work");
 	}
 
