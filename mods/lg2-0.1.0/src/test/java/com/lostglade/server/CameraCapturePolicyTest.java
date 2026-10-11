@@ -38,11 +38,14 @@ public final class CameraCapturePolicyTest {
 		String payloads = Files.readString(project.resolve("src/main/java/com/lostglade/network/RendererBotPayloads.java"));
 		require(recording.contains("recordVideoCameraPose") && recording.contains("finishVideoCameraPath") && recording.contains("applyRenderingCooldown"), "the operator path must be recorded before rendering and the camera must remain cooling down during replay");
 		require(recording.contains("createQueuedPhotoName(0)") && recording.contains("notifyRenderingProgress") && recording.contains("estimatedCooldownTicks"), "a video print must be issued immediately, report render percent, and keep a progress-aware cooldown");
-		require(Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraAnimatedMapPlaybackSystem.java")).contains("Files.isRegularFile(CameraMediaCache.videoSourcePath(key.sourceKey()))"), "an issued but unfinished video print must not attempt to open a missing MP4");
+		String playback = Files.readString(project.resolve("src/main/java/com/lostglade/server/CameraAnimatedMapPlaybackSystem.java"));
+		require(playback.contains("Files.isRegularFile(CameraMediaCache.videoSourcePath(key.sourceKey()))"), "an issued but unfinished video print must not attempt to open a missing MP4");
+		require(playback.contains("appendPendingVideoPreview") && playback.contains("pendingVideoPreview"), "an issued video must loop renderer-produced preview frames before its MP4 closes");
+		require(Files.readString(project.resolve("src/main/java/com/lostglade/server/map/MapImageRenderSystem.java")).contains("updatePhotoItemsInInventories(server, job.photoData(), progressName)") && recording.contains("clearRenderCooldown"), "photo prints must receive progress titles and all camera render paths must release their cooldowns");
 		require(server.contains("recording.clientStartSent()") && server.contains("recording.beginDeferredRender()") && server.contains("resolveVideoRecordingTarget"), "the renderer must start while recording and retain one sliding shadow session through its final replay tail");
 		require(server.contains("This seals the streamed pose list") && server.contains("RendererBotVideoRecordingFrameS2CPayload"), "the stop packet must seal a streaming recording instead of cancelling it, and later poses must be appended");
 		require(client.contains("!readiness.settled()") && client.contains("sendReplayProgress") && client.contains("advanceAfterEncodedFrame"), "each deferred video pose must wait for fully compiled visible terrain before requesting the next one");
-		require(payloads.contains("VideoCameraFrame") && payloads.contains("RendererBotVideoRecordingFrameS2CPayload") && payloads.contains("RendererBotVideoRecordingProgressC2SPayload") && payloads.contains("RendererBotVideoRecordingFrameReadyS2CPayload") && payloads.contains("PROTOCOL_VERSION = 31"), "streamed replay poses and readiness acknowledgements must be part of the renderer protocol");
+		require(payloads.contains("VideoCameraFrame") && payloads.contains("RendererBotVideoRecordingFrameS2CPayload") && payloads.contains("RendererBotVideoRecordingPreviewFrameC2SPayload") && payloads.contains("RendererBotVideoRecordingProgressC2SPayload") && payloads.contains("RendererBotVideoRecordingFrameReadyS2CPayload") && payloads.contains("PROTOCOL_VERSION = 33"), "streamed replay poses, preview frames, and readiness acknowledgements must be part of the renderer protocol");
 	}
 
 	private static void photoWarmupDoesNotMonopolizeLiveStreams() throws Exception {
@@ -83,6 +86,7 @@ public final class CameraCapturePolicyTest {
 		require(maps.contains("sendCompletedPhotoMaps(server, job.photoData());"), "progressive photo tiles must be sent to both inventory and framed viewers");
 		require(client.contains("dispatchProgressPreview(client, capture, renderTarget)") && client.contains("now - this.lastProgressPreviewAtMillis < 250L"), "renderer must stream bounded intermediate preview frames while terrain compiles");
 		require(server.contains("capture.offerPreview(payload.pixels())") && server.contains("public byte[] pollPreview()"), "server must retain the newest intermediate frame without completing the final photo early");
+		require(client.contains("RendererBotPhotoRenderProgressC2SPayload") && client.contains("estimateTerrainProgress(readiness)") && client.contains("readyForFinalCapture ? 99") && client.contains("Math.min(94, progress)") && maps.contains("notifyPhotoRenderProgress") && maps.contains("rendererProgressPercent"), "a whole-frame photo must report visible-terrain loading rather than claiming completion before its stable final capture");
 		require(server.contains("applyInitialPreviewTimeout") && !server.contains("capture.fullFuture()\n\t\t\t\t.orTimeout"), "server must time out only an unresponsive renderer, never a compiling full photo");
 	}
 
@@ -122,7 +126,7 @@ public final class CameraCapturePolicyTest {
 		require(maps.contains("owner.containerMenu.getCarried()") && maps.contains("owner.inventoryMenu.getCarried()"), "moving a print between inventory slots must retain its active render while it is on the player's cursor");
 		require(provider.contains("RendererBotCameraSystem.cancelCapture(this.captureHandle.requestId())"), "camera provider cancellation must reach the renderer request");
 		require(server.contains("public static void cancelCapture(UUID requestId)") && server.contains("RendererBotCaptureCancelS2CPayload"), "server cancellation must remove its pending frame and notify the renderer");
-		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 31"), "capture cancellation must be part of the negotiated renderer protocol");
+		require(payloads.contains("RendererBotCaptureCancelS2CPayload") && payloads.contains("PROTOCOL_VERSION = 33"), "capture cancellation must be part of the negotiated renderer protocol");
 		require(client.contains("RendererBotCaptureCancelS2CPayload.TYPE") && client.contains("clearPendingCapture(payload.requestId())"), "renderer cancellation must release pending GPU work");
 	}
 

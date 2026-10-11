@@ -309,6 +309,7 @@ public final class RendererBotClientVideoRecording {
 			int height = image.getHeight();
 			int[] pixels = image.makePixelArray();
 			byte[] rgb = argbToRgb(pixels);
+			byte[] livePreview = quantizeScaledFrame(pixels, width, height, 128, 128);
 			synchronized (LOCK) {
 				for (PendingRecording current : recordings) {
 					PendingRecording active = RECORDINGS.get(current.payload().requestId());
@@ -326,6 +327,7 @@ public final class RendererBotClientVideoRecording {
 				}
 			}
 			notifyRecordingStarts(client, recordingsStartedNow);
+			sendLiveVideoPreviews(client, recordings, livePreview);
 		} catch (Exception exception) {
 			client.execute(() -> {
 				for (PendingRecording current : recordings) {
@@ -368,6 +370,9 @@ public final class RendererBotClientVideoRecording {
 		try {
 			int[] pixels = image.makePixelArray();
 			byte[] rgb = argbToRgb(pixels);
+			byte[] livePreview = previewFrame != null && previewFrame.length >= 128 * 128
+					? previewFrame
+					: quantizeScaledFrame(pixels, image.getWidth(), image.getHeight(), 128, 128);
 			synchronized (LOCK) {
 				for (PendingRecording current : recordings) {
 					PendingRecording active = RECORDINGS.get(current.payload().requestId());
@@ -389,6 +394,7 @@ public final class RendererBotClientVideoRecording {
 				}
 			}
 			notifyRecordingStarts(client, recordingsStartedNow);
+			sendLiveVideoPreviews(client, recordings, livePreview);
 		} catch (Exception exception) {
 			client.execute(() -> {
 				for (PendingRecording current : recordings) {
@@ -480,6 +486,24 @@ public final class RendererBotClientVideoRecording {
 			return;
 		}
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingProgressC2SPayload(requestId, frameIndex));
+	}
+
+	private static void sendLiveVideoPreviews(Minecraft client, List<PendingRecording> recordings, byte[] preview) {
+		if (client == null || recordings == null || preview == null || preview.length != 128 * 128) {
+			return;
+		}
+		client.execute(() -> {
+			if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingPreviewFrameC2SPayload.TYPE)) {
+				return;
+			}
+			for (PendingRecording recording : recordings) {
+				if (recording != null && isActiveRecording(recording.payload().requestId())) {
+					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingPreviewFrameC2SPayload(
+							recording.payload().requestId(), preview
+					));
+				}
+			}
+		});
 	}
 
 	private static CompletableFuture<NativeImage> takeScreenshotFuture(RenderTarget renderTarget) {

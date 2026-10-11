@@ -70,6 +70,7 @@ public final class CameraAnimatedMapPlaybackSystem {
 	private static final Map<PlayerMapKey, Long> LAST_SENT_SEQUENCE_BY_PLAYER_MAP = new ConcurrentHashMap<>();
 	private static final Map<PlacedViewerKey, Boolean> PRIMED_PLACED_GROUPS_BY_VIEWER = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> RECENT_VIEWER_REPRIME_DEADLINES = new ConcurrentHashMap<>();
+	private static final Map<String, PendingVideoPreview> PENDING_VIDEO_PREVIEWS = new ConcurrentHashMap<>();
 	private static volatile long lastDiscoveryTick = Long.MIN_VALUE;
 	private static volatile MinecraftServer persistenceServer;
 
@@ -161,6 +162,20 @@ public final class CameraAnimatedMapPlaybackSystem {
 		return true;
 	}
 
+	/** Holds a short rolling preview until the renderer closes the MP4 source. */
+	public static void appendPendingVideoPreview(String sourceKey, byte[] previewPixels) {
+		if (sourceKey == null || sourceKey.isBlank() || previewPixels == null || previewPixels.length != MAP_SIZE * MAP_SIZE) {
+			return;
+		}
+		PENDING_VIDEO_PREVIEWS.computeIfAbsent(sourceKey, ignored -> new PendingVideoPreview()).append(previewPixels);
+	}
+
+	public static void discardPendingVideoPreview(String sourceKey) {
+		if (sourceKey != null) {
+			PENDING_VIDEO_PREVIEWS.remove(sourceKey);
+		}
+	}
+
 	public static void registerPlacedVideo(ServerLevel level, PhotoPrintData.PlacedPhotoFrameData frameData) {
 		if (level == null || frameData == null) {
 			return;
@@ -216,6 +231,19 @@ public final class CameraAnimatedMapPlaybackSystem {
 			return;
 		}
 		PlaybackKey key = new PlaybackKey(data.sourceKey(), data.mapsWide(), data.mapsHigh(), Math.max(1, data.fps()));
+		if (!Files.isRegularFile(CameraMediaCache.videoSourcePath(data.sourceKey()))) {
+			byte[] preview = pendingVideoPreview(data.sourceKey(), gameTime, data.fps());
+			if (preview != null) {
+				PlayerMapKey playerMapKey = new PlayerMapKey(player.getUUID(), data.previewMapId());
+				long sequence = pendingVideoPreviewSequence(data.sourceKey(), gameTime, data.fps());
+				Long lastSequence = LAST_SENT_SEQUENCE_BY_PLAYER_MAP.get(playerMapKey);
+				if (lastSequence == null || lastSequence != sequence) {
+					sendMapPatch(player, new MapId(data.previewMapId()), (byte) 0, true, 0, 0, MAP_SIZE, MAP_SIZE, preview);
+					LAST_SENT_SEQUENCE_BY_PLAYER_MAP.put(playerMapKey, sequence);
+				}
+			}
+			return;
+		}
 		VideoPlaybackSession session = ensureSession(key);
 		if (session == null) {
 			return;
@@ -416,6 +444,16 @@ public final class CameraAnimatedMapPlaybackSystem {
 		}
 	}
 
+	private static byte[] pendingVideoPreview(String sourceKey, long gameTime, int fps) {
+		PendingVideoPreview pending = sourceKey == null ? null : PENDING_VIDEO_PREVIEWS.get(sourceKey);
+		return pending == null ? null : pending.frameAt(gameTime, fps);
+	}
+
+	private static long pendingVideoPreviewSequence(String sourceKey, long gameTime, int fps) {
+		PendingVideoPreview pending = sourceKey == null ? null : PENDING_VIDEO_PREVIEWS.get(sourceKey);
+		return pending == null ? -1L : pending.sequenceAt(gameTime, fps);
+	}
+
 	private static void shutdownAll() {
 		for (VideoPlaybackSession session : PLAYBACKS.values()) {
 			session.close();
@@ -425,6 +463,7 @@ public final class CameraAnimatedMapPlaybackSystem {
 		LAST_SENT_SEQUENCE_BY_PLAYER_MAP.clear();
 		PRIMED_PLACED_GROUPS_BY_VIEWER.clear();
 		RECENT_VIEWER_REPRIME_DEADLINES.clear();
+		PENDING_VIDEO_PREVIEWS.clear();
 	}
 
 	private static PhotoMapSet createPhotoMapSet(ServerLevel mapLevel, Component itemName, int mapsWide, int mapsHigh) {
@@ -1067,6 +1106,34 @@ public final class CameraAnimatedMapPlaybackSystem {
 	}
 
 	private record PlaybackKey(String sourceKey, int mapsWide, int mapsHigh, int fps) {
+	}
+
+	private static final class PendingVideoPreview {
+		private static final int MAX_FRAMES = 120;
+		private final ArrayDeque<byte[]> frames = new ArrayDeque<>();
+
+		private synchronized void append(byte[] pixels) {
+			this.frames.addLast(Arrays.copyOf(pixels, pixels.length));
+			while (this.frames.size() > MAX_FRAMES) {
+				this.frames.removeFirst();
+			}
+		}
+
+		private synchronized byte[] frameAt(long gameTime, int fps) {
+			if (this.frames.isEmpty()) {
+				return null;
+			}
+			int index = (int) Math.floorMod(gameTime * Math.max(1, fps) / 20L, this.frames.size());
+			return this.frames.stream().skip(index).findFirst().orElse(this.frames.getFirst());
+		}
+
+		private synchronized long sequenceAt(long gameTime, int fps) {
+			if (this.frames.isEmpty()) {
+				return -1L;
+			}
+			long index = Math.floorMod(gameTime * Math.max(1, fps) / 20L, this.frames.size());
+			return ((long) this.frames.size() << 32) | index;
+		}
 	}
 
 	private record PlayerMapKey(UUID playerId, int mapId) {

@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RendererBotPayloads {
 	// Map-tile transport was removed from the renderer-bot protocol. Older clients
 	// must not accept this stream.
-	public static final int PROTOCOL_VERSION = 31;
+	public static final int PROTOCOL_VERSION = 33;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_VIDEO_CAMERA_FRAMES = 12_000;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
@@ -64,11 +64,13 @@ public final class RendererBotPayloads {
 
 		PayloadTypeRegistry.playC2S().register(RendererBotHelloC2SPayload.TYPE, RendererBotHelloC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotPreviewFrameC2SPayload.TYPE, RendererBotPreviewFrameC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().register(RendererBotPhotoRenderProgressC2SPayload.TYPE, RendererBotPhotoRenderProgressC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotFullFrameC2SPayload.TYPE, RendererBotFullFrameC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotLiveFrameC2SPayload.TYPE, RendererBotLiveFrameC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotItemIconC2SPayload.TYPE, RendererBotItemIconC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingStartedC2SPayload.TYPE, RendererBotVideoRecordingStartedC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingProgressC2SPayload.TYPE, RendererBotVideoRecordingProgressC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingPreviewFrameC2SPayload.TYPE, RendererBotVideoRecordingPreviewFrameC2SPayload.STREAM_CODEC, 32 * 1024);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingCompleteC2SPayload.TYPE, RendererBotVideoRecordingCompleteC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoFileChunkC2SPayload.TYPE, RendererBotVideoFileChunkC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotAudioFrameC2SPayload.TYPE, RendererBotAudioFrameC2SPayload.STREAM_CODEC);
@@ -262,6 +264,31 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotPreviewFrameC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * Progress of the shadow-world warm-up for one still photograph.  The final
+	 * pixels are deliberately sent only once, so this tiny payload keeps the
+	 * issued photo item's percentage live while terrain is compiling.
+	 */
+	public record RendererBotPhotoRenderProgressC2SPayload(UUID requestId, int progressPercent) implements CustomPacketPayload {
+		public static final Type<RendererBotPhotoRenderProgressC2SPayload> TYPE = new Type<>(id("renderer_bot_photo_render_progress"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotPhotoRenderProgressC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotPhotoRenderProgressC2SPayload::write, RendererBotPhotoRenderProgressC2SPayload::new);
+
+		public RendererBotPhotoRenderProgressC2SPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readVarInt());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeVarInt(this.progressPercent);
+		}
+
+		@Override
+		public Type<RendererBotPhotoRenderProgressC2SPayload> type() {
 			return TYPE;
 		}
 	}
@@ -877,6 +904,27 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotVideoRecordingProgressC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** A compact palette preview for an issued video print while its MP4 is still open. */
+	public record RendererBotVideoRecordingPreviewFrameC2SPayload(UUID requestId, byte[] pixels) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingPreviewFrameC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_preview_frame"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingPreviewFrameC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingPreviewFrameC2SPayload::write, RendererBotVideoRecordingPreviewFrameC2SPayload::new);
+
+		public RendererBotVideoRecordingPreviewFrameC2SPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readByteArray(128 * 128));
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeByteArray(this.pixels == null ? new byte[0] : this.pixels);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingPreviewFrameC2SPayload> type() {
 			return TYPE;
 		}
 	}

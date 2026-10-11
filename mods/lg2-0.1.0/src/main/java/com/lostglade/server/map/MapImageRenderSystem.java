@@ -65,6 +65,7 @@ public final class MapImageRenderSystem {
 	private static final long PHOTO_PREVIEW_REPRIME_INTERVAL_TICKS = 5L;
 	private static final Map<UUID, RenderJob> PLAYER_JOBS = new HashMap<>();
 	private static final Map<UUID, Long> PENDING_PREVIEW_REPRIME_DEADLINES = new HashMap<>();
+	private static final Set<UUID> PENDING_CAMERA_COOLDOWN_CLEARS = new HashSet<>();
 	private static final Queue<UUID> QUEUE = new ArrayDeque<>();
 	private static UUID activePlayerId;
 	private static ExecutorService executor;
@@ -103,6 +104,19 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		removeJob(playerId);
+	}
+
+	/** Receives shadow-render warm-up progress before the one-shot full frame arrives. */
+	public static void notifyPhotoRenderProgress(UUID requestId, int progressPercent) {
+		if (requestId == null) {
+			return;
+		}
+		String sourceKey = requestId.toString();
+		for (RenderJob job : PLAYER_JOBS.values()) {
+			if (job != null && sourceKey.equals(job.provider().sourceKey())) {
+				job.recordRendererProgress(progressPercent);
+			}
+		}
 	}
 
 	public static boolean startRender(ServerPlayer player, Component itemName, MapPixelProvider provider) {
@@ -160,12 +174,14 @@ public final class MapImageRenderSystem {
 
 	private static void tick(MinecraftServer server) {
 		ensureExecutor();
+		flushPendingCameraCooldownClears(server);
 		tickQueuedPhotoPreviewReprimes(server);
 		if (PLAYER_JOBS.isEmpty()) {
 			activePlayerId = null;
 			return;
 		}
 		normalizeQueue();
+		refreshPhotoCameraCooldowns(server);
 		if (activePlayerId == null) {
 			return;
 		}
@@ -289,6 +305,9 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		applyProgressPreview(server, player, job);
+		// A whole-frame photo only receives its pixels at the very end.  Its live
+		// percentage instead comes from the renderer's terrain warm-up signal.
+		updatePhotoProgress(server, job);
 
 		FrameResult frameResult = job.frameResult();
 		if (frameResult == null) {
@@ -467,7 +486,10 @@ public final class MapImageRenderSystem {
 		if (progress <= job.lastDisplayedProgress() || progress >= 100) {
 			return;
 		}
-		player.displayClientMessage(CameraCaptureSystem.createQueuedPhotoName(progress), true);
+		Component progressName = CameraCaptureSystem.createQueuedPhotoName(progress);
+		player.displayClientMessage(progressName, true);
+		updatePhotoItemsInInventories(server, job.photoData(), progressName);
+		updatePlacedPhotoFrameNames(server, job.photoData(), progressName);
 		job.setLastDisplayedProgress(progress);
 	}
 
@@ -910,6 +932,7 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		PLAYER_JOBS.remove(playerId);
+		PENDING_CAMERA_COOLDOWN_CLEARS.add(playerId);
 		if (playerId.equals(activePlayerId)) {
 			activePlayerId = null;
 		}
@@ -918,6 +941,34 @@ public final class MapImageRenderSystem {
 			if (playerId.equals(iterator.next())) {
 				iterator.remove();
 				break;
+			}
+		}
+	}
+
+	private static void flushPendingCameraCooldownClears(MinecraftServer server) {
+		if (server == null || PENDING_CAMERA_COOLDOWN_CLEARS.isEmpty()) {
+			return;
+		}
+		for (UUID playerId : new HashSet<>(PENDING_CAMERA_COOLDOWN_CLEARS)) {
+			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+			if (player != null) {
+				CameraCaptureSystem.clearRenderCooldown(player);
+			}
+			PENDING_CAMERA_COOLDOWN_CLEARS.remove(playerId);
+		}
+	}
+
+	private static void refreshPhotoCameraCooldowns(MinecraftServer server) {
+		if (server == null) {
+			return;
+		}
+		for (RenderJob job : PLAYER_JOBS.values()) {
+			if (job == null) {
+				continue;
+			}
+			ServerPlayer player = server.getPlayerList().getPlayer(job.playerId());
+			if (player != null) {
+				CameraCaptureSystem.updateRenderCooldown(player, job.estimatedRemainingCooldownTicks());
 			}
 		}
 	}
@@ -1008,10 +1059,12 @@ public final class MapImageRenderSystem {
 		private boolean previewTaskDispatched;
 		private boolean previewRendered;
 		private boolean startedRendering;
+		private long startedRenderingAtMillis;
 		private volatile FrameResult frameResult;
 		private volatile FrameResult previewResult;
 		private byte[] lastAppliedProgressPreview;
 		private int frameApplyIndex;
+		private volatile int rendererProgressPercent;
 		private int lastDisplayedProgress = -1;
 
 		private RenderJob(UUID playerId, MapId[] mapIds, MapItemSavedData[] mapDataSet, int mapsWide, int mapsHigh, int previewMapId, MapItemSavedData previewMapData, MapPixelProvider provider) {
@@ -1158,6 +1211,28 @@ public final class MapImageRenderSystem {
 
 		private void markStartedRendering() {
 			this.startedRendering = true;
+			this.startedRenderingAtMillis = System.currentTimeMillis();
+		}
+
+		private int estimatedRemainingCooldownTicks() {
+			if (!this.startedRendering) {
+				// Queue order is not a reliable duration predictor; keep a small rolling
+				// lock until this job becomes active rather than leaving a stale long one.
+				return 40;
+			}
+			int completed = this.provider.prefersWholeFrameRendering() ? this.frameApplyIndex : this.nextPixel;
+			int total = Math.max(1, this.totalPixels());
+			if (this.provider.prefersWholeFrameRendering() && completed <= 0) {
+				// Terrain capture exposes no trustworthy intermediate pixel count while
+				// the volunteer renderer is preparing its one full frame.
+				return 600;
+			}
+			int remaining = Math.max(0, total - completed);
+			long perUnitMillis = completed > 0 && this.startedRenderingAtMillis > 0L
+					? Math.max(1L, (System.currentTimeMillis() - this.startedRenderingAtMillis) / completed)
+					: 30_000L;
+			long remainingMillis = Math.min(30L * 60_000L, remaining * perUnitMillis + 2_000L);
+			return Math.max(1, (int) Math.min(Integer.MAX_VALUE, (remainingMillis + 49L) / 50L));
 		}
 
 		private void pushFrameResult(FrameResult frameResult) {
@@ -1195,6 +1270,11 @@ public final class MapImageRenderSystem {
 			this.frameApplyIndex = this.totalPixels();
 		}
 
+		private void recordRendererProgress(int progressPercent) {
+			int safeProgress = Math.max(0, Math.min(99, progressPercent));
+			this.rendererProgressPercent = Math.max(this.rendererProgressPercent, safeProgress);
+		}
+
 		private void pushResult(PixelResult result) {
 			this.completedResults.offer(result);
 		}
@@ -1212,7 +1292,8 @@ public final class MapImageRenderSystem {
 				if (this.totalPixels() <= 0) {
 					return 100;
 				}
-				return Math.max(0, Math.min(99, this.frameApplyIndex * 100 / this.totalPixels()));
+				int appliedProgress = this.frameApplyIndex * 100 / this.totalPixels();
+				return Math.max(0, Math.min(99, Math.max(appliedProgress, this.rendererProgressPercent)));
 			}
 			if (this.totalPixels() <= 0) {
 				return 100;

@@ -8,6 +8,7 @@ import com.lostglade.item.ModItems;
 import com.lostglade.mixin.SynchedEntityDataAccessor;
 import com.lostglade.network.RendererBotPayloads;
 import com.lostglade.network.RendererBotShadowPacketCodec;
+import com.lostglade.server.map.MapImageRenderSystem;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -254,6 +255,22 @@ public final class RendererBotCameraSystem {
 				}
 		);
 		ServerPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotPhotoRenderProgressC2SPayload.TYPE,
+				(payload, context) -> {
+					MinecraftServer server = context.player().level().getServer();
+					if (server == null) {
+						return;
+					}
+					server.execute(() -> {
+						PendingCapture capture = PENDING_CAPTURES.get(payload.requestId());
+						if (capture == null || !capture.botUuid().equals(context.player().getUUID())) {
+							return;
+						}
+						MapImageRenderSystem.notifyPhotoRenderProgress(payload.requestId(), payload.progressPercent());
+					});
+				}
+		);
+		ServerPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotFullFrameC2SPayload.TYPE,
 				(payload, context) -> {
 					MinecraftServer server = context.player().level().getServer();
@@ -378,6 +395,21 @@ public final class RendererBotCameraSystem {
 						if (recording != null && recording.botUuid().equals(context.player().getUUID())) {
 							recording.advanceReplayFrame(payload.frameIndex());
 							CameraVideoRecordingSystem.notifyRenderingProgress(server, payload.requestId(), payload.frameIndex());
+						}
+					});
+				}
+		);
+		ServerPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoRecordingPreviewFrameC2SPayload.TYPE,
+				(payload, context) -> {
+					MinecraftServer server = context.player().level().getServer();
+					if (server == null || payload.pixels() == null || payload.pixels().length != 128 * 128) {
+						return;
+					}
+					server.execute(() -> {
+						PendingVideoRecording recording = PENDING_VIDEO_RECORDINGS.get(payload.requestId());
+						if (recording != null && recording.botUuid().equals(context.player().getUUID())) {
+							CameraVideoRecordingSystem.notifyRenderedPreview(server, payload.requestId(), payload.pixels());
 						}
 					});
 				}

@@ -595,6 +595,7 @@ public final class RendererBotClientCapture {
 			}
 			current.clearScreenshotRequested();
 			ready = current.observeReadinessProbe(readiness);
+			current.sendProgressIfChanged(readiness, ready);
 		}
 		if (ready) {
 			Lg2.LOGGER.debug(
@@ -1463,6 +1464,7 @@ public final class RendererBotClientCapture {
 		private long lastRenderAttemptNanos;
 		private long lastProgressPreviewAtMillis;
 		private boolean progressPreviewRequested;
+		private int lastReportedProgress = -1;
 
 		private PendingCapture(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, long requestStartedAt) {
 			this.payload = payload;
@@ -1521,6 +1523,35 @@ public final class RendererBotClientCapture {
 
 		private void clearProgressPreviewRequested() {
 			this.progressPreviewRequested = false;
+		}
+
+		private void sendProgressIfChanged(RendererBotShadowWorldManager.RenderReadiness readiness, boolean readyForFinalCapture) {
+			// The renderer can report an empty compiler queue while the occlusion
+			// graph is still discovering more distant sections.  Reserve 99% for
+			// the two stable probes that actually authorize the final capture.
+			int progress = readyForFinalCapture ? 99 : estimateTerrainProgress(readiness);
+			if (progress <= this.lastReportedProgress
+					|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotPhotoRenderProgressC2SPayload.TYPE)) {
+				return;
+			}
+			this.lastReportedProgress = progress;
+			ClientPlayNetworking.send(new RendererBotPayloads.RendererBotPhotoRenderProgressC2SPayload(this.payload.requestId(), progress));
+		}
+
+		private static int estimateTerrainProgress(RendererBotShadowWorldManager.RenderReadiness readiness) {
+			if (readiness == null) {
+				return 0;
+			}
+			int progress = 1;
+			if (readiness.visibilityReady()) progress = 8;
+			if (readiness.contentReady()) progress = Math.max(progress, 16);
+			if (readiness.currentContentRendered()) progress = Math.max(progress, 24);
+			int visible = Math.max(0, readiness.visibleSections());
+			if (visible > 0) {
+				int cleanVisible = Math.max(0, Math.min(visible, visible - readiness.dirtyVisibleSections()));
+				progress = Math.max(progress, 24 + cleanVisible * 70 / visible);
+			}
+			return Math.max(0, Math.min(94, progress));
 		}
 
 		private int probeCount() {

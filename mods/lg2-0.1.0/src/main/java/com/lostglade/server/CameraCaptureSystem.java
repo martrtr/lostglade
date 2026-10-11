@@ -147,13 +147,29 @@ public final class CameraCaptureSystem {
 			player.displayClientMessage(capturePrepareFailedMessage(player), true);
 			return false;
 		}
-		boolean started = MapImageRenderSystem.startRender(player, createCompletedPhotoName(player.level().getServer()), provider);
+		boolean started = MapImageRenderSystem.startRender(player, createQueuedPhotoName(0), provider);
 		if (!started) {
 			return false;
 		}
-
-		player.getCooldowns().addCooldown(stack, CAMERA_COOLDOWN_TICKS);
 		return true;
+	}
+
+	/** Keeps the visual camera cooldown aligned with an active render's remaining work. */
+	public static void updateRenderCooldown(ServerPlayer player, int remainingTicks) {
+		if (player == null) {
+			return;
+		}
+		ItemStack camera = player.getMainHandItem().is(ModItems.CAMERA) ? player.getMainHandItem() : player.getOffhandItem();
+		if (camera.is(ModItems.CAMERA)) {
+			player.getCooldowns().addCooldown(camera, Math.max(1, remainingTicks));
+		}
+	}
+
+	/** Completion and cancellation must release a conservative estimate immediately. */
+	public static void clearRenderCooldown(ServerPlayer player) {
+		if (player != null) {
+			player.getCooldowns().removeCooldown(BuiltInRegistries.ITEM.getKey(ModItems.CAMERA));
+		}
 	}
 
 	public static Component createQueuedPhotoName(int progressPercent) {

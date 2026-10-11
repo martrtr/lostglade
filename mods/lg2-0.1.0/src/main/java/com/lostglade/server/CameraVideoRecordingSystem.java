@@ -245,6 +245,13 @@ public final class CameraVideoRecordingSystem {
 		}
 	}
 
+	public static void notifyRenderedPreview(MinecraftServer server, UUID requestId, byte[] previewPixels) {
+		if (server == null || requestId == null || previewPixels == null || previewPixels.length != 128 * 128) {
+			return;
+		}
+		CameraAnimatedMapPlaybackSystem.appendPendingVideoPreview(requestId.toString(), previewPixels);
+	}
+
 	private static void updateIssuedVideoTitle(ServerPlayer player, ActiveRecording recording, int progressPercent) {
 		if (player == null || recording == null) {
 			return;
@@ -293,11 +300,13 @@ public final class CameraVideoRecordingSystem {
 		ServerPlayer player = server.getPlayerList().getPlayer(state.playerId());
 		if (throwable != null || result == null) {
 			state.abortAudioCapture();
+			CameraAnimatedMapPlaybackSystem.discardPendingVideoPreview(state.requestId().toString());
 			String reason = throwable == null || throwable.getMessage() == null || throwable.getMessage().isBlank()
 					? "неизвестная причина"
 					: throwable.getMessage();
 			Lg2.LOGGER.warn("Camera video recording {} failed for {}: {}", state.requestId(), state.playerId(), reason, throwable);
 			if (player != null) {
+				CameraCaptureSystem.clearRenderCooldown(player);
 				Lg2Messages.actionBar(player, Lg2Messages.tr("message.lg2.camera.video.failed")
 						.append(Component.literal(" " + reason)));
 			}
@@ -325,6 +334,7 @@ public final class CameraVideoRecordingSystem {
 		} catch (IOException exception) {
 			Lg2.LOGGER.warn("Failed to persist camera video file for {}", state.requestId(), exception);
 			state.deleteAudioCapture();
+			CameraCaptureSystem.clearRenderCooldown(player);
 			Lg2Messages.actionBar(player, "message.lg2.camera.video.persist_failed");
 			return;
 		} finally {
@@ -334,9 +344,11 @@ public final class CameraVideoRecordingSystem {
 		PhotoPrintData issuedVideo = state.issuedVideoData();
 		if (issuedVideo != null) {
 			if (!CameraAnimatedMapPlaybackSystem.applyCompletedVideoMaps(player, issuedVideo, result.previewPixels(), result.fullPixels())) {
+				CameraCaptureSystem.clearRenderCooldown(player);
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.map_failed");
 				return;
 			}
+			CameraAnimatedMapPlaybackSystem.discardPendingVideoPreview(state.requestId().toString());
 			updateIssuedVideoTitle(player, state, 100);
 		} else {
 			ItemStack videoItem = CameraAnimatedMapPlaybackSystem.createVideoItem(
@@ -351,12 +363,14 @@ public final class CameraVideoRecordingSystem {
 					result.fullPixels()
 			);
 			if (videoItem.isEmpty()) {
+				CameraCaptureSystem.clearRenderCooldown(player);
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.map_failed");
 				return;
 			}
 			giveOrDrop(player, videoItem);
 		}
 		ServerMechanicsGateSystem.syncPlayerInventory(player);
+		CameraCaptureSystem.clearRenderCooldown(player);
 		Lg2Messages.actionBar(
 				player,
 				audioMuxFailed ? "message.lg2.camera.video.ready_audio_failed" : "message.lg2.camera.video.ready"
