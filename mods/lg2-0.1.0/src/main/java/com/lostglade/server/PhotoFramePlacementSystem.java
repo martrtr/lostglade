@@ -61,6 +61,11 @@ public final class PhotoFramePlacementSystem {
 		}
 
 		ItemStack photoItem = recreatePhotoItem(frameStack, frameData);
+		// A breaking frame may already have been removed from the level's entity
+		// index. Clearing neighbours cannot clear that frame; vanilla would then
+		// drop its map as well as the reconstructed photo. Consume it directly
+		// before any callbacks or spawning. Vanilla can still drop the empty frame.
+		frame.setItem(ItemStack.EMPTY, false);
 		CameraAnimatedMapPlaybackSystem.unregisterPlacedVideo(frameData.groupId());
 		clearPlacedPhoto(level, frameData);
 		if (photoItem.isEmpty()) {
@@ -134,6 +139,7 @@ public final class PhotoFramePlacementSystem {
 			return false;
 		}
 		ItemStack photoItem = recreatePhotoItem(frameStack, frameData);
+		frame.setItem(ItemStack.EMPTY, false);
 		CameraAnimatedMapPlaybackSystem.unregisterPlacedVideo(frameData.groupId());
 		clearPlacedPhoto(level, frameData);
 		giveOrDrop(player, photoItem);
@@ -212,6 +218,7 @@ public final class PhotoFramePlacementSystem {
 				continue;
 			}
 			if (candidateData.groupId().equals(frameData.groupId())
+					&& candidateData.samePhoto(frameData.asPhotoPrintData())
 					&& candidateData.anchorPos().equals(frameData.anchorPos())
 					&& candidateData.direction() == frameData.direction()
 					&& candidateData.mapsWide() == frameData.mapsWide()

@@ -2,7 +2,6 @@ package com.lostglade.mixin;
 
 import com.lostglade.server.AccountAuthSystem;
 import com.lostglade.server.RendererBotCameraSystem;
-import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerWebcamIntegration;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -57,9 +56,6 @@ public abstract class WebcamNearbyPlayersRendererBotMixin {
 		}
 
 		for (ServerPlayer player : AccountAuthSystem.authenticatedPlayers(server)) {
-			if (!RendererBotPresenceSystem.isRendererBot(player)) {
-				continue;
-			}
 			if (RendererBotCameraSystem.shouldReceiveNearbyWebcam(player, sourcePlayer, radius)) {
 				nearbyPlayers.add(player.getUUID());
 			}

@@ -1735,7 +1735,7 @@ public final class RendererBotCameraSystem {
 		if (viewer == null
 				|| source == null
 				|| horizontalRangeBlocks <= 0.0D
-				|| !RendererBotPresenceSystem.isRendererBot(viewer)
+				|| !READY_BOTS.containsKey(viewer.getUUID())
 				|| !(source.level() instanceof ServerLevel sourceLevel)) {
 			return false;
 		}

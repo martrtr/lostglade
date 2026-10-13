@@ -75,6 +75,7 @@ public final class MapImageRenderSystem {
 
 	public static void register() {
 		ensureExecutor();
+		PhotoMapDeliverySystem.register();
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
 				AccountAuthSystem.runWhenAuthenticated(handler.player,
 						() -> server.execute(() -> schedulePhotoPreviewReprime((ServerPlayer) handler.player, server)))
@@ -165,7 +166,7 @@ public final class MapImageRenderSystem {
 		return true;
 	}
 
-	private static ServerLevel photoMapLevel(MinecraftServer server, ServerLevel fallback) {
+	static ServerLevel photoMapLevel(MinecraftServer server, ServerLevel fallback) {
 		if (server == null) {
 			return fallback;
 		}
@@ -526,7 +527,10 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		ServerLevel mapLevel = photoMapLevel(server, fallbackLevel);
-		for (int rawMapId : photoData.mapIds()) {
+		Set<Integer> deliveredMapIds = new HashSet<>();
+		deliveredMapIds.add(photoData.previewMapId());
+		for (int rawMapId : photoData.mapIds()) deliveredMapIds.add(rawMapId);
+		for (int rawMapId : deliveredMapIds) {
 			if (rawMapId < 0) {
 				continue;
 			}
@@ -906,7 +910,7 @@ public final class MapImageRenderSystem {
 		return output;
 	}
 
-	private static void sendPhotoMap(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
+	static void sendPhotoMap(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
 		if (player == null || mapId == null || mapData == null || mapData.colors == null || mapData.colors.length < MAP_SIZE * MAP_SIZE) {
 			return;
 		}
@@ -1144,7 +1148,8 @@ public final class MapImageRenderSystem {
 		}
 
 		private PhotoPrintData photoData() {
-			return new PhotoPrintData(this.mapsWide, this.mapsHigh, this.previewMapId, photoMapIdsToRawIds(this.mapIds));
+			return new PhotoPrintData(this.mapsWide, this.mapsHigh, this.previewMapId, photoMapIdsToRawIds(this.mapIds),
+					this.provider.mediaKind(), this.provider.sourceKey(), this.provider.mediaDurationMs(), this.provider.mediaFps());
 		}
 
 		private MapPixelProvider provider() {

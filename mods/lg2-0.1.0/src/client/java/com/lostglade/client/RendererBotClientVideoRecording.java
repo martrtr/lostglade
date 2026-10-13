@@ -342,6 +342,11 @@ public final class RendererBotClientVideoRecording {
 				return;
 			}
 			recording.snapshotWaitStartedNanos = 0L;
+			// Replay uses a static marker at the recorded pose. Vanilla therefore
+			// does not hide the operator as its camera entity. Historical entity
+			// packets can recreate the player, so hide it AFTER every restore.
+			RendererBotShadowWorldManager.hideEntityFromSession(
+					recording.payload().renderSessionId(), recording.payload().followEntityUuid());
 			long frameAttempt = markRecordingFrameInFlight(recording.payload().requestId(), nowNanos);
 			if (frameAttempt <= 0L) {
 				return;

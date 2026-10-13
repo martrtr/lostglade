@@ -15,6 +15,8 @@ public final class CameraVideoPipelineTest {
 		growingPreviewLoopsWithoutSkippingOnAppend();
 		previewSurvivesCompaction();
 		creativeFrameCopiesRetainIdentity();
+		cachedPhotosCannotCrossRequestsOrSessions();
+		photoDeliveryTracksEachViewerIndependently();
 		completedVideoReleasesPhotoRenderer();
 		photoCancellationReleasesProviderExactlyOnce();
 		historyCheckpointPreservesDifferentFrames();
@@ -108,6 +110,21 @@ public final class CameraVideoPipelineTest {
 		} finally { buffer.release(); }
 	}
 
+	private static void photoDeliveryTracksEachViewerIndependently() throws Exception {
+		Class<?> type = Class.forName("com.lostglade.server.map.PhotoMapDeliverySystem");
+		var added = type.getDeclaredMethod("newlyVisible", java.util.Set.class, java.util.Set.class);
+		added.setAccessible(true);
+		var empty = java.util.Set.<Integer>of();
+		var held = java.util.Set.of(99);
+		var heldAndFramed = java.util.Set.of(99, 100, 101);
+		require(added.invoke(null, empty, held).equals(held), "new owner never receives photo baseline");
+		require(added.invoke(null, held, held).equals(empty), "unchanged inventory resends full image");
+		require(added.invoke(null, held, heldAndFramed).equals(java.util.Set.of(100, 101)), "placing photo does not deliver frame tiles");
+		require(added.invoke(null, empty, heldAndFramed).equals(heldAndFramed), "late viewer inherits another viewer's delivery state");
+		require(added.invoke(null, heldAndFramed, empty).equals(empty), "lost visibility sends unrelated maps");
+		require(added.invoke(null, empty, heldAndFramed).equals(heldAndFramed), "returning viewer does not receive baseline again");
+	}
+
 	private static void creativeFrameCopiesRetainIdentity() {
 		var data = new com.lostglade.item.PhotoPrintData(2, 1, 99, new int[]{100, 101},
 				com.lostglade.item.PhotoPrintData.MediaKind.VIDEO, "job", 0L, 10);
@@ -115,6 +132,32 @@ public final class CameraVideoPipelineTest {
 		require(!data.ownsMapId(-1) && !data.ownsMapId(102), "unrelated map retained a cancelled job");
 		var frame = data.placed(UUID.randomUUID(), net.minecraft.core.BlockPos.ZERO, net.minecraft.core.Direction.NORTH, 1, 0);
 		require(frame.asPhotoPrintData().samePhoto(data) && frame.sourceKey().equals("job"), "placement changed video identity");
+		var unrelated = new com.lostglade.item.PhotoPrintData(2, 1, 99, new int[]{100, 101},
+				com.lostglade.item.PhotoPrintData.MediaKind.VIDEO, "another-job", 0L, 10);
+		require(!data.samePhoto(unrelated), "different recordings alias through reused map IDs");
+		var photo = new com.lostglade.item.PhotoPrintData(2, 1, 99, new int[]{100, 101},
+				com.lostglade.item.PhotoPrintData.MediaKind.PHOTO, "job", 0L, 0);
+		require(!data.samePhoto(photo), "photo and video share an identity");
+		var legacy = new com.lostglade.item.PhotoPrintData(2, 1, 99, new int[]{100, 101});
+		require(photo.samePhoto(legacy) && legacy.samePhoto(photo), "legacy photos without source keys no longer match");
+	}
+
+	private static void cachedPhotosCannotCrossRequestsOrSessions() throws Exception {
+		UUID request = UUID.randomUUID(), session = UUID.randomUUID(), owner = UUID.randomUUID();
+		Class<?> type = Class.forName("com.lostglade.client.RendererBotClientCapture$CapturedFrame");
+		var constructor = type.getDeclaredConstructors()[0];
+		constructor.setAccessible(true);
+		Object cached = constructor.newInstance(request, session, "minecraft:overworld", null, owner,
+				1D, 2D, 3D, 4F, 5F, 128, 128, 256, 128, 70, new byte[0], new byte[0], 0L);
+		for (int scenario = 0; scenario < 4; scenario++) {
+			var payload = new com.lostglade.network.RendererBotPayloads.RendererBotCaptureRequestS2CPayload(
+					scenario == 1 ? UUID.randomUUID() : request,
+					scenario == 2 ? UUID.randomUUID() : session,
+					"minecraft:overworld", 1D, 2D, 3D, 4F, 5F, null,
+					scenario == 3 ? UUID.randomUUID() : owner, 128, 128, 256, 128, 70);
+			require((boolean) call(cached, "matches", new Class<?>[]{payload.getClass()}, payload) == (scenario == 0),
+					"cached photo crossed request/session/owner boundary, scenario " + scenario);
+		}
 	}
 
 	private static void sealPreservesProgressAndDrainsEverySnapshot() throws Exception {

@@ -214,6 +214,8 @@ public record PhotoPrintData(
 
 	public boolean samePhoto(PhotoPrintData other) {
 		return other != null
+				&& (this.sourceKey.isBlank() || other.sourceKey.isBlank() || this.sourceKey.equals(other.sourceKey))
+				&& this.mediaKind == other.mediaKind
 				&& this.mapsWide == other.mapsWide
 				&& this.mapsHigh == other.mapsHigh
 				&& Arrays.equals(this.mapIds, other.mapIds);

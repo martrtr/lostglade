@@ -709,6 +709,7 @@ public final class RendererBotClientCapture {
 			// readback with a different size.
 			byte[] previewPixels = fullPixels;
 			latestFrame = new CapturedFrame(
+					payload.requestId(), payload.renderSessionId(),
 					payload.dimensionId(),
 					payload.followEntityUuid(),
 					payload.hiddenEntityUuid(),
@@ -823,6 +824,7 @@ public final class RendererBotClientCapture {
 				byte[] fullPixels = quantizeFrame(pixels, width, height, payload.fullWidth(), payload.fullHeight());
 				byte[] previewPixels = fullPixels;
 				latestFrame = new CapturedFrame(
+						payload.requestId(), payload.renderSessionId(),
 						payload.dimensionId(),
 						payload.followEntityUuid(),
 						payload.hiddenEntityUuid(),
@@ -1684,6 +1686,8 @@ public final class RendererBotClientCapture {
 	}
 
 	private record CapturedFrame(
+			UUID requestId,
+			UUID renderSessionId,
 			String dimensionId,
 			UUID followEntityUuid,
 			UUID hiddenEntityUuid,
@@ -1702,7 +1706,9 @@ public final class RendererBotClientCapture {
 			long capturedAtMillis
 	) {
 		private boolean matches(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload) {
-			return Objects.equals(this.dimensionId, payload.dimensionId())
+			return Objects.equals(this.requestId, payload.requestId())
+					&& Objects.equals(this.renderSessionId, payload.renderSessionId())
+					&& Objects.equals(this.dimensionId, payload.dimensionId())
 					&& Objects.equals(this.followEntityUuid, payload.followEntityUuid())
 					&& Objects.equals(this.hiddenEntityUuid, payload.hiddenEntityUuid())
 					&& Math.abs(this.expectedX - payload.expectedX()) <= 0.01D
