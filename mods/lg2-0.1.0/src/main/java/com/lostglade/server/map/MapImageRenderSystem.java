@@ -91,6 +91,10 @@ public final class MapImageRenderSystem {
 		ServerTickEvents.END_SERVER_TICK.register(MapImageRenderSystem::tick);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			PENDING_PREVIEW_REPRIME_DEADLINES.clear();
+			for (UUID playerId : new HashSet<>(PLAYER_JOBS.keySet())) removeJob(playerId);
+			QUEUE.clear();
+			activePlayerId = null;
+			PENDING_CAMERA_COOLDOWN_CLEARS.clear();
 			shutdownExecutor();
 		});
 	}
@@ -148,6 +152,7 @@ public final class MapImageRenderSystem {
 				)
 		);
 		RenderJob job = new RenderJob(player.getUUID(), photoMapSet.mapIds(), photoMapSet.mapDataSet(), mapsWide, mapsHigh, previewMap.previewMapId().id(), previewMap.previewMapData(), provider);
+		job.server = player.level().getServer();
 		PLAYER_JOBS.put(player.getUUID(), job);
 		QUEUE.offer(player.getUUID());
 		ServerMechanicsGateSystem.syncPlayerInventory(player);
@@ -200,8 +205,10 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		if (!isPhotoStillReachable(server, player, job.photoData())) {
-			job.provider().onCancelled(server);
-			player.displayClientMessage(Component.literal("Рендер снимка отменён: снимок больше не в инвентаре или рамке."), true);
+			// Dropping the print freezes the part already written to its maps.
+			lockRenderedPhoto(level, job);
+			finalizePhotoDisplay(server, job);
+			player.displayClientMessage(Component.literal("Рендер снимка остановлен: сохранена готовая часть."), true);
 			removeJob(job.playerId());
 			pollNextActive();
 			return;
@@ -499,6 +506,7 @@ public final class MapImageRenderSystem {
 		}
 		Component completedName = CameraCaptureSystem.createCompletedPhotoName(server);
 		updatePhotoItemsInInventories(server, job.photoData(), completedName);
+		updateDroppedPhotoItemNames(server, job.photoData(), completedName);
 		updatePlacedPhotoFrameNames(server, job.photoData(), completedName);
 		job.setLastDisplayedProgress(100);
 	}
@@ -675,6 +683,17 @@ public final class MapImageRenderSystem {
 				updated.remove(DataComponents.CUSTOM_NAME);
 				PhotoPrintData.writeFrameStoredName(updated, name);
 				frame.setItem(updated, false);
+			}
+		}
+	}
+
+	private static void updateDroppedPhotoItemNames(MinecraftServer server, PhotoPrintData photoData, Component name) {
+		if (server == null || photoData == null || name == null) return;
+		for (ServerLevel level : server.getAllLevels()) {
+			for (var entity : level.getAllEntities()) {
+				if (entity instanceof ItemEntity item && isMatchingPhoto(item.getItem(), photoData)) {
+					item.getItem().set(DataComponents.CUSTOM_NAME, name.copy());
+				}
 			}
 		}
 	}
@@ -931,7 +950,12 @@ public final class MapImageRenderSystem {
 		if (playerId == null) {
 			return;
 		}
-		PLAYER_JOBS.remove(playerId);
+		RenderJob removed = PLAYER_JOBS.remove(playerId);
+		if (removed != null) {
+			// Every exit must release the renderer, including invalid owners,
+			// preparation errors and external cancelRender calls.
+			removed.provider().onCancelled(removed.server);
+		}
 		PENDING_CAMERA_COOLDOWN_CLEARS.add(playerId);
 		if (playerId.equals(activePlayerId)) {
 			activePlayerId = null;
@@ -1040,6 +1064,7 @@ public final class MapImageRenderSystem {
 	}
 
 	private static final class RenderJob {
+		private MinecraftServer server;
 		private final UUID playerId;
 		private final MapId[] mapIds;
 		private final MapItemSavedData[] mapDataSet;

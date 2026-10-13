@@ -123,6 +123,7 @@
   "message.lg2.camera.video.started": "Video recording started. Use the camera again to stop.",
   "message.lg2.camera.video.stopping": "Stopping video recording...",
   "message.lg2.camera.video.failed": "Video recording failed.",
+  "message.lg2.camera.video.cancelled": "Video rendering cancelled. The rendered preview has been retained.",
   "message.lg2.camera.video.persist_failed": "The video was recorded, but the file was not saved on the server.",
   "message.lg2.camera.video.map_failed": "Couldn't assemble the video map.",
   "message.lg2.camera.video.ready": "Video ready.",

@@ -36,6 +36,9 @@ public final class CameraVideoRecordingSystem {
 	private static final int MAX_DURATION_SECONDS = 10 * 60;
 	private static final long MIN_STOP_DELAY_MS = 1_000L;
 	private static final int AUDIO_SAMPLE_RATE = 48_000;
+	// Slot transfers and multi-frame placement are observed over several server
+	// ticks.  A single transient miss must never cancel a valid issued video.
+	private static final int ISSUED_VIDEO_MISSING_CANCEL_TICKS = 20;
 	private static final Map<UUID, ActiveRecording> RECORDINGS_BY_PLAYER = new ConcurrentHashMap<>();
 
 	private CameraVideoRecordingSystem() {
@@ -43,7 +46,14 @@ public final class CameraVideoRecordingSystem {
 
 	public static void register() {
 		ServerTickEvents.END_SERVER_TICK.register(CameraVideoRecordingSystem::tick);
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> RECORDINGS_BY_PLAYER.clear());
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			// The authoritative renderer journal survives shutdown, but these
+			// callbacks belong to the old server instance (also in singleplayer).
+			for (ActiveRecording recording : RECORDINGS_BY_PLAYER.values()) recording.abortAudioCapture();
+			RECORDINGS_BY_PLAYER.clear();
+		});
+		// RendererBotCameraSystem journals unfinished work independently; item-side
+		// callbacks are rebuilt once the owner logs back in.
 	}
 
 	public static boolean isRecording(UUID playerId) {
@@ -118,12 +128,7 @@ public final class CameraVideoRecordingSystem {
 		state.markStartedFeedbackSent();
 		state.startAudioCapture(player);
 		RendererBotCameraSystem.recordVideoCameraPose(handle.requestId(), player);
-		handle.completionFuture().whenComplete((result, throwable) -> {
-			MinecraftServer server = player.level().getServer();
-			if (server != null) {
-				server.execute(() -> finishRecording(server, state, result, throwable));
-			}
-		});
+		attachCompletion(player.level().getServer(), state, handle.completionFuture());
 		// The volunteer renderer receives and renders the path immediately. It is
 		// never the operator's client, so this does not consume operator FPS.
 		Lg2Messages.actionBar(player, "message.lg2.camera.video.started");
@@ -169,31 +174,45 @@ public final class CameraVideoRecordingSystem {
 	}
 
 	private static void tick(MinecraftServer server) {
-		if (server == null || RECORDINGS_BY_PLAYER.isEmpty()) {
+		if (server == null) {
 			return;
 		}
+		ensureRecoveredRecordings(server);
+		if (RECORDINGS_BY_PLAYER.isEmpty()) return;
 		for (ActiveRecording recording : RECORDINGS_BY_PLAYER.values()) {
 			if (recording == null) {
 				continue;
 			}
 			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
+			if (recording.truncationRequested()) continue;
 			if (player == null) {
-				cancelRecording(server, recording, null);
+				// Disconnect is not proof the print was discarded. Keep the job
+				// recoverable and seal the path already recorded.
+				if (!recording.stopRequested()) requestStop(server, recording, false);
 				continue;
 			}
 			// The emitted video print, not the camera item, owns the work. This is
 			// deliberately identical to a photo: moving the print to a chest or
 			// throwing it away cancels, while putting the camera away does not.
-			if (!isIssuedVideoStillReachable(server, player, recording.issuedVideoData())) {
-				cancelRecording(server, recording, player);
+			boolean issuedVideoReachable = isIssuedVideoStillReachable(server, player, recording.issuedVideoData());
+			if (!issuedVideoReachable && !recording.truncationRequested() && recording.noteIssuedVideoMissing()) {
+				cancelRecording(server, recording, player, "video print absent from inventory, cursor and loaded item frames for 20 ticks");
 				continue;
 			}
+			if (issuedVideoReachable) {
+				recording.clearIssuedVideoMissing();
+			}
 			if (recording.stopRequested()) {
-				applyRenderingCooldown(player, recording);
+				// A deliberate print discard keeps only the already rendered prefix;
+				// its camera must become usable immediately, not receive a fresh
+				// cooldown on every server tick while the short MP4 is closing.
+				if (!recording.truncationRequested()) {
+					applyRenderingCooldown(player, recording);
+				}
 				continue;
 			}
 			if (!player.isAlive()) {
-				cancelRecording(server, recording, player);
+				cancelRecording(server, recording, player, "owner died while recording");
 				continue;
 			}
 			if (DroneSystem.isCameraBlockedByDroneControl(player) || !isHoldingCameraInAnyHand(player)) {
@@ -206,25 +225,77 @@ public final class CameraVideoRecordingSystem {
 		}
 	}
 
+	private static void ensureRecoveredRecordings(MinecraftServer server) {
+		for (RendererBotCameraSystem.RecoveredVideoRecording recovery : RendererBotCameraSystem.recoveredVideoRecordings()) {
+			if (recovery == null || recovery.ownerId() == null || RECORDINGS_BY_PLAYER.containsKey(recovery.ownerId())) continue;
+			ServerPlayer player = server.getPlayerList().getPlayer(recovery.ownerId());
+			ServerLevel level = recovery.dimension() == null ? null : server.getLevel(recovery.dimension());
+			if (player == null || level == null) continue;
+			PhotoPrintData issued = findIssuedVideoData(server, player, recovery.requestId().toString());
+			if (issued == null) {
+				// The print is the owner of asynchronous work. Do not resurrect an
+				// abandoned job merely because its old journal still exists.
+				RendererBotCameraSystem.cancelVideoRecording(server, recovery.requestId(), "Camera video print is no longer available after restart");
+				continue;
+			}
+			ActiveRecording state = new ActiveRecording(
+					player.getUUID(), recovery.requestId(), level, player.getX(), player.getY(), player.getZ(),
+					recovery.mapsWide(), recovery.mapsHigh(), System.currentTimeMillis()
+			);
+			state.setIssuedVideoData(issued);
+			CameraAnimatedMapPlaybackSystem.registerPendingVideoMaps(issued);
+			state.markStopRequested();
+			state.beginRenderEstimate(Math.max(1, recovery.totalFrames()));
+			int restoredProgress = state.recordRenderedFrames(recovery.completedFrames());
+			RECORDINGS_BY_PLAYER.put(player.getUUID(), state);
+			attachCompletion(server, state, recovery.completionFuture());
+			updateIssuedVideoTitle(player, state, Math.max(0, restoredProgress));
+			applyRenderingCooldown(player, state);
+			Lg2.LOGGER.info("Resumed unfinished camera-video render {} for {} after server restart", recovery.requestId(), player.getScoreboardName());
+		}
+	}
+
+	private static void attachCompletion(
+			MinecraftServer server,
+			ActiveRecording state,
+			java.util.concurrent.CompletableFuture<RendererBotCameraSystem.VideoRecordingResult> completion
+	) {
+		if (server == null || state == null || completion == null) return;
+		completion.whenComplete((result, throwable) -> server.execute(() -> finishRecording(server, state, result, throwable)));
+	}
+
+	private static PhotoPrintData findIssuedVideoData(MinecraftServer server, ServerPlayer owner, String sourceKey) {
+		if (server == null || owner == null || sourceKey == null || sourceKey.isBlank()) return null;
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			PhotoPrintData data = PhotoPrintData.readPhotoItem(owner.getInventory().getItem(slot));
+			if (data != null && data.isVideo() && sourceKey.equals(data.sourceKey())) return data;
+		}
+		for (ServerLevel level : server.getAllLevels()) {
+			for (var entity : level.getAllEntities()) {
+				if (!(entity instanceof net.minecraft.world.entity.decoration.ItemFrame frame) || frame.isRemoved()) continue;
+				PhotoPrintData.PlacedPhotoFrameData data = PhotoPrintData.readFrameTile(frame.getItem());
+				if (data != null && data.mediaKind() == PhotoPrintData.MediaKind.VIDEO && sourceKey.equals(data.sourceKey())) return data.asPhotoPrintData();
+			}
+		}
+		return null;
+	}
+
 	/** Cancels only after the issued video print leaves its owner's possession. */
-	private static void cancelRecording(MinecraftServer server, ActiveRecording recording, ServerPlayer player) {
+	private static void cancelRecording(MinecraftServer server, ActiveRecording recording, ServerPlayer player, String reason) {
 		if (server == null || recording == null) {
 			return;
 		}
+		recording.cancellationReason = reason;
+		recording.markTruncationRequested();
 		recording.markStopRequested();
-		// Remove the local state before completing the renderer future: otherwise a
-		// following tick can put the rendering cooldown back on a dropped camera.
-		RECORDINGS_BY_PLAYER.remove(recording.playerId(), recording);
 		recording.abortAudioCapture();
-		CameraAnimatedMapPlaybackSystem.discardPendingVideoPreview(recording.requestId().toString());
 		if (player != null) {
+			// The thrown print is the finished artifact. Remove its percent title
+			// immediately; completion will populate the same map ids with the short MP4.
+			updateIssuedVideoTitle(player, recording, 100);
 			CameraCaptureSystem.clearRenderCooldown(player);
 		}
-		RendererBotCameraSystem.cancelVideoRecording(
-				server,
-				recording.requestId(),
-				"Camera video rendering was cancelled because its video print is no longer in the owner's inventory or an item frame"
-		);
+		RendererBotCameraSystem.truncateVideoRecording(server, recording.requestId());
 	}
 
 	private static void requestStop(MinecraftServer server, ActiveRecording recording, boolean notifyPlayer) {
@@ -265,7 +336,7 @@ public final class CameraVideoRecordingSystem {
 			return;
 		}
 		for (ActiveRecording recording : RECORDINGS_BY_PLAYER.values()) {
-			if (recording == null || !requestId.equals(recording.requestId()) || !recording.stopRequested()) {
+			if (recording == null || !requestId.equals(recording.requestId()) || !recording.stopRequested() || recording.truncationRequested()) {
 				continue;
 			}
 			int progress = recording.recordRenderedFrames(completedFrames);
@@ -285,6 +356,12 @@ public final class CameraVideoRecordingSystem {
 		CameraAnimatedMapPlaybackSystem.appendPendingVideoPreview(requestId.toString(), previewPixels);
 	}
 
+	/** Stores each completed video frame for cyclic playback before the MP4 closes. */
+	public static void notifyRenderedFrame(MinecraftServer server, UUID requestId, byte[] previewPixels, byte[] fullPixels) {
+		if (server == null || requestId == null || previewPixels == null || fullPixels == null || previewPixels.length != 128 * 128) return;
+		CameraAnimatedMapPlaybackSystem.appendPendingVideoFrame(requestId.toString(), previewPixels, fullPixels);
+	}
+
 	private static void updateIssuedVideoTitle(ServerPlayer player, ActiveRecording recording, int progressPercent) {
 		if (player == null || recording == null) {
 			return;
@@ -299,6 +376,27 @@ public final class CameraVideoRecordingSystem {
 			PhotoPrintData data = PhotoPrintData.readPhotoItem(stack);
 			if (data != null && data.isVideo() && sourceKey.equals(data.sourceKey())) {
 				stack.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, title.copy());
+			}
+		}
+		// A creative frame copy has its own saved name. Updating the inventory
+		// alone leaves it displaying the placement percentage even after success.
+		for (ServerLevel level : player.level().getServer().getAllLevels()) {
+			for (var entity : level.getAllEntities()) {
+				if (entity instanceof ItemEntity itemEntity && isMatchingIssuedVideo(itemEntity.getItem(), recording.issuedVideoData())) {
+					itemEntity.getItem().set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, title.copy());
+				}
+				if (!(entity instanceof net.minecraft.world.entity.decoration.ItemFrame frame) || frame.isRemoved()) continue;
+				ItemStack item = frame.getItem();
+				var data = PhotoPrintData.readFrameTile(item);
+				var id = item.get(net.minecraft.core.component.DataComponents.MAP_ID);
+				PhotoPrintData issued = recording.issuedVideoData();
+				if ((data != null && sourceKey.equals(data.sourceKey()))
+						|| (id != null && issued != null && issued.ownsMapId(id.id()))) {
+					ItemStack updated = item.copy();
+					updated.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, title.copy());
+					if (data != null) PhotoPrintData.writeFrameStoredName(updated, title);
+					frame.setItem(updated, false);
+				}
 			}
 		}
 	}
@@ -319,8 +417,13 @@ public final class CameraVideoRecordingSystem {
 		if (server == null || owner == null || !videoData.isVideo()) {
 			return false;
 		}
-		// Moving the print between slots briefly holds it on the menu cursor.
-		if (isMatchingIssuedVideo(owner.containerMenu.getCarried(), videoData)
+		// Check hands explicitly as well as inventory slots: creative placement
+		// deliberately leaves the source print in the hand while the framed tiles
+		// are a second valid owner of the same render job.
+		if (isMatchingIssuedVideo(owner.getMainHandItem(), videoData)
+				|| isMatchingIssuedVideo(owner.getOffhandItem(), videoData)
+				// Moving the print between slots briefly holds it on the menu cursor.
+				|| isMatchingIssuedVideo(owner.containerMenu.getCarried(), videoData)
 				|| isMatchingIssuedVideo(owner.inventoryMenu.getCarried(), videoData)) {
 			return true;
 		}
@@ -330,25 +433,37 @@ public final class CameraVideoRecordingSystem {
 			}
 		}
 		for (ServerLevel level : server.getAllLevels()) {
-			var bounds = new net.minecraft.world.phys.AABB(
-					-30_000_000.0D, level.getMinY(), -30_000_000.0D,
-					30_000_000.0D, level.getMaxY(), 30_000_000.0D
-			);
-			for (net.minecraft.world.entity.decoration.ItemFrame frame : level.getEntitiesOfClass(
-					net.minecraft.world.entity.decoration.ItemFrame.class, bounds
-			)) {
+			for (var entity : level.getAllEntities()) {
+				if (!(entity instanceof net.minecraft.world.entity.decoration.ItemFrame frame) || frame.isRemoved()) continue;
+				if (isMatchingIssuedVideo(frame.getItem(), videoData)) return true;
 				PhotoPrintData.PlacedPhotoFrameData frameData = PhotoPrintData.readFrameTile(frame.getItem());
-				if (frameData != null && frameData.samePhoto(videoData)) {
+				// The frame contains map tiles rather than the original PHOTO_PRINT.
+				// Its immutable source key is therefore the authoritative ownership
+				// identity; map ids remain a backwards-compatible fallback for old
+				// prints that predate source keys.
+				if (frameData != null && isMatchingIssuedVideo(frameData.asPhotoPrintData(), videoData)) {
 					return true;
 				}
+				// Creative pick-block/vanilla placement can store a plain map,
+				// without lg2_photo_frame. The actual map still belongs to this print.
+				var mapId = frame.getItem().get(net.minecraft.core.component.DataComponents.MAP_ID);
+				if (mapId != null && videoData.ownsMapId(mapId.id())) return true;
 			}
 		}
 		return false;
 	}
 
 	private static boolean isMatchingIssuedVideo(ItemStack stack, PhotoPrintData videoData) {
-		PhotoPrintData stackData = PhotoPrintData.readPhotoItem(stack);
-		return stackData != null && stackData.isVideo() && stackData.samePhoto(videoData);
+		return isMatchingIssuedVideo(PhotoPrintData.readPhotoItem(stack), videoData);
+	}
+
+	private static boolean isMatchingIssuedVideo(PhotoPrintData candidate, PhotoPrintData issuedVideo) {
+		if (candidate == null || issuedVideo == null || !candidate.isVideo()) {
+			return false;
+		}
+		String sourceKey = issuedVideo.sourceKey();
+		return (!sourceKey.isBlank() && sourceKey.equals(candidate.sourceKey()))
+				|| candidate.samePhoto(issuedVideo);
 	}
 
 	private static boolean isHoldingCameraWithMicrophoneInOtherHand(ServerPlayer player) {
@@ -374,7 +489,22 @@ public final class CameraVideoRecordingSystem {
 		ServerPlayer player = server.getPlayerList().getPlayer(state.playerId());
 		if (throwable != null || result == null) {
 			state.abortAudioCapture();
-			CameraAnimatedMapPlaybackSystem.discardPendingVideoPreview(state.requestId().toString());
+			if (state.cancellationReason != null) {
+				PhotoPrintData issued = state.issuedVideoData();
+				Lg2.LOGGER.info("Camera video {} cancelled for {}: {}; rendered={}/{}, previewMap={}, tileMaps={}",
+						state.requestId(), state.playerId(), state.cancellationReason,
+						state.renderedFrames, state.renderFrameTotal,
+						issued == null ? -1 : issued.previewMapId(),
+						issued == null ? "[]" : java.util.Arrays.toString(issued.mapIds()));
+				if (player != null) {
+					CameraCaptureSystem.clearRenderCooldown(player);
+					Lg2Messages.actionBar(player, "message.lg2.camera.video.cancelled");
+				}
+				RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
+				return;
+			}
+			// Failed/cancelled renders intentionally retain their successfully
+			// encoded prefix as a looping preview on the issued video print.
 			String reason = throwable == null || throwable.getMessage() == null || throwable.getMessage().isBlank()
 					? "неизвестная причина"
 					: throwable.getMessage();
@@ -384,11 +514,13 @@ public final class CameraVideoRecordingSystem {
 				Lg2Messages.actionBar(player, Lg2Messages.tr("message.lg2.camera.video.failed")
 						.append(Component.literal(" " + reason)));
 			}
+			RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
 			return;
 		}
 
 		if (player == null) {
 			state.abortAudioCapture();
+			RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
 			return;
 		}
 		Path finishedAudioPath;
@@ -410,6 +542,7 @@ public final class CameraVideoRecordingSystem {
 			state.deleteAudioCapture();
 			CameraCaptureSystem.clearRenderCooldown(player);
 			Lg2Messages.actionBar(player, "message.lg2.camera.video.persist_failed");
+			RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
 			return;
 		} finally {
 			state.deleteAudioCapture();
@@ -420,6 +553,7 @@ public final class CameraVideoRecordingSystem {
 			if (!CameraAnimatedMapPlaybackSystem.applyCompletedVideoMaps(player, issuedVideo, result.previewPixels(), result.fullPixels())) {
 				CameraCaptureSystem.clearRenderCooldown(player);
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.map_failed");
+				RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
 				return;
 			}
 			CameraAnimatedMapPlaybackSystem.discardPendingVideoPreview(state.requestId().toString());
@@ -439,6 +573,7 @@ public final class CameraVideoRecordingSystem {
 			if (videoItem.isEmpty()) {
 				CameraCaptureSystem.clearRenderCooldown(player);
 				Lg2Messages.actionBar(player, "message.lg2.camera.video.map_failed");
+				RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
 				return;
 			}
 			giveOrDrop(player, videoItem);
@@ -449,6 +584,7 @@ public final class CameraVideoRecordingSystem {
 				player,
 				audioMuxFailed ? "message.lg2.camera.video.ready_audio_failed" : "message.lg2.camera.video.ready"
 		);
+		RendererBotCameraSystem.acknowledgeHandledVideoRecording(server, state.requestId());
 	}
 
 	private static Path persistCompletedVideoFile(String sourceKey, String rawSourcePath) throws IOException {
@@ -574,6 +710,9 @@ public final class CameraVideoRecordingSystem {
 		private PhotoPrintData issuedVideoData;
 		private volatile boolean stopRequested;
 		private boolean startedFeedbackSent;
+		private boolean truncationRequested;
+		private String cancellationReason;
+		private int consecutiveIssuedVideoMissingTicks;
 		private int renderFrameTotal;
 		private int renderedFrames;
 		private long renderStartedAtMs;
@@ -603,6 +742,7 @@ public final class CameraVideoRecordingSystem {
 			this.issuedVideoData = null;
 			this.stopRequested = false;
 			this.startedFeedbackSent = false;
+			this.consecutiveIssuedVideoMissingTicks = 0;
 			this.renderFrameTotal = 0;
 			this.renderedFrames = 0;
 			this.renderStartedAtMs = 0L;
@@ -652,6 +792,14 @@ public final class CameraVideoRecordingSystem {
 			this.stopRequested = true;
 		}
 
+		private synchronized boolean truncationRequested() {
+			return this.truncationRequested;
+		}
+
+		private synchronized void markTruncationRequested() {
+			this.truncationRequested = true;
+		}
+
 		private synchronized void setIssuedVideoData(PhotoPrintData data) {
 			this.issuedVideoData = data;
 		}
@@ -699,6 +847,16 @@ public final class CameraVideoRecordingSystem {
 			}
 			this.startedFeedbackSent = true;
 			return true;
+		}
+
+		/** @return true only after sustained absence, never during a slot/frame hand-off. */
+		private synchronized boolean noteIssuedVideoMissing() {
+			this.consecutiveIssuedVideoMissingTicks++;
+			return this.consecutiveIssuedVideoMissingTicks >= ISSUED_VIDEO_MISSING_CANCEL_TICKS;
+		}
+
+		private synchronized void clearIssuedVideoMissing() {
+			this.consecutiveIssuedVideoMissingTicks = 0;
 		}
 
 		private synchronized void startAudioCapture(ServerPlayer player) {

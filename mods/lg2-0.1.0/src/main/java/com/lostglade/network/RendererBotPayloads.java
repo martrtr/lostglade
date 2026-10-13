@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RendererBotPayloads {
 	// Map-tile transport was removed from the renderer-bot protocol. Older clients
 	// must not accept this stream.
-	public static final int PROTOCOL_VERSION = 35;
+	public static final int PROTOCOL_VERSION = 40;
 	private static final int MAX_CAPTURE_PAYLOAD_BYTES = 1_048_576;
 	private static final int MAX_VIDEO_CAMERA_FRAMES = 12_000;
 	private static final int MAX_SHADOW_PAYLOAD_BYTES = 2_097_152;
@@ -70,7 +70,9 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotItemIconC2SPayload.TYPE, RendererBotItemIconC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingStartedC2SPayload.TYPE, RendererBotVideoRecordingStartedC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingProgressC2SPayload.TYPE, RendererBotVideoRecordingProgressC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().register(RendererBotVideoRecordingResumeC2SPayload.TYPE, RendererBotVideoRecordingResumeC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingPreviewFrameC2SPayload.TYPE, RendererBotVideoRecordingPreviewFrameC2SPayload.STREAM_CODEC, 32 * 1024);
+		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingRenderedFrameC2SPayload.TYPE, RendererBotVideoRecordingRenderedFrameC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoRecordingCompleteC2SPayload.TYPE, RendererBotVideoRecordingCompleteC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().registerLarge(RendererBotVideoFileChunkC2SPayload.TYPE, RendererBotVideoFileChunkC2SPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playC2S().register(RendererBotAudioFrameC2SPayload.TYPE, RendererBotAudioFrameC2SPayload.STREAM_CODEC);
@@ -87,8 +89,11 @@ public final class RendererBotPayloads {
 		PayloadTypeRegistry.playS2C().register(RendererBotItemIconRequestS2CPayload.TYPE, RendererBotItemIconRequestS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().registerLarge(RendererBotVideoRecordingStartS2CPayload.TYPE, RendererBotVideoRecordingStartS2CPayload.STREAM_CODEC, MAX_CAPTURE_PAYLOAD_BYTES);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingStopS2CPayload.TYPE, RendererBotVideoRecordingStopS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingTruncateS2CPayload.TYPE, RendererBotVideoRecordingTruncateS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingCancelS2CPayload.TYPE, RendererBotVideoRecordingCancelS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingCompleteAckS2CPayload.TYPE, RendererBotVideoRecordingCompleteAckS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameS2CPayload.TYPE, RendererBotVideoRecordingFrameS2CPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameSnapshotS2CPayload.TYPE, RendererBotVideoRecordingFrameSnapshotS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotVideoRecordingFrameReadyS2CPayload.TYPE, RendererBotVideoRecordingFrameReadyS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotAudioCaptureStartS2CPayload.TYPE, RendererBotAudioCaptureStartS2CPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playS2C().register(RendererBotAudioCaptureStopS2CPayload.TYPE, RendererBotAudioCaptureStopS2CPayload.STREAM_CODEC);
@@ -828,6 +833,32 @@ public final class RendererBotPayloads {
 		}
 	}
 
+	/**
+	 * Ordered after all shadow packets belonging to one sampled operator pose.
+	 * The renderer uses this as the immutable timeline boundary; a pose packet on
+	 * its own only describes the camera and is not a world-state checkpoint.
+	 */
+	public record RendererBotVideoRecordingFrameSnapshotS2CPayload(UUID requestId, UUID renderSessionId, int frameIndex) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingFrameSnapshotS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_frame_snapshot"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingFrameSnapshotS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingFrameSnapshotS2CPayload::write, RendererBotVideoRecordingFrameSnapshotS2CPayload::new);
+
+		public RendererBotVideoRecordingFrameSnapshotS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readUUID(), buffer.readVarInt());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeUUID(this.renderSessionId);
+			buffer.writeVarInt(this.frameIndex);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingFrameSnapshotS2CPayload> type() {
+			return TYPE;
+		}
+	}
+
 	/** Server admits this replay pose once its shadow chunks have been queued. */
 	public record RendererBotVideoRecordingFrameReadyS2CPayload(UUID requestId, int frameIndex) implements CustomPacketPayload {
 		public static final Type<RendererBotVideoRecordingFrameReadyS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_frame_ready"));
@@ -888,6 +919,16 @@ public final class RendererBotPayloads {
 		}
 	}
 
+	/** Seals an issued print at the prefix already accepted by the renderer. */
+	public record RendererBotVideoRecordingTruncateS2CPayload(UUID requestId, int frameCount) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingTruncateS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_truncate"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingTruncateS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingTruncateS2CPayload::write, RendererBotVideoRecordingTruncateS2CPayload::new);
+		public RendererBotVideoRecordingTruncateS2CPayload(FriendlyByteBuf buffer) { this(buffer.readUUID(), buffer.readVarInt()); }
+		private void write(FriendlyByteBuf buffer) { buffer.writeUUID(this.requestId); buffer.writeVarInt(Math.max(1, this.frameCount)); }
+		@Override public Type<RendererBotVideoRecordingTruncateS2CPayload> type() { return TYPE; }
+	}
+
 	/** Sent only after the renderer client has written the first real video frame. */
 	public record RendererBotVideoRecordingStartedC2SPayload(UUID requestId) implements CustomPacketPayload {
 		public static final Type<RendererBotVideoRecordingStartedC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_started"));
@@ -929,6 +970,16 @@ public final class RendererBotPayloads {
 		}
 	}
 
+	/** Encoder cursor after Start/reconnect; zero means a new encoder replays the archived timeline. */
+	public record RendererBotVideoRecordingResumeC2SPayload(UUID requestId, int frameIndex) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingResumeC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_resume"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingResumeC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingResumeC2SPayload::write, RendererBotVideoRecordingResumeC2SPayload::new);
+		public RendererBotVideoRecordingResumeC2SPayload(FriendlyByteBuf buffer) { this(buffer.readUUID(), buffer.readVarInt()); }
+		private void write(FriendlyByteBuf buffer) { buffer.writeUUID(requestId); buffer.writeVarInt(frameIndex); }
+		@Override public Type<RendererBotVideoRecordingResumeC2SPayload> type() { return TYPE; }
+	}
+
 	/** A compact palette preview for an issued video print while its MP4 is still open. */
 	public record RendererBotVideoRecordingPreviewFrameC2SPayload(UUID requestId, byte[] pixels) implements CustomPacketPayload {
 		public static final Type<RendererBotVideoRecordingPreviewFrameC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_preview_frame"));
@@ -946,6 +997,28 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotVideoRecordingPreviewFrameC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/** Palette frames already encoded into an unfinished video, for live item-frame playback. */
+	public record RendererBotVideoRecordingRenderedFrameC2SPayload(UUID requestId, byte[] previewPixels, byte[] fullPixels) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingRenderedFrameC2SPayload> TYPE = new Type<>(id("renderer_bot_video_recording_rendered_frame"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingRenderedFrameC2SPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingRenderedFrameC2SPayload::write, RendererBotVideoRecordingRenderedFrameC2SPayload::new);
+
+		public RendererBotVideoRecordingRenderedFrameC2SPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID(), buffer.readByteArray(128 * 128), buffer.readByteArray(MAX_CAPTURE_PAYLOAD_BYTES));
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+			buffer.writeByteArray(this.previewPixels == null ? new byte[0] : this.previewPixels);
+			buffer.writeByteArray(this.fullPixels == null ? new byte[0] : this.fullPixels);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingRenderedFrameC2SPayload> type() {
 			return TYPE;
 		}
 	}
@@ -984,6 +1057,31 @@ public final class RendererBotPayloads {
 
 		@Override
 		public Type<RendererBotVideoRecordingCompleteC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * Sent only after the server has consumed a finished renderer MP4 and handled
+	 * the corresponding video print.  A completion packet is a transaction, not
+	 * a fire-and-forget notification: the renderer keeps its final file until it
+	 * receives this acknowledgement.
+	 */
+	public record RendererBotVideoRecordingCompleteAckS2CPayload(UUID requestId) implements CustomPacketPayload {
+		public static final Type<RendererBotVideoRecordingCompleteAckS2CPayload> TYPE = new Type<>(id("renderer_bot_video_recording_complete_ack"));
+		public static final StreamCodec<FriendlyByteBuf, RendererBotVideoRecordingCompleteAckS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(RendererBotVideoRecordingCompleteAckS2CPayload::write, RendererBotVideoRecordingCompleteAckS2CPayload::new);
+
+		public RendererBotVideoRecordingCompleteAckS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readUUID());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeUUID(this.requestId);
+		}
+
+		@Override
+		public Type<RendererBotVideoRecordingCompleteAckS2CPayload> type() {
 			return TYPE;
 		}
 	}

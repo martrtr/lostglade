@@ -71,6 +71,7 @@ public final class CameraAnimatedMapPlaybackSystem {
 	private static final Map<PlacedViewerKey, Boolean> PRIMED_PLACED_GROUPS_BY_VIEWER = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> RECENT_VIEWER_REPRIME_DEADLINES = new ConcurrentHashMap<>();
 	private static final Map<String, PendingVideoPreview> PENDING_VIDEO_PREVIEWS = new ConcurrentHashMap<>();
+	private static final Map<Integer, PhotoPrintData> PENDING_MAP_PRINTS = new HashMap<>();
 	private static volatile long lastDiscoveryTick = Long.MIN_VALUE;
 	private static volatile MinecraftServer persistenceServer;
 
@@ -134,8 +135,15 @@ public final class CameraAnimatedMapPlaybackSystem {
 				durationMs,
 				fps
 		);
+		registerPendingVideoMaps(PhotoPrintData.readPhotoItem(item));
 		sendPreviewToPlayer(player, previewMaps.mapIds()[0], previewMaps.mapDataSet()[0]);
 		return item;
+	}
+
+	public static void registerPendingVideoMaps(PhotoPrintData data) {
+		if (data == null || !data.isVideo()) return;
+		PENDING_MAP_PRINTS.put(data.previewMapId(), data);
+		for (int mapId : data.mapIds()) PENDING_MAP_PRINTS.put(mapId, data);
 	}
 
 	/** Fills the maps allocated for an already-issued video print once its renderer finishes. */
@@ -162,12 +170,23 @@ public final class CameraAnimatedMapPlaybackSystem {
 		return true;
 	}
 
-	/** Holds a short rolling preview until the renderer closes the MP4 source. */
+	/** Holds the already-rendered prefix until the encoder closes the MP4 source. */
 	public static void appendPendingVideoPreview(String sourceKey, byte[] previewPixels) {
 		if (sourceKey == null || sourceKey.isBlank() || previewPixels == null || previewPixels.length != MAP_SIZE * MAP_SIZE) {
 			return;
 		}
-		PENDING_VIDEO_PREVIEWS.computeIfAbsent(sourceKey, ignored -> new PendingVideoPreview()).append(previewPixels);
+		PENDING_VIDEO_PREVIEWS.computeIfAbsent(sourceKey, ignored -> new PendingVideoPreview()).appendPreview(previewPixels);
+	}
+
+	/**
+	 * Stores the exact palette frame that has just been encoded. It is replayed
+	 * cyclically in both held prints and item frames; the loop grows as rendering
+	 * advances and deliberately survives an unfinished/cancelled render.
+	 */
+	public static void appendPendingVideoFrame(String sourceKey, byte[] previewPixels, byte[] fullPixels) {
+		if (sourceKey == null || sourceKey.isBlank() || previewPixels == null || previewPixels.length != MAP_SIZE * MAP_SIZE
+				|| fullPixels == null || fullPixels.length < MAP_SIZE * MAP_SIZE) return;
+		PENDING_VIDEO_PREVIEWS.computeIfAbsent(sourceKey, ignored -> new PendingVideoPreview()).append(previewPixels, fullPixels);
 	}
 
 	public static void discardPendingVideoPreview(String sourceKey) {
@@ -206,7 +225,7 @@ public final class CameraAnimatedMapPlaybackSystem {
 			return;
 		}
 		long gameTime = server.overworld() != null ? server.overworld().getGameTime() : 0L;
-		if (gameTime - lastDiscoveryTick >= DISCOVERY_INTERVAL_TICKS) {
+		if (lastDiscoveryTick == Long.MIN_VALUE || gameTime - lastDiscoveryTick >= DISCOVERY_INTERVAL_TICKS) {
 			rebuildPlacedVideoGroups(server);
 			lastDiscoveryTick = gameTime;
 		}
@@ -214,8 +233,52 @@ public final class CameraAnimatedMapPlaybackSystem {
 		Map<PlaybackKey, Boolean> usedSessions = new HashMap<>();
 		tickHeldVideoPreviews(server, usedSessions, gameTime);
 		tickPlacedVideoFrames(server, usedSessions, gameTime);
+		tickPlainPendingMaps(server, usedSessions, gameTime);
 		reapUnusedSessions(usedSessions, gameTime);
 		reapSequenceCache(server);
+	}
+
+	/** Vanilla creative copies carry a map id but need not carry frame-tile metadata. */
+	private static void tickPlainPendingMaps(MinecraftServer server, Map<PlaybackKey, Boolean> usedSessions, long gameTime) {
+		if (PENDING_MAP_PRINTS.isEmpty()) return;
+		for (ServerLevel level : server.getAllLevels()) {
+			for (var entity : level.getAllEntities()) {
+				if (!(entity instanceof ItemFrame frame) || frame.isRemoved()
+						|| PhotoPrintData.readFrameTile(frame.getItem()) != null) continue;
+				MapId mapId = frame.getItem().get(DataComponents.MAP_ID);
+				PhotoPrintData data = mapId == null ? null : PENDING_MAP_PRINTS.get(mapId.id());
+				if (data == null) continue;
+				DecodedVideoFrame completed = null;
+				if (Files.isRegularFile(CameraMediaCache.videoSourcePath(data.sourceKey()))) {
+					PlaybackKey playbackKey = new PlaybackKey(data.sourceKey(), data.mapsWide(), data.mapsHigh(), Math.max(1, data.fps()));
+					VideoPlaybackSession session = ensureSession(playbackKey);
+					if (session == null) continue;
+					session.markUsed(gameTime);
+					usedSessions.put(playbackKey, Boolean.TRUE);
+					completed = session.latestFrame();
+					if (completed == null) continue;
+				}
+				byte[] pixels = pendingVideoPreview(data.sourceKey(), gameTime, data.fps());
+				if (completed != null) pixels = completed.previewFrame();
+				if (mapId.id() != data.previewMapId()) {
+					byte[] full = completed == null ? pendingVideoFullFrame(data.sourceKey(), gameTime, data.fps(), data.mapsWide(), data.mapsHigh()) : null;
+					if (full == null && completed == null) continue;
+					for (int i = 0; i < data.mapIds().length; i++) {
+						if (data.mapIds()[i] == mapId.id()) { pixels = completed == null ? pendingVideoTile(full, data.mapsWide(), i) : completed.tiles()[i]; break; }
+					}
+				}
+				if (pixels == null) continue;
+				applyFrameToMap(photoMapLevel(server, level).getMapData(mapId), pixels);
+				long sequence = completed == null ? pendingVideoPreviewSequence(data.sourceKey(), gameTime, data.fps()) : completed.sequence();
+				for (ServerPlayer viewer : collectNearbyPlayers(level, frame.blockPosition())) {
+					PlayerMapKey key = new PlayerMapKey(viewer.getUUID(), mapId.id());
+					if (!Objects.equals(LAST_SENT_SEQUENCE_BY_PLAYER_MAP.get(key), sequence)) {
+						sendMapPatch(viewer, mapId, (byte) 0, true, 0, 0, MAP_SIZE, MAP_SIZE, pixels);
+						LAST_SENT_SEQUENCE_BY_PLAYER_MAP.put(key, sequence);
+					}
+				}
+			}
+		}
 	}
 
 	private static void tickHeldVideoPreviews(MinecraftServer server, Map<PlaybackKey, Boolean> usedSessions, long gameTime) {
@@ -234,6 +297,12 @@ public final class CameraAnimatedMapPlaybackSystem {
 		if (!Files.isRegularFile(CameraMediaCache.videoSourcePath(data.sourceKey()))) {
 			byte[] preview = pendingVideoPreview(data.sourceKey(), gameTime, data.fps());
 			if (preview != null) {
+				// Update authoritative map data as well as sending a per-viewer patch.
+				// Vanilla clients accept the patch; map-frame replacement mods such as
+				// SFrames may render directly from MapItemSavedData instead.
+				ServerLevel mapLevel = photoMapLevel(player.level().getServer(), (ServerLevel) player.level());
+				MapItemSavedData mapData = mapLevel == null ? null : mapLevel.getMapData(new MapId(data.previewMapId()));
+				applyFrameToMap(mapData, preview);
 				PlayerMapKey playerMapKey = new PlayerMapKey(player.getUUID(), data.previewMapId());
 				long sequence = pendingVideoPreviewSequence(data.sourceKey(), gameTime, data.fps());
 				Long lastSequence = LAST_SENT_SEQUENCE_BY_PLAYER_MAP.get(playerMapKey);
@@ -274,6 +343,34 @@ public final class CameraAnimatedMapPlaybackSystem {
 			}
 			ServerLevel mapLevel = photoMapLevel(server, level);
 			PlaybackKey key = new PlaybackKey(group.data().sourceKey(), group.data().mapsWide(), group.data().mapsHigh(), Math.max(1, group.data().fps()));
+			if (!Files.isRegularFile(CameraMediaCache.videoSourcePath(group.data().sourceKey()))) {
+				byte[] fullFrame = pendingVideoFullFrame(
+						group.data().sourceKey(), gameTime, group.data().fps(), group.data().mapsWide(), group.data().mapsHigh());
+				if (fullFrame == null || fullFrame.length != group.data().mapsWide() * group.data().mapsHigh() * MAP_SIZE * MAP_SIZE) continue;
+				long sequence = pendingVideoPreviewSequence(group.data().sourceKey(), gameTime, group.data().fps());
+				for (ServerPlayer recipient : collectNearbyPlayers(level, group.anchorPos())) {
+					PlacedViewerKey viewerKey = new PlacedViewerKey(recipient.getUUID(), group.groupId());
+					if (!PRIMED_PLACED_GROUPS_BY_VIEWER.containsKey(viewerKey)) {
+						primePlacedVideoGroupForViewer(level, mapLevel, group, recipient);
+						PRIMED_PLACED_GROUPS_BY_VIEWER.put(viewerKey, Boolean.TRUE);
+					}
+					for (int tileIndex = 0; tileIndex < group.data().mapIds().length; tileIndex++) {
+						int rawMapId = group.data().mapIds()[tileIndex];
+						if (rawMapId < 0) continue;
+						PlayerMapKey playerMapKey = new PlayerMapKey(recipient.getUUID(), rawMapId);
+						Long previous = LAST_SENT_SEQUENCE_BY_PLAYER_MAP.get(playerMapKey);
+						if (previous == null || previous != sequence) {
+							MapItemSavedData mapData = mapLevel.getMapData(new MapId(rawMapId));
+							byte[] tile = pendingVideoTile(fullFrame, group.data().mapsWide(), tileIndex);
+							applyFrameToMap(mapData, tile);
+							sendMapPatch(recipient, new MapId(rawMapId), (byte) 0, true, 0, 0, MAP_SIZE, MAP_SIZE,
+									tile);
+							LAST_SENT_SEQUENCE_BY_PLAYER_MAP.put(playerMapKey, sequence);
+						}
+					}
+				}
+				continue;
+			}
 			VideoPlaybackSession session = ensureSession(key);
 			if (session == null) {
 				continue;
@@ -454,6 +551,23 @@ public final class CameraAnimatedMapPlaybackSystem {
 		return pending == null ? -1L : pending.sequenceAt(gameTime, fps);
 	}
 
+	private static byte[] pendingVideoFullFrame(String sourceKey, long gameTime, int fps, int mapsWide, int mapsHigh) {
+		PendingVideoPreview pending = sourceKey == null ? null : PENDING_VIDEO_PREVIEWS.get(sourceKey);
+		return pending == null ? null : pending.fullFrameAt(gameTime, fps, mapsWide, mapsHigh);
+	}
+
+	private static byte[] pendingVideoTile(byte[] fullFrame, int mapsWide, int tileIndex) {
+		if (fullFrame == null || mapsWide <= 0 || tileIndex < 0) return new byte[MAP_SIZE * MAP_SIZE];
+		int tileX = tileIndex % mapsWide;
+		int tileY = tileIndex / mapsWide;
+		int outputWidth = mapsWide * MAP_SIZE;
+		byte[] tile = new byte[MAP_SIZE * MAP_SIZE];
+		for (int row = 0; row < MAP_SIZE; row++) {
+			System.arraycopy(fullFrame, (tileY * MAP_SIZE + row) * outputWidth + tileX * MAP_SIZE, tile, row * MAP_SIZE, MAP_SIZE);
+		}
+		return tile;
+	}
+
 	private static void shutdownAll() {
 		for (VideoPlaybackSession session : PLAYBACKS.values()) {
 			session.close();
@@ -464,6 +578,7 @@ public final class CameraAnimatedMapPlaybackSystem {
 		PRIMED_PLACED_GROUPS_BY_VIEWER.clear();
 		RECENT_VIEWER_REPRIME_DEADLINES.clear();
 		PENDING_VIDEO_PREVIEWS.clear();
+		PENDING_MAP_PRINTS.clear();
 	}
 
 	private static PhotoMapSet createPhotoMapSet(ServerLevel mapLevel, Component itemName, int mapsWide, int mapsHigh) {
@@ -1109,21 +1224,64 @@ public final class CameraAnimatedMapPlaybackSystem {
 	}
 
 	private static final class PendingVideoPreview {
-		private static final int MAX_FRAMES = 120;
+		// A 6x4 map frame is 384 KiB. Keeping every raw frame of a ten-minute
+		// render would consume multiple GiB, so retain the whole timeline at an
+		// adaptive sampling rate within one bounded cache budget.
+		private static final long MAX_PENDING_BYTES = 64L * 1024L * 1024L;
 		private final ArrayDeque<byte[]> frames = new ArrayDeque<>();
+		private final ArrayDeque<byte[]> fullFrames = new ArrayDeque<>();
+		private int frameStride = 1;
+		private long inputFrameCount;
+		private int largestFullFrameBytes;
+		private long cycleStart = Long.MIN_VALUE;
+		private int cycleLength;
 
-		private synchronized void append(byte[] pixels) {
+		/** Compatibility with renderers sending only compact previews. */
+		private synchronized void appendPreview(byte[] pixels) {
+			if (this.inputFrameCount++ % this.frameStride != 0L) return;
 			this.frames.addLast(Arrays.copyOf(pixels, pixels.length));
-			while (this.frames.size() > MAX_FRAMES) {
-				this.frames.removeFirst();
+			this.fullFrames.addLast(new byte[0]);
+			compactIfNeeded();
+		}
+
+		private synchronized void append(byte[] preview, byte[] fullFrame) {
+			if (this.inputFrameCount++ % this.frameStride != 0L) return;
+			this.frames.addLast(Arrays.copyOf(preview, preview.length));
+			this.fullFrames.addLast(Arrays.copyOf(fullFrame, fullFrame.length));
+			this.largestFullFrameBytes = Math.max(this.largestFullFrameBytes, fullFrame.length);
+			compactIfNeeded();
+		}
+
+		private void compactIfNeeded() {
+			while (estimatedBytes() > MAX_PENDING_BYTES && this.frames.size() > 1) {
+				ArrayDeque<byte[]> reducedPreviews = new ArrayDeque<>();
+				ArrayDeque<byte[]> reducedFullFrames = new ArrayDeque<>();
+				boolean keep = true;
+				while (!this.frames.isEmpty()) {
+					byte[] preview = this.frames.removeFirst();
+					byte[] full = this.fullFrames.removeFirst();
+					if (keep) {
+						reducedPreviews.addLast(preview);
+						reducedFullFrames.addLast(full);
+					}
+					keep = !keep;
+				}
+				this.frames.addAll(reducedPreviews);
+				this.fullFrames.addAll(reducedFullFrames);
+				this.frameStride = Math.min(Integer.MAX_VALUE / 2, this.frameStride * 2);
+				this.cycleStart = Long.MIN_VALUE;
 			}
+		}
+
+		private long estimatedBytes() {
+			return (long) this.frames.size() * (MAP_SIZE * MAP_SIZE + this.largestFullFrameBytes);
 		}
 
 		private synchronized byte[] frameAt(long gameTime, int fps) {
 			if (this.frames.isEmpty()) {
 				return null;
 			}
-			int index = (int) Math.floorMod(gameTime * Math.max(1, fps) / 20L, this.frames.size());
+			int index = frameIndex(gameTime, fps);
 			return this.frames.stream().skip(index).findFirst().orElse(this.frames.getFirst());
 		}
 
@@ -1131,8 +1289,54 @@ public final class CameraAnimatedMapPlaybackSystem {
 			if (this.frames.isEmpty()) {
 				return -1L;
 			}
-			long index = Math.floorMod(gameTime * Math.max(1, fps) / 20L, this.frames.size());
-			return ((long) this.frames.size() << 32) | index;
+			long index = frameIndex(gameTime, fps);
+			return ((long) this.frameStride << 48) | ((long) this.frames.size() << 32) | index;
+		}
+
+		private synchronized byte[] fullFrameAt(long gameTime, int fps, int mapsWide, int mapsHigh) {
+			if (this.frames.isEmpty()) return null;
+			int index = frameIndex(gameTime, fps);
+			byte[] frame = this.fullFrames.stream().skip(index).findFirst().orElse(null);
+			if (frame != null && frame.length > 0) {
+				return frame;
+			}
+			// Large C2S packets can be unavailable for an older/reconnecting
+			// volunteer renderer.  The compact preview still arrives, so keep the
+			// placed print alive and animated by scaling it over the complete wall.
+			// A later full frame transparently replaces this fallback.
+			byte[] preview = this.frames.stream().skip(index).findFirst().orElse(null);
+			return scalePreviewToFullFrame(preview, mapsWide, mapsHigh);
+		}
+
+		private static byte[] scalePreviewToFullFrame(byte[] preview, int mapsWide, int mapsHigh) {
+			if (preview == null || preview.length != MAP_SIZE * MAP_SIZE || mapsWide <= 0 || mapsHigh <= 0) return null;
+			int width = mapsWide * MAP_SIZE;
+			int height = mapsHigh * MAP_SIZE;
+			byte[] scaled = new byte[width * height];
+			for (int y = 0; y < height; y++) {
+				int sourceY = y * MAP_SIZE / height;
+				for (int x = 0; x < width; x++) {
+					scaled[y * width + x] = preview[sourceY * MAP_SIZE + x * MAP_SIZE / width];
+				}
+			}
+			return scaled;
+		}
+
+		private int frameIndex(long gameTime, int fps) {
+			long logicalFrame = Math.floorDiv(gameTime * Math.max(1, fps), 20L * Math.max(1, this.frameStride));
+			if (this.cycleStart == Long.MIN_VALUE || logicalFrame < this.cycleStart) {
+				this.cycleStart = logicalFrame;
+				this.cycleLength = this.frames.size();
+			}
+			long elapsed = logicalFrame - this.cycleStart;
+			if (elapsed >= this.cycleLength) {
+				this.cycleStart += this.cycleLength;
+				this.cycleLength = this.frames.size();
+				elapsed = logicalFrame - this.cycleStart;
+				this.cycleStart += (elapsed / this.cycleLength) * this.cycleLength;
+				elapsed %= this.cycleLength;
+			}
+			return (int) elapsed;
 		}
 	}
 

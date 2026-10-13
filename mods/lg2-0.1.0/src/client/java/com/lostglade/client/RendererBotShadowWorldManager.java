@@ -78,7 +78,7 @@ public final class RendererBotShadowWorldManager {
 	}
 
 	public static void register() {
-		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> clear());
+		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> clearUnretainedAfterJoin());
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> retireForDisconnect());
 		ClientTickEvents.END_CLIENT_TICK.register(RendererBotShadowWorldManager::tickShadowWorlds);
 		ClientPlayNetworking.registerGlobalReceiver(
@@ -122,6 +122,27 @@ public final class RendererBotShadowWorldManager {
 		}
 	}
 
+	/** Restores a checkpoint only when the original in-memory timeline is absent. */
+	public static boolean ensureVideoTimeline(Minecraft client, UUID sessionId) {
+		synchronized (LOCK) {
+			if (SHADOW_SESSIONS.containsKey(sessionId) && VIDEO_TIMELINES.containsKey(sessionId)) return true;
+			try {
+				VideoShadowTimeline timeline = VideoShadowTimeline.load(sessionId);
+				if (timeline == null) return false;
+				ShadowLevelSession session = createShadowSession(client, timeline.initPayload());
+				if (session == null) return false;
+				SHADOW_SESSIONS.put(sessionId, session);
+				VIDEO_TIMELINES.put(sessionId, timeline);
+				LAST_RENDER_ACTIVITY_AT.put(sessionId, System.currentTimeMillis());
+				PENDING_SESSION_DESTROY_AT.remove(sessionId);
+				return true;
+			} catch (Exception exception) {
+				Lg2.LOGGER.error("Failed to restore video history {}", sessionId, exception);
+				return false;
+			}
+		}
+	}
+
 	/** Captures the state that was visible when the server sampled a video pose. */
 	public static void captureVideoFrameSnapshot(UUID sessionId, int frameIndex) {
 		if (sessionId == null || frameIndex < 0) {
@@ -152,7 +173,32 @@ public final class RendererBotShadowWorldManager {
 				return false;
 			}
 			if (current.restoredVideoFrame() == frameIndex) {
+				completeReplayTerrain(client, current, timeline);
 				return true;
+			}
+			// Video replay is monotonic.  Once the first historical scene has been
+			// constructed, advance the same renderer through the packet/chunk deltas
+			// instead of replacing the whole ClientLevel each frame.  Replacing it
+			// caused every visible section to compile from scratch and made a 10 FPS
+			// recording both slow and visually unstable.
+			if (current.replayLocked() && current.restoredVideoFrame() >= 0 && current.restoredVideoFrame() < frameIndex) {
+				VideoShadowTimeline.FrameSnapshot previous = timeline.snapshot(current.restoredVideoFrame());
+				if (previous != null && timeline.isAncestor(previous.chunkNode(), snapshot.chunkNode())) {
+					applyState(current.level(), snapshot.gameTime(), snapshot.dayTime(), snapshot.tickDayTime(), snapshot.raining(), snapshot.rainLevel(), snapshot.thunderLevel());
+					applyViewState(client.getConnection(), current.level(), snapshot.viewDistance(), snapshot.centerChunkX(), snapshot.centerChunkZ());
+					for (VideoShadowTimeline.ChunkNode change : timeline.chunkChangesBetween(previous.chunkNode(), snapshot.chunkNode())) {
+						if (change.packetBytes() == null) {
+							applyForgottenChunk(client, current, change.chunkLong());
+						} else {
+							applyChunkBytes(client, current, change.packetBytes());
+						}
+					}
+					completeReplayTerrain(client, current, timeline);
+					applyShadowPackets(client, current, timeline.packetsBetween(previous.packetCount(), snapshot.packetCount()));
+					current.setRestoredVideoFrame(frameIndex);
+					current.markContentReadyForReplay();
+					return true;
+				}
 			}
 			ShadowLevelSession restored = createShadowSession(client, timeline.initPayload());
 			if (restored == null) {
@@ -168,9 +214,35 @@ public final class RendererBotShadowWorldManager {
 			for (Map.Entry<Long, byte[]> entry : timeline.materializeChunks(snapshot.chunkNode()).entrySet()) {
 				applyChunkBytes(client, restored, entry.getValue());
 			}
+			completeReplayTerrain(client, restored, timeline);
 			applyShadowPackets(client, restored, timeline.packetsThrough(snapshot.packetCount()));
 			restored.markContentReadyForReplay();
 			return true;
+		}
+	}
+
+	private static void completeReplayTerrain(Minecraft client, ShadowLevelSession session, VideoShadowTimeline timeline) {
+		// Snapshot zero is sealed before the initial chunk stream finishes. Keep
+		// its entity/block history, but fill absent terrain from each chunk's FIRST
+		// received baseline. Using latestChunk here would overwrite history.
+		for (var entry : timeline.firstChunks.entrySet()) {
+			if (session.chunkPacketFingerprints.containsKey(entry.getKey())) continue;
+			ChunkPos pos = new ChunkPos(entry.getKey());
+			if (Math.abs((long) pos.x - session.appliedCenterChunkX()) > session.appliedViewDistance
+					|| Math.abs((long) pos.z - session.appliedCenterChunkZ()) > session.appliedViewDistance) continue;
+			applyChunkBytes(client, session, entry.getValue());
+		}
+		session.markContentReadyForReplay();
+	}
+
+	/** True when a scene must use its recorded clock rather than live client interpolation. */
+	public static boolean usesFrozenTime(ClientLevel level) {
+		if (level == null) {
+			return false;
+		}
+		synchronized (LOCK) {
+			ShadowLevelSession session = findSession(level);
+			return session != null && (session.freezeDynamicContent() || session.replayLocked());
 		}
 	}
 
@@ -482,13 +554,36 @@ public final class RendererBotShadowWorldManager {
 
 	private static void retireForDisconnect() {
 		synchronized (LOCK) {
-			DISCONNECT_RETIRED_SESSIONS.addAll(SHADOW_SESSIONS.values());
-			SHADOW_SESSIONS.clear();
-			VIDEO_TIMELINES.clear();
-			LAST_RENDER_ACTIVITY_AT.clear();
-			PENDING_SESSION_DESTROY_AT.clear();
+			for (var entry : VIDEO_TIMELINES.entrySet()) {
+				if (!RendererBotClientVideoRecording.retainsShadowSession(entry.getKey())) continue;
+				try { entry.getValue().save(entry.getKey()); }
+				catch (Exception exception) { Lg2.LOGGER.error("Failed to checkpoint video history {}", entry.getKey(), exception); }
+			}
+			for (var iterator = SHADOW_SESSIONS.entrySet().iterator(); iterator.hasNext();) {
+				var entry = iterator.next();
+				if (RendererBotClientVideoRecording.retainsShadowSession(entry.getKey())) continue;
+				DISCONNECT_RETIRED_SESSIONS.add(entry.getValue());
+				iterator.remove();
+				VIDEO_TIMELINES.remove(entry.getKey());
+				LAST_RENDER_ACTIVITY_AT.remove(entry.getKey());
+				PENDING_SESSION_DESTROY_AT.remove(entry.getKey());
+			}
 			// Camera targets are retired after ~5 s; close their source worlds slightly later.
 			disconnectRetireTicks = 110;
+		}
+	}
+
+	private static void clearUnretainedAfterJoin() {
+		synchronized (LOCK) {
+			for (var iterator = SHADOW_SESSIONS.entrySet().iterator(); iterator.hasNext();) {
+				var entry = iterator.next();
+				if (RendererBotClientVideoRecording.retainsShadowSession(entry.getKey())) continue;
+				closeSession(entry.getValue());
+				VIDEO_TIMELINES.remove(entry.getKey());
+				LAST_RENDER_ACTIVITY_AT.remove(entry.getKey());
+				PENDING_SESSION_DESTROY_AT.remove(entry.getKey());
+				iterator.remove();
+			}
 		}
 	}
 
@@ -789,12 +884,28 @@ public final class RendererBotShadowWorldManager {
 		}
 		ClientboundLevelChunkWithLightPacket packet = RendererBotShadowPacketCodec.decodeChunkPacket(client.getConnection().registryAccess(), packetBytes);
 		ChunkPos chunkPos = new ChunkPos(packet.getX(), packet.getZ());
+		if (!session.isChunkDataNew(chunkPos, packetBytes)) {
+			return;
+		}
 		runWithShadowSession(client.getConnection(), session, () -> {
 			client.getConnection().handleLevelChunkWithLight(packet);
 			session.level().pollLightUpdates();
 		});
 		session.rememberChunkData(chunkPos, packetBytes);
 		session.levelRenderer().onChunkReadyToRender(chunkPos);
+		session.markContentChanged();
+	}
+
+	private static void applyForgottenChunk(Minecraft client, ShadowLevelSession session, long chunkLong) {
+		if (client == null || client.getConnection() == null || session == null) {
+			return;
+		}
+		ChunkPos chunkPos = new ChunkPos(chunkLong);
+		runWithShadowSession(client.getConnection(), session, () -> {
+			client.getConnection().handleForgetLevelChunk(new ClientboundForgetLevelChunkPacket(chunkPos));
+			session.level().pollLightUpdates();
+		});
+		session.forgetChunk(chunkPos);
 		session.markContentChanged();
 	}
 
@@ -840,6 +951,11 @@ public final class RendererBotShadowWorldManager {
 		for (Map.Entry<UUID, Long> entry : new ArrayList<>(PENDING_SESSION_DESTROY_AT.entrySet())) {
 			UUID sessionId = entry.getKey();
 			Long destroyAt = entry.getValue();
+			if (RendererBotClientVideoRecording.retainsShadowSession(sessionId)) {
+				// Server recovery deliberately stops live shadow updates. A queued
+				// Destroy from the previous connection must not erase its timeline.
+				continue;
+			}
 			if (sessionId == null || destroyAt == null || destroyAt > now) {
 				continue;
 			}
@@ -1131,6 +1247,7 @@ public final class RendererBotShadowWorldManager {
 		private final RendererBotPayloads.RendererBotShadowLevelInitS2CPayload initPayload;
 		private final Map<Integer, FrameSnapshot> frames = new HashMap<>();
 		private final List<RendererBotPayloads.ShadowPacketData> packets = new ArrayList<>();
+		private final Map<Long, byte[]> firstChunks = new HashMap<>();
 		private ChunkNode latestChunk;
 		private long gameTime;
 		private long dayTime;
@@ -1154,6 +1271,88 @@ public final class RendererBotShadowWorldManager {
 		}
 
 		private RendererBotPayloads.RendererBotShadowLevelInitS2CPayload initPayload() { return this.initPayload; }
+
+		private static java.nio.file.Path checkpointPath(UUID id) {
+			return com.lostglade.server.CameraMediaCache.videoSourcePath(id.toString()).resolveSibling(id + ".shadow-history");
+		}
+
+		private void save(UUID id) throws java.io.IOException {
+			var buffer = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+			try {
+				writeCheckpoint(buffer);
+				var path = checkpointPath(id);
+				java.nio.file.Files.createDirectories(path.getParent());
+				var temporary = path.resolveSibling(path.getFileName() + ".tmp");
+				try (var output = new java.util.zip.GZIPOutputStream(java.nio.file.Files.newOutputStream(temporary))) {
+					buffer.readBytes(output, buffer.readableBytes());
+				}
+				try { java.nio.file.Files.move(temporary, path, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
+				catch (java.nio.file.AtomicMoveNotSupportedException exception) {
+					java.nio.file.Files.move(temporary, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+				}
+			} finally { buffer.release(); }
+		}
+
+		private static VideoShadowTimeline load(UUID id) throws java.io.IOException {
+			var path = checkpointPath(id);
+			if (!java.nio.file.Files.isRegularFile(path)) return null;
+			try (var input = new java.util.zip.GZIPInputStream(java.nio.file.Files.newInputStream(path))) {
+				var buffer = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(input.readAllBytes()));
+				try {
+					VideoShadowTimeline timeline = readCheckpoint(buffer);
+					if (!id.equals(timeline.initPayload.sessionId())) throw new java.io.IOException("Video history identity mismatch");
+					return timeline;
+				} finally { buffer.release(); }
+			}
+		}
+
+		private void writeCheckpoint(net.minecraft.network.FriendlyByteBuf buffer) {
+			buffer.writeInt(1);
+			RendererBotPayloads.RendererBotShadowLevelInitS2CPayload.STREAM_CODEC.encode(buffer, this.initPayload);
+			var nodes = new ArrayList<ChunkNode>();
+			for (ChunkNode node = this.latestChunk; node != null; node = node.previous()) nodes.add(node);
+			java.util.Collections.reverse(nodes);
+			var ids = new java.util.IdentityHashMap<ChunkNode, Integer>();
+			buffer.writeInt(nodes.size());
+			for (ChunkNode node : nodes) {
+				ids.put(node, ids.size());
+				buffer.writeLong(node.chunkLong());
+				buffer.writeBoolean(node.packetBytes() != null);
+				if (node.packetBytes() != null) buffer.writeByteArray(node.packetBytes());
+			}
+			buffer.writeInt(this.packets.size());
+			for (var packet : this.packets) { buffer.writeUtf(packet.packetTypeId()); buffer.writeByteArray(packet.packetBytes()); }
+			buffer.writeInt(this.frames.size());
+			for (var entry : this.frames.entrySet()) {
+				FrameSnapshot frame = entry.getValue();
+				buffer.writeInt(entry.getKey()); buffer.writeInt(frame.chunkNode() == null ? -1 : ids.get(frame.chunkNode()));
+				buffer.writeInt(frame.packetCount()); buffer.writeLong(frame.gameTime()); buffer.writeLong(frame.dayTime());
+				buffer.writeBoolean(frame.tickDayTime()); buffer.writeBoolean(frame.raining());
+				buffer.writeFloat(frame.rainLevel()); buffer.writeFloat(frame.thunderLevel());
+				buffer.writeInt(frame.viewDistance()); buffer.writeInt(frame.centerChunkX()); buffer.writeInt(frame.centerChunkZ());
+			}
+		}
+
+		private static VideoShadowTimeline readCheckpoint(net.minecraft.network.FriendlyByteBuf buffer) throws java.io.IOException {
+			if (buffer.readInt() != 1) throw new java.io.IOException("Unsupported video history version");
+			var timeline = new VideoShadowTimeline(RendererBotPayloads.RendererBotShadowLevelInitS2CPayload.STREAM_CODEC.decode(buffer));
+			var nodes = new ArrayList<ChunkNode>();
+			int count = buffer.readInt();
+			for (int i = 0; i < count; i++) {
+				long pos = buffer.readLong(); byte[] bytes = buffer.readBoolean() ? buffer.readByteArray(Integer.MAX_VALUE) : null;
+				timeline.latestChunk = new ChunkNode(timeline.latestChunk, pos, bytes); nodes.add(timeline.latestChunk);
+				if (bytes != null) timeline.firstChunks.putIfAbsent(pos, bytes);
+			}
+			count = buffer.readInt();
+			for (int i = 0; i < count; i++) timeline.packets.add(new RendererBotPayloads.ShadowPacketData(buffer.readUtf(), buffer.readByteArray(Integer.MAX_VALUE)));
+			count = buffer.readInt();
+			for (int i = 0; i < count; i++) {
+				int index = buffer.readInt(); int node = buffer.readInt();
+				timeline.frames.put(index, new FrameSnapshot(node < 0 ? null : nodes.get(node), buffer.readInt(), buffer.readLong(), buffer.readLong(),
+						buffer.readBoolean(), buffer.readBoolean(), buffer.readFloat(), buffer.readFloat(), buffer.readInt(), buffer.readInt(), buffer.readInt()));
+			}
+			return timeline;
+		}
 		private void updateState(RendererBotPayloads.RendererBotShadowLevelStateS2CPayload state) {
 			this.gameTime = state.gameTime(); this.dayTime = state.dayTime(); this.tickDayTime = state.tickDayTime();
 			this.raining = state.raining(); this.rainLevel = state.rainLevel(); this.thunderLevel = state.thunderLevel();
@@ -1164,6 +1363,7 @@ public final class RendererBotShadowWorldManager {
 		private void putChunk(ChunkPos pos, byte[] bytes) {
 			if (pos != null && bytes != null) {
 				this.latestChunk = new ChunkNode(this.latestChunk, pos.toLong(), bytes.clone());
+				this.firstChunks.putIfAbsent(pos.toLong(), this.latestChunk.packetBytes());
 				// The pose packet may arrive a tick before its initial chunk packet.
 				// Fill only such incomplete captures; never overwrite a real historic
 				// snapshot after it has obtained its first world data.
@@ -1188,6 +1388,25 @@ public final class RendererBotShadowWorldManager {
 		}
 		private FrameSnapshot snapshot(int frameIndex) { return this.frames.get(frameIndex); }
 		private List<RendererBotPayloads.ShadowPacketData> packetsThrough(int count) { return List.copyOf(this.packets.subList(0, Math.min(Math.max(0, count), this.packets.size()))); }
+		private List<RendererBotPayloads.ShadowPacketData> packetsBetween(int previousCount, int currentCount) {
+			int from = Math.min(Math.max(0, previousCount), this.packets.size());
+			int to = Math.min(Math.max(from, currentCount), this.packets.size());
+			return List.copyOf(this.packets.subList(from, to));
+		}
+		private boolean isAncestor(ChunkNode ancestor, ChunkNode node) {
+			for (ChunkNode current = node; current != null; current = current.previous()) {
+				if (current == ancestor) return true;
+			}
+			return ancestor == null;
+		}
+		private List<ChunkNode> chunkChangesBetween(ChunkNode previous, ChunkNode current) {
+			List<ChunkNode> reverse = new ArrayList<>();
+			for (ChunkNode node = current; node != null && node != previous; node = node.previous()) {
+				reverse.add(node);
+			}
+			java.util.Collections.reverse(reverse);
+			return reverse;
+		}
 		private Map<Long, byte[]> materializeChunks(ChunkNode node) {
 			Map<Long, byte[]> result = new HashMap<>();
 			for (ChunkNode current = node; current != null; current = current.previous()) {

@@ -36,7 +36,9 @@ public final class RendererBotClientVideoRecording {
 	});
 	private static final String DEFAULT_FFMPEG_BIN = "ffmpeg";
 	private static final long FINISH_TIMEOUT_MS = Long.getLong("lg2.rendererBotVideoFinishTimeoutMs", 30_000L);
-	private static final int MIN_RECORDING_FRAMES = Math.max(2, Integer.getInteger("lg2.rendererBotVideoMinFrames", 2));
+	private static final long COMPLETION_RESEND_INTERVAL_MS = 2_000L;
+	private static final long REPLAY_FRAME_STALL_TIMEOUT_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(30L);
+	private static final int MIN_RECORDING_FRAMES = 1;
 	private static final int MAX_TARGET_FPS = 20;
 	private static final int REMOTE_VIDEO_CHUNK_BYTES = 192 * 1024;
 	private static final long MAX_REMOTE_VIDEO_UPLOAD_BYTES = 96L * 1024L * 1024L;
@@ -51,7 +53,7 @@ public final class RendererBotClientVideoRecording {
 	private static final Map<UUID, PendingRecording> RECORDINGS = new HashMap<>();
 	private static final Map<UUID, Integer> EARLY_FRAME_READY = new HashMap<>();
 	private static final Map<UUID, Map<Integer, RendererBotPayloads.VideoCameraFrame>> EARLY_VIDEO_FRAMES = new HashMap<>();
-	private static final Map<UUID, Boolean> EARLY_SEALS = new HashMap<>();
+	private static final Map<UUID, Integer> EARLY_SEALS = new HashMap<>();
 
 	private RendererBotClientVideoRecording() {
 	}
@@ -62,12 +64,15 @@ public final class RendererBotClientVideoRecording {
 	 */
 	public static boolean hasActiveRecording() {
 		synchronized (LOCK) {
-			return !RECORDINGS.isEmpty();
+			return RECORDINGS.values().stream().anyMatch(PendingRecording::needsRenderWork);
 		}
 	}
 
 	public static void register() {
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> abortAll("Renderer bot disconnected during video recording"));
+		// A server restart is not a user cancellation. Keep the encoder and the
+		// immutable shadow timeline alive so the restored server job can continue
+		// from its last acknowledged frame after JOIN.
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> pauseForServerReconnect());
 		ClientTickEvents.END_CLIENT_TICK.register(RendererBotClientVideoRecording::onClientTick);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload.TYPE,
@@ -78,12 +83,24 @@ public final class RendererBotClientVideoRecording {
 				(payload, context) -> context.client().execute(() -> requestStop(payload.requestId()))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoRecordingTruncateS2CPayload.TYPE,
+				(payload, context) -> context.client().execute(() -> requestTruncate(payload.requestId(), payload.frameCount()))
+		);
+		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoRecordingCancelS2CPayload.TYPE,
 				(payload, context) -> context.client().execute(() -> cancelRecording(payload.requestId()))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoRecordingCompleteAckS2CPayload.TYPE,
+				(payload, context) -> context.client().execute(() -> acknowledgeCompletedRecording(payload.requestId()))
+		);
+		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoRecordingFrameS2CPayload.TYPE,
 				(payload, context) -> context.client().execute(() -> appendCameraFrame(payload))
+		);
+		ClientPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotVideoRecordingFrameSnapshotS2CPayload.TYPE,
+				(payload, context) -> context.client().execute(() -> captureTimelineFrame(payload))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotVideoRecordingFrameReadyS2CPayload.TYPE,
@@ -97,7 +114,28 @@ public final class RendererBotClientVideoRecording {
 			return;
 		}
 		try {
+			synchronized (LOCK) {
+				PendingRecording existing = RECORDINGS.get(payload.requestId());
+				if (existing != null && existing.payload().renderSessionId().equals(payload.renderSessionId())) {
+					existing.reconcileFrames(payload.cameraFrames());
+					// The restarted server restored the same job. Tell it the exact
+					// encoder boundary before it releases the next frame; this also
+					// covers a progress packet that was in flight during disconnect.
+					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingResumeC2SPayload(payload.requestId(), existing.completedFrameCount()));
+					if (existing.firstPreviewFrame != null) {
+						sendLiveVideoFrames(client, List.of(existing), existing.firstPreviewFrame, existing.firstFullFrame);
+					}
+					if (existing.isFinalized()) {
+						existing.resetCompletionDeliveryForReconnect();
+						sendCompletedRecording(existing, existing.completedDurationMs(), existing.completedFps());
+					}
+					return;
+				}
+			}
 			String sourceKey = payload.requestId().toString();
+			if (!RendererBotShadowWorldManager.ensureVideoTimeline(client, payload.renderSessionId())) {
+				throw new IOException("Recorded shadow history is unavailable; cannot recover this video from the current world");
+			}
 			CameraMediaCache.ensureVideoParent(sourceKey);
 			Path tempPath = CameraMediaCache.tempVideoSourcePath(sourceKey);
 			Path finalPath = CameraMediaCache.videoSourcePath(sourceKey);
@@ -127,15 +165,15 @@ public final class RendererBotClientVideoRecording {
 					earlyFrames.entrySet().stream().sorted(Map.Entry.comparingByKey())
 							.forEach(entry -> recording.appendCameraFrame(entry.getKey(), entry.getValue()));
 				}
-				if (EARLY_SEALS.remove(payload.requestId()) != null) {
-					recording.seal();
+				Integer earlySeal = EARLY_SEALS.remove(payload.requestId());
+				if (earlySeal != null) {
+					if (earlySeal == Integer.MAX_VALUE) recording.seal();
+					else recording.truncateAndSeal(earlySeal);
 				}
 				RECORDINGS.put(payload.requestId(), recording);
 			}
-			for (int frameIndex = 0; frameIndex < payload.cameraFrames().size(); frameIndex++) {
-				RendererBotShadowWorldManager.captureVideoFrameSnapshot(payload.renderSessionId(), frameIndex);
-			}
 			RendererClientDiagnostics.cameraVideoStarted(payload.requestId());
+			ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingResumeC2SPayload(payload.requestId(), 0));
 			Lg2.LOGGER.info(
 					"Renderer bot preparing video recording {} at {} fps {}x{} (capture {}x{})",
 					payload.requestId(),
@@ -160,8 +198,17 @@ public final class RendererBotClientVideoRecording {
 			if (recording != null) {
 				recording.seal();
 			} else {
-				EARLY_SEALS.put(requestId, Boolean.TRUE);
+				EARLY_SEALS.put(requestId, Integer.MAX_VALUE);
 			}
+		}
+	}
+
+	private static void requestTruncate(UUID requestId, int frameCount) {
+		if (requestId == null) return;
+		synchronized (LOCK) {
+			PendingRecording recording = RECORDINGS.get(requestId);
+			if (recording != null) recording.truncateAndSeal(frameCount);
+			else EARLY_SEALS.put(requestId, Math.max(1, frameCount));
 		}
 	}
 
@@ -188,7 +235,8 @@ public final class RendererBotClientVideoRecording {
 		current.encoderProcess.destroyForcibly();
 		try {
 			Files.deleteIfExists(current.tempPath());
-			Files.deleteIfExists(current.finalPath());
+			// A finalized file may already be the server's playback source when
+			// both processes share the cache. Cancellation only removes temp work.
 		} catch (IOException ignored) {
 		}
 	}
@@ -201,11 +249,20 @@ public final class RendererBotClientVideoRecording {
 			PendingRecording recording = RECORDINGS.get(payload.requestId());
 			if (recording != null) {
 				recording.appendCameraFrame(payload.frameIndex(), payload.frame());
-				RendererBotShadowWorldManager.captureVideoFrameSnapshot(recording.payload().renderSessionId(), payload.frameIndex());
 			} else {
 				EARLY_VIDEO_FRAMES.computeIfAbsent(payload.requestId(), ignored -> new HashMap<>()).put(payload.frameIndex(), payload.frame());
 			}
 		}
+	}
+
+	private static void captureTimelineFrame(RendererBotPayloads.RendererBotVideoRecordingFrameSnapshotS2CPayload payload) {
+		if (payload == null || payload.requestId() == null || payload.renderSessionId() == null || payload.frameIndex() < 0) {
+			return;
+		}
+		// This packet follows the matching level, chunk and entity packets on the
+		// reliable play stream. Capturing here keeps a player pose and its world
+		// state in the same video frame instead of racing the camera-pose packet.
+		RendererBotShadowWorldManager.captureVideoFrameSnapshot(payload.renderSessionId(), payload.frameIndex());
 	}
 
 	private static void markReplayFrameReady(RendererBotPayloads.RendererBotVideoRecordingFrameReadyS2CPayload payload) {
@@ -230,8 +287,22 @@ public final class RendererBotClientVideoRecording {
 		if (activeRecordings.isEmpty()) {
 			return;
 		}
+		long nowMillis = System.currentTimeMillis();
 		for (PendingRecording current : activeRecordings) {
 			if (current == null) {
+				continue;
+			}
+			if (clearStalledRecordingFrame(current, System.nanoTime())) {
+				Lg2.LOGGER.warn("Renderer bot retrying stalled replay frame {} for {}", current.currentFrameIndex(), current.payload().requestId());
+			}
+			if (current.isFinalized()) {
+				if (current.shouldRetryCompletion(nowMillis)) {
+					// TCP is reliable, but this is intentionally idempotent: a final
+					// progress packet lost during reconnect must not leave the issued
+					// print at (total - 1) / total while the MP4 waits for its ACK.
+					sendReplayProgress(current.payload().requestId(), current.completedFrameCount());
+					sendCompletedRecording(current, current.completedDurationMs(), current.completedFps());
+				}
 				continue;
 			}
 			if (current.isReplayComplete() && !current.frameInFlight && !current.finishScheduled) {
@@ -258,36 +329,50 @@ public final class RendererBotClientVideoRecording {
 		}
 		if (recordingToRender != null) {
 			PendingRecording recording = recordingToRender;
-			if (!markRecordingFrameInFlight(recording.payload().requestId(), nowNanos)) {
+			// Restore before drawing. Restoring in the readback callback rendered
+			// the preceding scene and could replace the active world mid-render.
+			if (!RendererBotShadowWorldManager.restoreVideoFrameSnapshot(
+					client, recording.payload().renderSessionId(), recording.currentFrameIndex())) {
+				if (recording.snapshotWaitStartedNanos == 0L) recording.snapshotWaitStartedNanos = nowNanos;
+				if (nowNanos - recording.snapshotWaitStartedNanos > REPLAY_FRAME_STALL_TIMEOUT_NANOS) {
+					String message = "Recorded world snapshot missing for video frame " + recording.currentFrameIndex();
+					sendFailure(recording.payload().requestId(), message);
+					abortRecording(recording.payload().requestId(), message);
+				}
+				return;
+			}
+			recording.snapshotWaitStartedNanos = 0L;
+			long frameAttempt = markRecordingFrameInFlight(recording.payload().requestId(), nowNanos);
+			if (frameAttempt <= 0L) {
 				return;
 			}
 			boolean rendered = RendererBotOffscreenWorldRenderer.renderToTarget(
 					client,
 					recordingRenderRequest(recording, recording.captureWidth, recording.captureHeight),
-					renderTarget -> completeDeferredReplayRender(client, recording, renderTarget)
+					renderTarget -> completeDeferredReplayRender(client, recording, renderTarget, frameAttempt)
 			);
 			if (!rendered) {
-				clearRecordingFrameInFlight(recording.payload().requestId());
+				clearRecordingFrameInFlight(recording.payload().requestId(), frameAttempt);
 			} else {
 				RendererClientDiagnostics.cameraFrameRendered();
 			}
 		}
 	}
 
-	private static void dispatchRecordingFrame(Minecraft client, PendingRecording recording, RenderTarget renderTarget) {
+	private static void dispatchRecordingFrame(Minecraft client, PendingRecording recording, RenderTarget renderTarget, long frameAttempt) {
 		try {
 			CompletableFuture<NativeImage> sourceFuture = takeScreenshotFuture(renderTarget);
 			CompletableFuture<byte[]> previewFuture;
 			CompletableFuture<byte[]> fullFuture;
 			synchronized (LOCK) {
 				PendingRecording active = RECORDINGS.get(recording.payload().requestId());
-				if (active == null || active != recording || active.isReplayComplete()) {
+				if (active == null || active != recording || active.isReplayComplete() || !active.isCurrentFrameAttempt(frameAttempt)) {
 					sourceFuture.thenAccept(image -> {
 						if (image != null) {
 							image.close();
 						}
 					});
-					clearRecordingFrameInFlight(recording.payload().requestId());
+					clearRecordingFrameInFlight(recording.payload().requestId(), frameAttempt);
 					return;
 				}
 				if (active.firstPreviewFrame == null) {
@@ -308,45 +393,39 @@ public final class RendererBotClientVideoRecording {
 							)
 							: CompletableFuture.completedFuture(null);
 				} else {
-					previewFuture = CompletableFuture.completedFuture(active.firstPreviewFrame);
-					fullFuture = CompletableFuture.completedFuture(active.firstFullFrame);
+					// The first frame is only the final file's poster. Subsequent
+					// previews must be generated from this frame's screenshot.
+					previewFuture = CompletableFuture.completedFuture(null);
+					fullFuture = CompletableFuture.completedFuture(null);
 				}
 			}
 			CompletableFuture.allOf(sourceFuture, previewFuture, fullFuture).whenComplete((ignored, throwable) -> {
 				if (throwable != null) {
-					handleRecordingFrameFailure(client, recording, sourceFuture, throwable);
+					handleRecordingFrameFailure(client, recording, sourceFuture, throwable, frameAttempt);
 					return;
 				}
-				RECORD_EXECUTOR.submit(() -> processCapturedFrame(client, List.of(recording), sourceFuture.join(), previewFuture.join(), fullFuture.join()));
+				RECORD_EXECUTOR.submit(() -> processCapturedFrame(client, List.of(recording), sourceFuture.join(), previewFuture.join(), fullFuture.join(), frameAttempt));
 			});
 		} catch (Throwable throwable) {
 			Lg2.LOGGER.warn("Renderer bot recording dispatch failed, falling back to screenshot path for {}", recording.payload().requestId(), throwable);
-			Screenshot.takeScreenshot(renderTarget, image -> RECORD_EXECUTOR.submit(() -> processCapturedFrame(client, List.of(recording), image)));
+			Screenshot.takeScreenshot(renderTarget, image -> RECORD_EXECUTOR.submit(() -> processCapturedFrame(client, List.of(recording), image, frameAttempt)));
 		}
 	}
 
-	private static void completeDeferredReplayRender(Minecraft client, PendingRecording recording, RenderTarget renderTarget) {
-		if (!RendererBotShadowWorldManager.restoreVideoFrameSnapshot(
-				client,
-				recording.payload().renderSessionId(),
-				recording.currentFrameIndex()
-		)) {
-			clearRecordingFrameInFlight(recording.payload().requestId());
-			return;
-		}
+	private static void completeDeferredReplayRender(Minecraft client, PendingRecording recording, RenderTarget renderTarget, long frameAttempt) {
 		RendererBotShadowWorldManager.RenderReadiness readiness =
 				RendererBotShadowWorldManager.inspectRenderReadiness(recording.payload().renderSessionId());
 		if (readiness == null || !readiness.settled()) {
 			// Keep rendering this same replay pose until every visible terrain section
 			// is compiled. The server retains the same shadow session and only slides
 			// its chunk window after the encoded frame asks for the next pose.
-			clearRecordingFrameInFlight(recording.payload().requestId());
+			clearRecordingFrameInFlight(recording.payload().requestId(), frameAttempt);
 			return;
 		}
-		dispatchRecordingFrame(client, recording, renderTarget);
+		dispatchRecordingFrame(client, recording, renderTarget, frameAttempt);
 	}
 
-	private static void processCapturedFrame(Minecraft client, List<PendingRecording> recordings, NativeImage image) {
+	private static void processCapturedFrame(Minecraft client, List<PendingRecording> recordings, NativeImage image, long frameAttempt) {
 		List<PendingRecording> recordingsStartedNow = new ArrayList<>();
 		try {
 			int width = image.getWidth();
@@ -354,10 +433,11 @@ public final class RendererBotClientVideoRecording {
 			int[] pixels = image.makePixelArray();
 			byte[] rgb = argbToRgb(pixels);
 			byte[] livePreview = quantizeScaledFrame(pixels, width, height, 128, 128);
+			byte[] liveFull = quantizeScaledFrame(pixels, width, height, recordings.getFirst().payload().fullWidth(), recordings.getFirst().payload().fullHeight());
 			synchronized (LOCK) {
 				for (PendingRecording current : recordings) {
 					PendingRecording active = RECORDINGS.get(current.payload().requestId());
-					if (active == null || active != current) {
+					if (active == null || active != current || !active.isCurrentFrameAttempt(frameAttempt)) {
 						continue;
 					}
 					if (current.firstPreviewFrame == null) {
@@ -371,7 +451,7 @@ public final class RendererBotClientVideoRecording {
 				}
 			}
 			notifyRecordingStarts(client, recordingsStartedNow);
-			sendLiveVideoPreviews(client, recordings, livePreview);
+			sendLiveVideoFrames(client, recordings, livePreview, liveFull);
 		} catch (Exception exception) {
 			client.execute(() -> {
 				for (PendingRecording current : recordings) {
@@ -383,21 +463,24 @@ public final class RendererBotClientVideoRecording {
 		} finally {
 			image.close();
 			client.execute(() -> {
-				int nextReplayFrame = -1;
+				int completedFrameCount = -1;
 				synchronized (LOCK) {
 					for (PendingRecording current : recordings) {
 						PendingRecording active = RECORDINGS.get(current.payload().requestId());
-						if (active != null && active == current) {
-							active.frameInFlight = false;
-							nextReplayFrame = active.advanceAfterEncodedFrame();
+						if (active != null && active == current && active.finishFrameAttempt(frameAttempt)) {
+							completedFrameCount = active.advanceAfterEncodedFrame();
 							if (active.isReplayComplete() && !active.finishScheduled) {
 								scheduleFinish(client, active);
 							}
 						}
 					}
 				}
-				if (nextReplayFrame >= 0) {
-					sendReplayProgress(recordings.getFirst().payload().requestId(), nextReplayFrame);
+				if (completedFrameCount >= 0) {
+					// The server uses this number as both its next replay index and
+					// the visible completed-frame count.  Sending the terminal size
+					// is essential: the former -1 sentinel left every finished video
+					// visually stuck at (total - 1) / total, commonly 99%.
+					sendReplayProgress(recordings.getFirst().payload().requestId(), completedFrameCount);
 				}
 			});
 		}
@@ -408,7 +491,8 @@ public final class RendererBotClientVideoRecording {
 			List<PendingRecording> recordings,
 			NativeImage image,
 			byte[] previewFrame,
-			byte[] fullFrame
+			byte[] fullFrame,
+			long frameAttempt
 	) {
 		List<PendingRecording> recordingsStartedNow = new ArrayList<>();
 		try {
@@ -417,10 +501,12 @@ public final class RendererBotClientVideoRecording {
 			byte[] livePreview = previewFrame != null && previewFrame.length >= 128 * 128
 					? previewFrame
 					: quantizeScaledFrame(pixels, image.getWidth(), image.getHeight(), 128, 128);
+			byte[] liveFull = fullFrame != null ? fullFrame : quantizeScaledFrame(pixels,
+					image.getWidth(), image.getHeight(), recordings.getFirst().payload().fullWidth(), recordings.getFirst().payload().fullHeight());
 			synchronized (LOCK) {
 				for (PendingRecording current : recordings) {
 					PendingRecording active = RECORDINGS.get(current.payload().requestId());
-					if (active == null || active != current) {
+					if (active == null || active != current || !active.isCurrentFrameAttempt(frameAttempt)) {
 						continue;
 					}
 					if (current.firstPreviewFrame == null) {
@@ -438,7 +524,7 @@ public final class RendererBotClientVideoRecording {
 				}
 			}
 			notifyRecordingStarts(client, recordingsStartedNow);
-			sendLiveVideoPreviews(client, recordings, livePreview);
+			sendLiveVideoFrames(client, recordings, livePreview, liveFull);
 		} catch (Exception exception) {
 			client.execute(() -> {
 				for (PendingRecording current : recordings) {
@@ -450,21 +536,20 @@ public final class RendererBotClientVideoRecording {
 		} finally {
 			image.close();
 			client.execute(() -> {
-				int nextReplayFrame = -1;
+				int completedFrameCount = -1;
 				synchronized (LOCK) {
 					for (PendingRecording current : recordings) {
 						PendingRecording active = RECORDINGS.get(current.payload().requestId());
-						if (active != null && active == current) {
-							active.frameInFlight = false;
-							nextReplayFrame = active.advanceAfterEncodedFrame();
+						if (active != null && active == current && active.finishFrameAttempt(frameAttempt)) {
+							completedFrameCount = active.advanceAfterEncodedFrame();
 							if (active.isReplayComplete() && !active.finishScheduled) {
 								scheduleFinish(client, active);
 							}
 						}
 					}
 				}
-				if (nextReplayFrame >= 0) {
-					sendReplayProgress(recordings.getFirst().payload().requestId(), nextReplayFrame);
+				if (completedFrameCount >= 0) {
+					sendReplayProgress(recordings.getFirst().payload().requestId(), completedFrameCount);
 				}
 			});
 		}
@@ -474,12 +559,13 @@ public final class RendererBotClientVideoRecording {
 			Minecraft client,
 			PendingRecording recording,
 			CompletableFuture<NativeImage> sourceFuture,
-			Throwable throwable
+			Throwable throwable,
+			long frameAttempt
 	) {
 		if (sourceFuture.isDone() && !sourceFuture.isCompletedExceptionally() && !sourceFuture.isCancelled()) {
 			RECORD_EXECUTOR.submit(() -> {
 				try {
-					processCapturedFrame(client, List.of(recording), sourceFuture.join());
+					processCapturedFrame(client, List.of(recording), sourceFuture.join(), frameAttempt);
 				} catch (Throwable fallbackThrowable) {
 					client.execute(() -> {
 						sendFailure(recording.payload().requestId(), fallbackThrowable.getMessage());
@@ -532,18 +618,18 @@ public final class RendererBotClientVideoRecording {
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingProgressC2SPayload(requestId, frameIndex));
 	}
 
-	private static void sendLiveVideoPreviews(Minecraft client, List<PendingRecording> recordings, byte[] preview) {
-		if (client == null || recordings == null || preview == null || preview.length != 128 * 128) {
+	private static void sendLiveVideoFrames(Minecraft client, List<PendingRecording> recordings, byte[] preview, byte[] fullFrame) {
+		if (client == null || recordings == null || preview == null || preview.length != 128 * 128 || fullFrame == null || fullFrame.length == 0) {
 			return;
 		}
 		client.execute(() -> {
-			if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingPreviewFrameC2SPayload.TYPE)) {
+			if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingRenderedFrameC2SPayload.TYPE)) {
 				return;
 			}
 			for (PendingRecording recording : recordings) {
 				if (recording != null && isActiveRecording(recording.payload().requestId())) {
-					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingPreviewFrameC2SPayload(
-							recording.payload().requestId(), preview
+					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingRenderedFrameC2SPayload(
+							recording.payload().requestId(), preview, fullFrame
 					));
 				}
 			}
@@ -585,9 +671,13 @@ public final class RendererBotClientVideoRecording {
 			int targetFps = Math.clamp(current.payload().targetFps(), 1, MAX_TARGET_FPS);
 			long durationMs = current.frameCount * 1_000L / targetFps;
 			Lg2.LOGGER.info("Renderer bot finished video recording {} with {} frames ({} ms)", current.payload().requestId(), current.frameCount, durationMs);
+			current.markFinalized(durationMs, targetFps);
 			client.execute(() -> {
+				// A completed encoder is still a pending camera transaction until
+				// its MP4 and completion packet have actually reached a server.
+				// During a restart canSend() is false for a moment; retain this
+				// exact finished job and retry it on JOIN instead of losing 99%.
 				sendCompletedRecording(current, durationMs, targetFps);
-				clearIfMatching(current.payload().requestId());
 			});
 		} catch (Exception exception) {
 			client.execute(() -> {
@@ -598,39 +688,45 @@ public final class RendererBotClientVideoRecording {
 		}
 	}
 
-	private static void sendCompletedRecording(PendingRecording recording, long durationMs, int targetFps) {
-		if (recording == null || !isActiveRecording(recording.payload().requestId())) return;
+	private static boolean sendCompletedRecording(PendingRecording recording, long durationMs, int targetFps) {
+		if (recording == null || !isActiveRecording(recording.payload().requestId())) return false;
+		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload.TYPE)) return false;
 		boolean remoteVolunteer = RendererBotVolunteerClient.isVolunteerRenderer() && !RendererBotClientMode.isEnabled();
 		String videoPath = recording.finalPath().toAbsolutePath().toString();
 		if (remoteVolunteer) {
-			try {
-				long size = Files.size(recording.finalPath());
-				if (size <= 0L || size > MAX_REMOTE_VIDEO_UPLOAD_BYTES) {
-					throw new IOException("Remote renderer video is too large to upload: " + size + " bytes");
+			if (recording.needsRemoteUpload()) {
+				try {
+					long size = Files.size(recording.finalPath());
+					if (size <= 0L || size > MAX_REMOTE_VIDEO_UPLOAD_BYTES) {
+						throw new IOException("Remote renderer video is too large to upload: " + size + " bytes");
+					}
+					byte[] videoBytes = Files.readAllBytes(recording.finalPath());
+					int chunks = Math.max(1, (videoBytes.length + REMOTE_VIDEO_CHUNK_BYTES - 1) / REMOTE_VIDEO_CHUNK_BYTES);
+					if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoFileChunkC2SPayload.TYPE)) return false;
+					for (int index = 0; index < chunks; index++) {
+						int start = index * REMOTE_VIDEO_CHUNK_BYTES;
+						int end = Math.min(videoBytes.length, start + REMOTE_VIDEO_CHUNK_BYTES);
+						byte[] chunk = java.util.Arrays.copyOfRange(videoBytes, start, end);
+						ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoFileChunkC2SPayload(
+								recording.payload().requestId(), index, index + 1 == chunks, chunk
+						));
+					}
+					recording.markRemoteUploadSent();
+				} catch (IOException exception) {
+					sendFailure(recording.payload().requestId(), exception.getMessage());
+					return false;
 				}
-				byte[] videoBytes = Files.readAllBytes(recording.finalPath());
-				int chunks = Math.max(1, (videoBytes.length + REMOTE_VIDEO_CHUNK_BYTES - 1) / REMOTE_VIDEO_CHUNK_BYTES);
-				if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoFileChunkC2SPayload.TYPE)) return;
-				for (int index = 0; index < chunks; index++) {
-					int start = index * REMOTE_VIDEO_CHUNK_BYTES;
-					int end = Math.min(videoBytes.length, start + REMOTE_VIDEO_CHUNK_BYTES);
-					byte[] chunk = java.util.Arrays.copyOfRange(videoBytes, start, end);
-					ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoFileChunkC2SPayload(
-							recording.payload().requestId(), index, index + 1 == chunks, chunk
-					));
-				}
-				videoPath = "";
-			} catch (IOException exception) {
-				sendFailure(recording.payload().requestId(), exception.getMessage());
-				return;
 			}
+			videoPath = "";
 		}
-		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotVideoRecordingCompleteC2SPayload(
 				recording.payload().requestId(), durationMs, targetFps, videoPath,
 				recording.firstPreviewFrame, recording.firstFullFrame
 		));
-		RendererClientDiagnostics.cameraVideoCompleted(recording.payload().requestId());
+		if (recording.markCompletionSent()) {
+			RendererClientDiagnostics.cameraVideoCompleted(recording.payload().requestId());
+		}
+		return true;
 	}
 
 	public static void onVolunteerPreferenceChanged(boolean enabled) {
@@ -651,6 +747,42 @@ public final class RendererBotClientVideoRecording {
 			EARLY_VIDEO_FRAMES.clear();
 			EARLY_SEALS.clear();
 		}
+	}
+
+	private static void pauseForServerReconnect() {
+		synchronized (LOCK) {
+			if (!RECORDINGS.isEmpty()) {
+				Lg2.LOGGER.info("Renderer bot paused {} video render(s) while the server reconnects", RECORDINGS.size());
+			}
+			for (PendingRecording recording : RECORDINGS.values()) {
+				if (recording != null) {
+					recording.resetCompletionDeliveryForReconnect();
+				}
+			}
+		}
+	}
+
+	private static void acknowledgeCompletedRecording(UUID requestId) {
+		if (requestId == null) {
+			return;
+		}
+		synchronized (LOCK) {
+			PendingRecording recording = RECORDINGS.get(requestId);
+			if (recording != null && recording.isFinalized()) {
+				RECORDINGS.remove(requestId);
+			}
+		}
+	}
+
+	/** Used by the shadow manager to retain only worlds that an encoder can resume. */
+	public static boolean retainsShadowSession(UUID renderSessionId) {
+		if (renderSessionId == null) return false;
+		synchronized (LOCK) {
+			for (PendingRecording recording : RECORDINGS.values()) {
+				if (recording != null && renderSessionId.equals(recording.payload().renderSessionId())) return true;
+			}
+		}
+		return false;
 	}
 
 	private static void abortRecording(UUID requestId, String message) {
@@ -758,17 +890,16 @@ public final class RendererBotClientVideoRecording {
 		return rgb;
 	}
 
-	private static boolean markRecordingFrameInFlight(UUID requestId, long nowNanos) {
+	private static long markRecordingFrameInFlight(UUID requestId, long nowNanos) {
 		synchronized (LOCK) {
 			PendingRecording recording = RECORDINGS.get(requestId);
 			if (recording == null
 					|| recording.frameInFlight
 					|| recording.finishScheduled
 					|| !recording.canRenderCurrentFrame()) {
-				return false;
+				return 0L;
 			}
-			recording.frameInFlight = true;
-			return true;
+			return recording.beginFrameAttempt(nowNanos);
 		}
 	}
 
@@ -781,12 +912,22 @@ public final class RendererBotClientVideoRecording {
 		recording.frameCount++;
 	}
 
-	private static void clearRecordingFrameInFlight(UUID requestId) {
+	private static void clearRecordingFrameInFlight(UUID requestId, long frameAttempt) {
 		synchronized (LOCK) {
 			PendingRecording recording = RECORDINGS.get(requestId);
 			if (recording != null) {
-				recording.frameInFlight = false;
+				recording.cancelFrameAttempt(frameAttempt);
 			}
+		}
+	}
+
+	private static boolean clearStalledRecordingFrame(PendingRecording recording, long nowNanos) {
+		if (recording == null) {
+			return false;
+		}
+		synchronized (LOCK) {
+			PendingRecording active = RECORDINGS.get(recording.payload().requestId());
+			return active == recording && active.clearFrameAttemptIfStalled(nowNanos);
 		}
 	}
 
@@ -925,9 +1066,19 @@ public final class RendererBotClientVideoRecording {
 		private byte[] firstPreviewFrame;
 		private byte[] firstFullFrame;
 		private volatile boolean frameInFlight;
+		private long frameAttemptSequence;
+		private long activeFrameAttempt;
+		private long frameInFlightSinceNanos;
+		private long snapshotWaitStartedNanos;
 		private volatile boolean finishScheduled;
 		private volatile int frameCount;
 		private boolean recordingStartNotified;
+		private boolean finalized;
+		private long completedDurationMs;
+		private int completedFps;
+		private boolean remoteUploadSent;
+		private boolean completionSent;
+		private long lastCompletionSentAtMillis;
 		private int nextFrameIndex;
 		private int serverReadyFrameIndex = -1;
 		private boolean sealed;
@@ -968,8 +1119,82 @@ public final class RendererBotClientVideoRecording {
 					&& this.serverReadyFrameIndex == this.nextFrameIndex;
 		}
 
+		private boolean needsRenderWork() {
+			// Retention for upload/ACK or reconnect is not ownership of the GPU.
+			return !this.finishScheduled && !this.finalized && !this.isReplayComplete();
+		}
+
+		private long beginFrameAttempt(long nowNanos) {
+			this.frameInFlight = true;
+			this.activeFrameAttempt = ++this.frameAttemptSequence;
+			this.frameInFlightSinceNanos = nowNanos;
+			return this.activeFrameAttempt;
+		}
+
+		private boolean isCurrentFrameAttempt(long attempt) {
+			return this.frameInFlight && attempt > 0L && attempt == this.activeFrameAttempt;
+		}
+
+		private void cancelFrameAttempt(long attempt) {
+			if (this.isCurrentFrameAttempt(attempt)) {
+				this.frameInFlight = false;
+				this.frameInFlightSinceNanos = 0L;
+			}
+		}
+
+		private boolean finishFrameAttempt(long attempt) {
+			if (!this.isCurrentFrameAttempt(attempt)) {
+				return false;
+			}
+			this.frameInFlight = false;
+			this.frameInFlightSinceNanos = 0L;
+			return true;
+		}
+
+		private boolean clearFrameAttemptIfStalled(long nowNanos) {
+			if (!this.frameInFlight || this.frameInFlightSinceNanos <= 0L
+					|| nowNanos - this.frameInFlightSinceNanos < REPLAY_FRAME_STALL_TIMEOUT_NANOS) {
+				return false;
+			}
+			// Invalidate the old asynchronous callback before retrying the same
+			// camera pose.  If it wakes up later it can only release its image;
+			// it cannot encode a duplicate frame or advance replay progress.
+			this.activeFrameAttempt = ++this.frameAttemptSequence;
+			this.frameInFlight = false;
+			this.frameInFlightSinceNanos = 0L;
+			return true;
+		}
+
 		private boolean isReplayComplete() {
 			return this.sealed && this.nextFrameIndex >= this.cameraFrames.size();
+		}
+
+		private boolean isFinalized() { return this.finalized; }
+		private long completedDurationMs() { return this.completedDurationMs; }
+		private int completedFps() { return this.completedFps; }
+		private void markFinalized(long durationMs, int fps) {
+			this.finalized = true;
+			this.completedDurationMs = Math.max(0L, durationMs);
+			this.completedFps = Math.max(1, fps);
+			this.remoteUploadSent = false;
+			this.completionSent = false;
+			this.lastCompletionSentAtMillis = 0L;
+		}
+
+		private boolean needsRemoteUpload() { return !this.remoteUploadSent; }
+		private void markRemoteUploadSent() { this.remoteUploadSent = true; }
+		private boolean shouldRetryCompletion(long nowMillis) {
+			return this.lastCompletionSentAtMillis <= 0L || nowMillis - this.lastCompletionSentAtMillis >= COMPLETION_RESEND_INTERVAL_MS;
+		}
+		private boolean markCompletionSent() {
+			boolean firstSubmission = !this.completionSent;
+			this.completionSent = true;
+			this.lastCompletionSentAtMillis = System.currentTimeMillis();
+			return firstSubmission;
+		}
+		private void resetCompletionDeliveryForReconnect() {
+			this.remoteUploadSent = false;
+			this.lastCompletionSentAtMillis = 0L;
 		}
 
 		private boolean markRecordingStartNotified() {
@@ -994,11 +1219,15 @@ public final class RendererBotClientVideoRecording {
 			return this.nextFrameIndex;
 		}
 
-		/** Returns the next pose that must be prepared by the server, or -1 while awaiting one. */
+		private int completedFrameCount() {
+			return this.nextFrameIndex;
+		}
+
+		/** Returns how many frames have been fully written, including the terminal frame. */
 		private int advanceAfterEncodedFrame() {
 			this.nextFrameIndex++;
 			this.serverReadyFrameIndex = -1;
-			return this.nextFrameIndex < this.cameraFrames.size() || !this.sealed ? this.nextFrameIndex : -1;
+			return this.nextFrameIndex;
 		}
 
 		private void appendCameraFrame(int frameIndex, RendererBotPayloads.VideoCameraFrame frame) {
@@ -1013,6 +1242,24 @@ public final class RendererBotClientVideoRecording {
 		}
 
 		private void seal() {
+			this.sealed = true;
+		}
+
+		private void reconcileFrames(List<RendererBotPayloads.VideoCameraFrame> frames) {
+			// Server shutdown can journal a pose whose packet never reached us.
+			// Also respect a shorter, deliberately truncated recovery journal.
+			int keep = Math.max(this.nextFrameIndex + (this.frameInFlight ? 1 : 0), frames.size());
+			while (this.cameraFrames.size() > keep) this.cameraFrames.removeLast();
+			for (int i = this.cameraFrames.size(); i < frames.size(); i++) this.cameraFrames.add(frames.get(i));
+			this.serverReadyFrameIndex = -1;
+		}
+
+		private void truncateAndSeal(int frameCount) {
+			// An already dispatched GPU readback must be allowed to write once;
+			// force-closing it corrupts the encoder's MP4 stream.
+			int minimum = this.frameInFlight ? this.nextFrameIndex + 1 : this.nextFrameIndex;
+			int keep = Math.max(1, Math.max(minimum, Math.min(frameCount, this.cameraFrames.size())));
+			while (this.cameraFrames.size() > keep) this.cameraFrames.removeLast();
 			this.sealed = true;
 		}
 	}

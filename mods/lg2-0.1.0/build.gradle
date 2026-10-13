@@ -404,7 +404,16 @@ tasks.register("runCameraCapturePolicyTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
+tasks.register("runCameraVideoPipelineTest", JavaExec) {
+	group = "verification"
+	description = "Exercises video sealing, final snapshots and growing preview playback."
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "com.lostglade.server.CameraVideoPipelineTest"
+	dependsOn(tasks.named("testClasses"))
+}
+
 tasks.named("check") {
+	dependsOn(tasks.named("runCameraVideoPipelineTest"))
 	dependsOn(tasks.named("runDailyMaintenanceTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseEightTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseSevenTest"))
