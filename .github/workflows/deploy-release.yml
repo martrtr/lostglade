@@ -28,6 +28,13 @@ jobs:
       - name: Build exact release archive
         run: ./deploy/msk/assemble-release.sh "$GITHUB_SHA"
 
+      - name: Publish the matching client companion
+        uses: actions/upload-artifact@v4
+        with:
+          name: lg2-client-${{ github.sha }}
+          path: mods/lg2-0.1.0/build/libs/lg2-client-*.jar
+          if-no-files-found: error
+
       - name: Install password SSH client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends sshpass
 

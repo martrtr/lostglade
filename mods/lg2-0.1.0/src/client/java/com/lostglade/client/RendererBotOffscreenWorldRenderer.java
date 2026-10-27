@@ -156,7 +156,8 @@ public final class RendererBotOffscreenWorldRenderer {
 			var previousLights = RenderSystem.getShaderLights();
 			boolean previousSmartCull = client.smartCull;
 
-			try (var ignored = RendererBotSceneContext.enter((RendererBotShadowLevel) renderLevel)) {
+			try (var ignored = RendererBotSceneContext.enter((RendererBotShadowLevel) renderLevel);
+				 var compatibility = RendererSceneCompatibility.frame(sessionState.fogRenderer)) {
 				offscreenRenderActive = true;
 				activeCamera = cameraState.camera();
 				activeLightTexture = sessionState.lightTexture;

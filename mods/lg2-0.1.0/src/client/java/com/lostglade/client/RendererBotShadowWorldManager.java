@@ -308,6 +308,13 @@ public final class RendererBotShadowWorldManager {
 		}
 		try {
 			LevelRenderer levelRenderer = session.levelRenderer();
+			var sodium = SodiumRendererCompatibility.readiness(levelRenderer);
+			if (sodium != null) {
+				boolean settled = sodium.settled() && session.contentReady() && session.currentContentRendered() && sodium.visible() > 0;
+				return new RenderReadiness(settled, session.contentRevision(), sodium.visible(),
+						sodium.settled() ? 0 : Math.max(1, sodium.compileQueue()), sodium.settled(),
+						session.contentReady(), session.currentContentRendered(), sodium.settled(), sodium.compileQueue(), sodium.uploadQueue());
+			}
 			SectionRenderDispatcher dispatcher = levelRenderer.getSectionRenderDispatcher();
 			if (dispatcher == null) {
 				return RenderReadiness.unavailable();

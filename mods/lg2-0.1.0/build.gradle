@@ -412,7 +412,15 @@ tasks.register("runCameraVideoPipelineTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"))
 }
 
+tasks.register("runRendererModPolicyTest", JavaExec) {
+	group = "verification"
+	classpath = sourceSets.test.runtimeClasspath + sourceSets.client.output
+	mainClass = "com.lostglade.server.RendererModPolicyTest"
+	dependsOn(tasks.named("testClasses"), tasks.named("clientClasses"))
+}
+
 tasks.named("check") {
+	dependsOn(tasks.named("runRendererModPolicyTest"))
 	dependsOn(tasks.named("runCameraVideoPipelineTest"))
 	dependsOn(tasks.named("runDailyMaintenanceTest"))
 	dependsOn(tasks.named("runYandexMapRenderPhaseEightTest"))

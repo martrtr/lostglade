@@ -197,5 +197,10 @@
   "screen.lg2.settings.map.volunteers_disabled": "player contribution is disabled",
   "screen.lg2.settings.map.disabled": "disabled",
   "screen.lg2.settings.map.waiting_server": "waiting for server",
-  "screen.lg2.settings.unknown": "unknown"
+  "screen.lg2.settings.unknown": "unknown",
+  "screen.lg2.settings.clean_profile_hint": "While contributing: local resource packs and Iris shaders are temporarily disabled. They return when contribution is off or you leave the server.",
+  "screen.lg2.settings.environment.visual_mod": "conflicting mod: %s",
+  "screen.lg2.settings.environment.preparing": "preparing clean visuals",
+  "screen.lg2.settings.environment.unsupported": "unsupported renderer version",
+  "screen.lg2.settings.environment.profile_error": "visual profile error; turn contribution off to restore"
 }

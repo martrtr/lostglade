@@ -153,11 +153,18 @@ public final class YandexMapRenderClient {
 		requestCapabilityRefresh();
 	}
 
+	public static void onVisualProfileChanging() {
+		if (activeJob != null) failActiveJob("render-environment-changed");
+	}
+
 	public static WorkerStatus status() {
 		return status;
 	}
 
 	public static String displayStatusReason() {
+		if (localStatusReason != null && (localStatusReason.equals("preparing-render-profile")
+				|| localStatusReason.startsWith("render-profile-") || localStatusReason.startsWith("blocked-visual-mod:")
+				|| localStatusReason.startsWith("unsupported-") || localStatusReason.startsWith("resource-pack-active:"))) return localStatusReason;
 		if ("profiling-resources".equals(localStatusReason)
 				|| "resource-profile-error".equals(localStatusReason)
 				|| "disabled-by-client".equals(localStatusReason)

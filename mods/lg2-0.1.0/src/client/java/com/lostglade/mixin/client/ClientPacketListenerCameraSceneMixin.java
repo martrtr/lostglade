@@ -1,6 +1,7 @@
 package com.lostglade.mixin.client;
 
 import com.lostglade.client.RendererBotShadowLevel;
+import com.lostglade.client.maprender.YandexMapRenderWorld;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
@@ -17,11 +18,13 @@ public abstract class ClientPacketListenerCameraSceneMixin {
 
 	@Redirect(method = "*", at = @At(value = "FIELD", target = "Lnet/minecraft/client/Minecraft;levelRenderer:Lnet/minecraft/client/renderer/LevelRenderer;"))
 	private LevelRenderer lg2$sceneRenderer(Minecraft client) {
+		if (level instanceof YandexMapRenderWorld map) return map.sceneRenderer();
 		return level instanceof RendererBotShadowLevel scene ? scene.sceneRenderer() : client.levelRenderer;
 	}
 
 	@Redirect(method = "*", at = @At(value = "FIELD", target = "Lnet/minecraft/client/Minecraft;particleEngine:Lnet/minecraft/client/particle/ParticleEngine;"))
 	private ParticleEngine lg2$sceneParticles(Minecraft client) {
+		if (level instanceof YandexMapRenderWorld map) return map.sceneParticles();
 		return level instanceof RendererBotShadowLevel scene ? scene.sceneParticles() : client.particleEngine;
 	}
 }

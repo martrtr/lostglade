@@ -4,6 +4,12 @@
 	"plugin": "com.lostglade.mixin.Lg2MixinPlugin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
+		"SodiumCameraWorldMixin",
+		"SodiumCameraFogMixin",
+		"VoxyCameraRendererMixin",
+		"VoxyCameraWorldMixin",
+		"DistantHorizonsCameraRenderMixin",
+		"DistantHorizonsCameraChunksMixin",
 		"ClientLevelMapDataAccessor",
 		"ClientLevelCameraSceneMixin",
 		"ClientPacketListenerCameraSceneMixin",

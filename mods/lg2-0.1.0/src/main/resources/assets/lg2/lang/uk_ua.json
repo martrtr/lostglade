@@ -192,5 +192,10 @@
   "screen.lg2.settings.map.volunteers_disabled": "участь гравців вимкнена",
   "screen.lg2.settings.map.disabled": "вимкнені",
   "screen.lg2.settings.map.waiting_server": "очікування сервера",
-  "screen.lg2.settings.unknown": "невідомо"
+  "screen.lg2.settings.unknown": "невідомо",
+  "screen.lg2.settings.clean_profile_hint": "Під час участі локальні ресурспаки та шейдери Iris тимчасово вимикаються. Вони повернуться після вимкнення участі або виходу із сервера.",
+  "screen.lg2.settings.environment.visual_mod": "несумісний мод: %s",
+  "screen.lg2.settings.environment.preparing": "підготовка чистого зображення",
+  "screen.lg2.settings.environment.unsupported": "непідтримувана версія рендера",
+  "screen.lg2.settings.environment.profile_error": "помилка профілю; вимкніть участь для відновлення"
 }

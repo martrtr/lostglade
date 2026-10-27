@@ -192,5 +192,10 @@
   "screen.lg2.settings.map.volunteers_disabled": "プレイヤー協力が無効です",
   "screen.lg2.settings.map.disabled": "無効",
   "screen.lg2.settings.map.waiting_server": "サーバー待機中",
-  "screen.lg2.settings.unknown": "不明"
+  "screen.lg2.settings.unknown": "不明",
+  "screen.lg2.settings.clean_profile_hint": "参加中はローカルリソースパックとIrisシェーダーを一時的に無効化します。参加をオフにするかサーバーを退出すると復元します。",
+  "screen.lg2.settings.environment.visual_mod": "競合するMod: %s",
+  "screen.lg2.settings.environment.preparing": "描画設定を準備中",
+  "screen.lg2.settings.environment.unsupported": "未対応のレンダラー版",
+  "screen.lg2.settings.environment.profile_error": "描画設定エラー：参加をオフにして復元"
 }

@@ -5,24 +5,29 @@ import com.lostglade.network.RendererBotPayloads;
 import com.lostglade.client.maprender.YandexMapRenderClient;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 
 /**
  * Lets a regular player donate their GPU to camera rendering without changing
  * their game mode or exposing their client as the permanent renderer bot.
  */
 public final class RendererBotVolunteerClient {
+	private static String lastAdmission;
 	private RendererBotVolunteerClient() {
 	}
 
 	public static void register() {
-		// A renderer is admitted only after the server tells us which mod IDs it also has.
-		// Matching is ID-only by design: client/server version differences are irrelevant here.
-		// New processes start with no manifest, and DISCONNECT clears the old session.
-		// Do not clear it from JOIN: the server may send its manifest during its own
-		// JOIN callback before Fabric fires the client JOIN event. Clearing here caused
-		// a race where valid shared mods (for example voicechat_api) became "third-party".
+		RendererVisualProfile.register();
+		// The manifest identifies a Lostglade connection before changing local visuals.
+		// Do not clear it from JOIN: a server payload can arrive before that event.
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
 				RendererBotRenderEnvironmentGuard.beginServerSession());
+		ClientTickEvents.END_CLIENT_TICK.register(client -> {
+			if (client.getConnection() == null || !RendererBotRenderEnvironmentGuard.hasServerModManifest()) return;
+			var environment = RendererBotRenderEnvironmentGuard.inspect(client);
+			String admission = rendererRequested() + ":" + environment.compatible() + ":" + environment.reason();
+			if (!admission.equals(lastAdmission)) sendRendererHello();
+		});
 		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotServerModIdsS2CPayload.TYPE,
 				(payload, context) -> context.client().execute(() -> {
@@ -46,6 +51,7 @@ public final class RendererBotVolunteerClient {
 			if (rendererRequested() && !RendererBotRenderEnvironmentGuard.hasServerModManifest()) return;
 			RendererBotRenderEnvironmentGuard.Compatibility environment = RendererBotRenderEnvironmentGuard.inspect(net.minecraft.client.Minecraft.getInstance());
 			boolean admitted = rendererRequested() && environment.compatible();
+			lastAdmission = rendererRequested() + ":" + environment.compatible() + ":" + environment.reason();
 			Lg2.LOGGER.info("Renderer contribution {}: {}", admitted ? "admitted" : "not admitted", environment.reason());
 			ClientPlayNetworking.send(new RendererBotPayloads.RendererBotHelloC2SPayload(
 					RendererBotPayloads.PROTOCOL_VERSION,
@@ -61,6 +67,7 @@ public final class RendererBotVolunteerClient {
 	public static void setVolunteerRendererEnabled(boolean enabled) {
 		if (RendererBotClientMode.isEnabled()) return;
 		LostgladeClientSettings.setCameraRendererEnabled(enabled);
+		RendererVisualProfile.preferenceChanged();
 		RendererBotClientCapture.onVolunteerPreferenceChanged(enabled);
 		RendererBotClientVideoRecording.onVolunteerPreferenceChanged(enabled);
 		sendRendererHello();
@@ -69,6 +76,7 @@ public final class RendererBotVolunteerClient {
 
 	/** Applies a changed shared render budget without discarding its percentage. */
 	public static void onRenderBudgetChanged(boolean previouslyEnabled) {
+		RendererVisualProfile.preferenceChanged();
 		boolean enabled = LostgladeClientSettings.isRenderContributionEnabled();
 		if (previouslyEnabled != enabled) {
 			RendererBotClientCapture.onVolunteerPreferenceChanged(enabled);

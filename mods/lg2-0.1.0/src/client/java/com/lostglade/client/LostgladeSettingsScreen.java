@@ -81,6 +81,7 @@ final class LostgladeSettingsScreen extends Screen {
 			@Override
 			protected void applyValue() { boolean wasEnabled = LostgladeClientSettings.isRenderContributionEnabled(); int budget = percent(this.value); this.value = budget / 100.0D; LostgladeClientSettings.setRenderBudgetPercent(budget); RendererBotVolunteerClient.onRenderBudgetChanged(wasEnabled); YandexMapRenderClient.requestCapabilityRefresh(); this.updateMessage(); }
 		});
+		this.renderBudgetSlider.setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.translatable("screen.lg2.settings.clean_profile_hint")));
 		this.renderStatusTop = row + CONTROL_HEIGHT + CONTROL_GAP;
 		this.renderStatusTitle = this.addStatusLine(contentLeft, this.renderStatusTop, contentWidth);
 		this.renderStatusState = this.addStatusLine(contentLeft, this.renderStatusTop + STATUS_LINE_STEP, contentWidth);
@@ -143,9 +144,12 @@ final class LostgladeSettingsScreen extends Screen {
 	}
 
 	private static Component environmentDescription(String reason) {
-		if (reason != null && reason.startsWith("third-party-client-mod:")) {
-			return Component.translatable("screen.lg2.settings.environment.third_party_mod");
+		if (reason != null && (reason.startsWith("blocked-visual-mod:") || reason.startsWith("unsupported-renderer:"))) {
+			return Component.translatable("screen.lg2.settings.environment.visual_mod", reason.substring(reason.indexOf(':') + 1));
 		}
+		if ("preparing-render-profile".equals(reason)) return Component.translatable("screen.lg2.settings.environment.preparing");
+		if (reason != null && reason.startsWith("unsupported-")) return Component.translatable("screen.lg2.settings.environment.unsupported");
+		if (reason != null && reason.startsWith("render-profile-")) return Component.translatable("screen.lg2.settings.environment.profile_error");
 		if (reason != null && reason.startsWith("resource-pack-active:")) {
 			return Component.translatable("screen.lg2.settings.environment.resource_pack");
 		}
@@ -157,6 +161,8 @@ final class LostgladeSettingsScreen extends Screen {
 	}
 
 	private static Component mapReason(String reason) {
+		if (reason != null && (reason.equals("preparing-render-profile") || reason.startsWith("render-profile-")
+				|| reason.startsWith("blocked-visual-mod:") || reason.startsWith("unsupported-"))) return environmentDescription(reason);
 		return switch (reason) {
 			case "shader-pack-active" -> Component.translatable("screen.lg2.settings.map.disable_shaders");
 			case "resource-profile-mismatch" -> Component.translatable("screen.lg2.settings.map.resource_mismatch");

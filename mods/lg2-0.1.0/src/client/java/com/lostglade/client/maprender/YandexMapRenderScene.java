@@ -182,16 +182,17 @@ public final class YandexMapRenderScene implements AutoCloseable {
 
 	public RenderReadiness inspectReadiness() {
 		ensureOpen();
+		var sodium = com.lostglade.client.SodiumRendererCompatibility.readiness(this.levelRenderer);
 		SectionRenderDispatcher dispatcher = this.levelRenderer.getSectionRenderDispatcher();
-		if (dispatcher == null) {
+		if (dispatcher == null && sodium == null) {
 			return RenderReadiness.unavailable(this.contentRevision);
 		}
-		boolean allSectionsRendered = this.levelRenderer.hasRenderedAllSections();
-		int compileQueue = dispatcher.getCompileQueueSize();
-		int uploadQueue = dispatcher.getToUpload();
+		boolean allSectionsRendered = sodium == null ? this.levelRenderer.hasRenderedAllSections() : sodium.settled();
+		int compileQueue = sodium == null ? dispatcher.getCompileQueueSize() : sodium.compileQueue();
+		int uploadQueue = sodium == null ? dispatcher.getToUpload() : sodium.uploadQueue();
 		int visibleSections = this.levelRenderer.countRenderedSections();
 		SectionOcclusionGraphAccessor graph = (SectionOcclusionGraphAccessor) this.levelRenderer.getSectionOcclusionGraph();
-		var fullUpdateTask = graph.lg2$getFullUpdateTask();
+		var fullUpdateTask = sodium == null ? graph.lg2$getFullUpdateTask() : null;
 		boolean graphTaskPresent = fullUpdateTask != null;
 		boolean graphTaskDone = fullUpdateTask != null && fullUpdateTask.isDone();
 		int loadedChunks = this.level.getChunkSource().getLoadedChunksCount();
@@ -207,7 +208,7 @@ public final class YandexMapRenderScene implements AutoCloseable {
 				}
 			}
 		}
-		boolean graphNeedsFullUpdate = graph.lg2$needsFullUpdate();
+		boolean graphNeedsFullUpdate = sodium == null ? graph.lg2$needsFullUpdate() : !sodium.settled();
 		boolean settled = MapRenderReadinessPolicy.isSettled(
 				allSectionsRendered, compileQueue, uploadQueue,
 				graphNeedsFullUpdate, graphTaskPresent, graphTaskDone,
