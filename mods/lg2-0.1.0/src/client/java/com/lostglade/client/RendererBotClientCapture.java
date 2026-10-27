@@ -40,13 +40,21 @@ import java.util.concurrent.Executors;
 
 public final class RendererBotClientCapture {
 	private static final Object LOCK = new Object();
-	// A settled camera sends immediately; this only bounds heavy scenes that
-	// need extra time to finish compiling every visible section.
-	private static final long PHOTO_CAPTURE_TIMEOUT_MS = Long.getLong("lg2.rendererBotLocalCaptureTimeoutMs", 58_000L);
-	private static final long LIVE_STREAM_FIRST_FRAME_TIMEOUT_MS = 14_000L;
+	private static boolean previousRenderWasPhoto;
+	// A request which never obtains its first off-screen render is broken (for
+	// example, its renderer was disabled). Once rendering has started, however,
+	// terrain compilation is intentionally unbounded: a distant open view must
+	// finish loading instead of turning into a failed or partial photograph.
+	private static final long FIRST_CAPTURE_RENDER_TIMEOUT_MS = Long.getLong("lg2.rendererBotFirstCaptureRenderTimeoutMs", 40_000L);
+	private static final long LIVE_STREAM_FIRST_FRAME_TIMEOUT_MS = Long.getLong("lg2.rendererBotLiveStreamFirstFrameTimeoutMs", 14_000L);
 	private static final long RECENT_FRAME_TTL_MS = Long.getLong("lg2.rendererBotRecentFrameTtlMs", 175L);
 	private static final int DEFAULT_WARMUP_FRAMES = Math.max(1, Integer.getInteger("lg2.rendererBotWarmupFrames", 2));
-	private static final int CAPTURE_REQUIRED_SETTLED_RENDERS = Math.max(1, Integer.getInteger("lg2.rendererBotStableCaptureProbes", 2));
+	// A renderer-owned empty section queue is the completion barrier.  A second
+	// probe merely protects the handoff between the compiler and the render pass;
+	// it is intentionally short so an enclosed photo does not acquire a fixed
+	// multi-second shutter delay.
+	private static final int CAPTURE_REQUIRED_SETTLED_RENDERS = Math.max(2, Integer.getInteger("lg2.rendererBotStableCaptureProbes", 2));
+	private static final long PHOTO_WARMUP_INTERVAL_NANOS = 100_000_000L;
 	private static final int CAPTURE_THREADS = Math.max(1, Math.min(
 			Integer.getInteger("lg2.rendererBotCaptureThreads", recommendedCaptureThreads()),
 			recommendedCaptureThreads()
@@ -107,6 +115,10 @@ public final class RendererBotClientCapture {
 				(payload, context) -> context.client().execute(() -> beginCapture(payload, context.client()))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(
+				RendererBotPayloads.RendererBotCaptureCancelS2CPayload.TYPE,
+				(payload, context) -> context.client().execute(() -> clearPendingCapture(payload.requestId()))
+		);
+		ClientPlayNetworking.registerGlobalReceiver(
 				RendererBotPayloads.RendererBotLiveStreamStartS2CPayload.TYPE,
 				(payload, context) -> context.client().execute(() -> beginLiveStream(payload, context.client()))
 		);
@@ -139,7 +151,7 @@ public final class RendererBotClientCapture {
 		CapturedFrame cached = latestFrame;
 		if (cached != null && cached.matches(payload) && cached.capturedAtMillis() + RECENT_FRAME_TTL_MS >= now) {
 			Lg2.LOGGER.info("Renderer bot reusing hot cached frame for {}", payload.requestId());
-			sendFrame(payload, cached.previewPixels(), cached.fullPixels());
+			sendFrame(payload, cached.fullPixels());
 			clearPendingCapture(payload.requestId());
 			return;
 		}
@@ -237,21 +249,23 @@ public final class RendererBotClientCapture {
 		// requests queued without converting that intentional pause into a timeout.
 		boolean handVideoActive = RendererBotClientVideoRecording.hasActiveRecording();
 		for (PendingCapture capture : captures) {
-			if (!handVideoActive && capture != null && !capture.screenshotRequested() && now - capture.requestStartedAt() >= PHOTO_CAPTURE_TIMEOUT_MS) {
+			if (!handVideoActive && capture != null && !capture.hasRenderedFrame()
+					&& now - capture.requestStartedAt() >= FIRST_CAPTURE_RENDER_TIMEOUT_MS) {
 				RendererBotShadowWorldManager.RenderReadiness readiness =
 						RendererBotShadowWorldManager.inspectRenderReadiness(capture.payload().renderSessionId());
 				Lg2.LOGGER.warn(
-					"Renderer bot capture {} timed out (contentReady={}, frameRendered={}, allSections={}, queues={}/{}, visibleSections={}, revision={})",
+					"Renderer bot capture {} timed out (contentReady={}, frameRendered={}, allSections={}, queues={}/{}, visibleSections={}, dirtyVisibleSections={}, revision={})",
 					capture.payload().requestId(),
 					readiness.contentReady(),
 					readiness.currentContentRendered(),
 					readiness.allSectionsRendered(),
-						readiness.compileQueueSize(),
-						readiness.uploadQueueSize(),
-						readiness.visibleSections(),
-						readiness.contentRevision()
+					readiness.compileQueueSize(),
+					readiness.uploadQueueSize(),
+					readiness.visibleSections(),
+					readiness.dirtyVisibleSections(),
+					readiness.contentRevision()
 				);
-				sendFailure(capture.payload(), "Renderer bot client did not produce a rendered frame in time");
+				sendFailure(capture.payload(), "Renderer bot did not produce an initial photo frame in time: " + readiness);
 				clearPendingCapture(capture.payload().requestId());
 			}
 		}
@@ -427,20 +441,20 @@ public final class RendererBotClientCapture {
 					activeCaptures++;
 				}
 			}
-			if (activeCaptures >= LostgladeClientSettings.maxParallelCaptures()) {
-				return false;
-			}
-			for (PendingCapture capture : PENDING_CAPTURES.values()) {
-				if (capture == null || capture.screenshotRequested()) {
-					continue;
+			if (activeCaptures < LostgladeClientSettings.maxParallelCaptures()) {
+				for (PendingCapture capture : PENDING_CAPTURES.values()) {
+					if (capture == null || capture.screenshotRequested() || !capture.canScheduleRender(nowNanos)) {
+						continue;
+					}
+					if (captureToRender == null || capture.lastRenderAttemptNanos < captureToRender.lastRenderAttemptNanos
+							|| (capture.lastRenderAttemptNanos == captureToRender.lastRenderAttemptNanos
+									&& capture.requestStartedAt() < captureToRender.requestStartedAt())) {
+						captureToRender = capture;
+					}
 				}
-				if (captureToRender == null || capture.requestStartedAt() < captureToRender.requestStartedAt()) {
-					captureToRender = capture;
-				}
 			}
-			// Do not let a background monitor stream issue a second off-screen render
-			// while a full camera frame is warming up or being read back.
-			if (captureToRender == null && PENDING_CAPTURES.isEmpty() && !RendererBotClientVideoRecording.hasActiveRecording()) {
+			// Both classes must advance: photo mesh uploads run during photo passes.
+			if (!RendererBotClientVideoRecording.hasActiveRecording()) {
 				for (LiveStreamSession liveStream : LIVE_STREAM_SESSIONS.values()) {
 					if (liveStream == null || !liveStream.canScheduleFrame()) {
 						continue;
@@ -465,13 +479,15 @@ public final class RendererBotClientCapture {
 				}
 			}
 		}
-		if (captureToRender != null) {
+		if (com.lostglade.server.CameraCaptureReadinessPolicy.choosePhoto(
+				captureToRender != null, liveStreamToRender != null, previousRenderWasPhoto)) {
+			previousRenderWasPhoto = true;
 			PendingCapture capture = captureToRender;
 			RendererBotShadowWorldManager.hideEntityFromSession(
 					capture.payload().renderSessionId(),
 					capture.payload().hiddenEntityUuid()
 			);
-			if (!markPendingCaptureRequested(capture.payload().requestId())) {
+			if (!markPendingCaptureRequested(capture.payload().requestId(), nowNanos)) {
 				return false;
 			}
 			RendererBotOffscreenWorldRenderer.RenderRequest request = captureRenderRequest(capture.payload());
@@ -479,16 +495,17 @@ public final class RendererBotClientCapture {
 					client,
 					request,
 					renderTarget -> {
-						if (capture.finalCaptureReady()) {
+						if (capture.finalCaptureReady() && RendererBotShadowWorldManager.inspectRenderReadiness(request.sessionId()).settled()) {
 							dispatchFinalCapture(client, capture, renderTarget);
 						} else {
-							dispatchCaptureReadinessProbe(capture, request);
+							dispatchCaptureReadinessProbe(client, capture, request, renderTarget);
 						}
 					}
 			);
 			if (!rendered) {
 				clearPendingCaptureRequested(capture.payload().requestId());
 			} else {
+				capture.markRenderedFrame();
 				RendererClientDiagnostics.cameraFrameRendered();
 			}
 			return rendered;
@@ -497,6 +514,7 @@ public final class RendererBotClientCapture {
 			return false;
 		}
 		LiveStreamSession liveStream = liveStreamToRender;
+		previousRenderWasPhoto = false;
 		hideLiveStreamCameraCarriers(liveStream.payload());
 		boolean rendered = RendererBotGpuCaptureBackend.isAvailable()
 				? RendererBotOffscreenWorldRenderer.renderToTarget(
@@ -534,13 +552,32 @@ public final class RendererBotClientCapture {
 	 * image and can be unavailable while an off-screen framebuffer is active.
 	 */
 	private static void dispatchCaptureReadinessProbe(
+			Minecraft client,
 			PendingCapture capture,
-			RendererBotOffscreenWorldRenderer.RenderRequest request
+			RendererBotOffscreenWorldRenderer.RenderRequest request,
+			RenderTarget renderTarget
 	) {
+		dispatchProgressPreview(client, capture, renderTarget);
 		completeCaptureReadinessProbe(
 				capture,
 				RendererBotShadowWorldManager.inspectRenderReadiness(request.sessionId())
 		);
+	}
+
+	private static void dispatchProgressPreview(Minecraft client, PendingCapture capture, RenderTarget renderTarget) {
+		if (capture == null || renderTarget == null || !capture.markProgressPreviewRequested()) return;
+		try {
+			RendererBotGpuCaptureBackend.captureQuantizedFrame(renderTarget, 128, 128, true)
+					.whenComplete((pixels, throwable) -> client.execute(() -> {
+						capture.clearProgressPreviewRequested();
+						if (throwable == null && pixels != null && isPendingCapture(capture.payload().requestId())
+								&& ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotPreviewFrameC2SPayload.TYPE)) {
+							ClientPlayNetworking.send(new RendererBotPayloads.RendererBotPreviewFrameC2SPayload(capture.payload().requestId(), pixels));
+						}
+					}));
+		} catch (Throwable ignored) {
+			capture.clearProgressPreviewRequested();
+		}
 	}
 
 	private static void completeCaptureReadinessProbe(
@@ -558,13 +595,15 @@ public final class RendererBotClientCapture {
 			}
 			current.clearScreenshotRequested();
 			ready = current.observeReadinessProbe(readiness);
+			current.sendProgressIfChanged(readiness, ready);
 		}
 		if (ready) {
 			Lg2.LOGGER.debug(
-					"Renderer bot camera {} settled after {} probe renders (visibleSections={})",
+					"Renderer bot camera {} settled after {} probe renders (visibleSections={}, dirtyVisibleSections={})",
 					capture.payload().requestId(),
 					capture.probeCount(),
-					readiness.visibleSections()
+					readiness.visibleSections(),
+					readiness.dirtyVisibleSections()
 			);
 		}
 	}
@@ -580,27 +619,19 @@ public final class RendererBotClientCapture {
 	private static void dispatchGpuCapture(Minecraft client, PendingCapture capture, RenderTarget renderTarget) {
 		RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload = capture.payload();
 		try {
-			CompletableFuture<byte[]> previewFuture = RendererBotGpuCaptureBackend.captureQuantizedFrame(
-					renderTarget,
-					payload.previewWidth(),
-					payload.previewHeight(),
-					true
-			);
-			CompletableFuture<byte[]> fullFuture = payload.previewWidth() == payload.fullWidth() && payload.previewHeight() == payload.fullHeight()
-					? previewFuture
-					: RendererBotGpuCaptureBackend.captureQuantizedFrame(
+			CompletableFuture<byte[]> fullFuture = RendererBotGpuCaptureBackend.captureQuantizedFrame(
 							renderTarget,
 							payload.fullWidth(),
 							payload.fullHeight(),
 							true
-					);
+			);
 			CompletableFuture<NativeImage> sourceFuture = takeScreenshotFuture(renderTarget);
-			CompletableFuture.allOf(previewFuture, fullFuture, sourceFuture).whenComplete((ignored, throwable) -> {
+			CompletableFuture.allOf(fullFuture, sourceFuture).whenComplete((ignored, throwable) -> {
 				if (throwable != null) {
 					handleGpuCaptureFailure(client, capture, sourceFuture, throwable);
 					return;
 				}
-				CAPTURE_EXECUTOR.submit(() -> completeGpuCapture(client, payload, sourceFuture, previewFuture, fullFuture));
+				CAPTURE_EXECUTOR.submit(() -> completeGpuCapture(client, payload, sourceFuture, fullFuture));
 			});
 		} catch (Throwable throwable) {
 			Lg2.LOGGER.warn("Renderer bot GPU capture path failed before completion, falling back to CPU capture for {}", payload.requestId(), throwable);
@@ -668,14 +699,17 @@ public final class RendererBotClientCapture {
 			Minecraft client,
 			RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload,
 			CompletableFuture<NativeImage> sourceFuture,
-			CompletableFuture<byte[]> previewFuture,
 			CompletableFuture<byte[]> fullFuture
 	) {
 		try (NativeImage sourceImage = sourceFuture.join()) {
 			persistPhotoSource(payload, sourceImage);
-			byte[] previewPixels = previewFuture.join();
 			byte[] fullPixels = fullFuture.join();
+			// The server renders the final map directly.  Reuse that result for the
+			// legacy preview packet rather than failing the photo on a second GPU
+			// readback with a different size.
+			byte[] previewPixels = fullPixels;
 			latestFrame = new CapturedFrame(
+					payload.requestId(), payload.renderSessionId(),
 					payload.dimensionId(),
 					payload.followEntityUuid(),
 					payload.hiddenEntityUuid(),
@@ -694,7 +728,7 @@ public final class RendererBotClientCapture {
 					System.currentTimeMillis()
 			);
 			client.execute(() -> {
-				sendFrame(payload, previewPixels, fullPixels);
+				sendFrame(payload, fullPixels);
 				clearPendingCapture(payload.requestId());
 			});
 		} catch (Throwable throwable) {
@@ -787,19 +821,10 @@ public final class RendererBotClientCapture {
 			for (PendingCapture capture : captures) {
 				RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload = capture.payload();
 				persistPhotoSource(payload, image);
-				CompletableFuture<byte[]> previewFuture = CompletableFuture.supplyAsync(
-						() -> quantizeFrame(pixels, width, height, payload.previewWidth(), payload.previewHeight()),
-						CAPTURE_EXECUTOR
-				);
-				CompletableFuture<byte[]> fullFuture = payload.previewWidth() == payload.fullWidth() && payload.previewHeight() == payload.fullHeight()
-						? previewFuture.thenApply(bytes -> bytes)
-						: CompletableFuture.supplyAsync(
-								() -> quantizeFrame(pixels, width, height, payload.fullWidth(), payload.fullHeight()),
-								CAPTURE_EXECUTOR
-						);
-				byte[] previewPixels = previewFuture.join();
-				byte[] fullPixels = fullFuture.join();
+				byte[] fullPixels = quantizeFrame(pixels, width, height, payload.fullWidth(), payload.fullHeight());
+				byte[] previewPixels = fullPixels;
 				latestFrame = new CapturedFrame(
+						payload.requestId(), payload.renderSessionId(),
 						payload.dimensionId(),
 						payload.followEntityUuid(),
 						payload.hiddenEntityUuid(),
@@ -818,7 +843,7 @@ public final class RendererBotClientCapture {
 						System.currentTimeMillis()
 				);
 				client.execute(() -> {
-					sendFrame(payload, previewPixels, fullPixels);
+					sendFrame(payload, fullPixels);
 					clearPendingCapture(payload.requestId());
 				});
 			}
@@ -1146,11 +1171,9 @@ public final class RendererBotClientCapture {
 		}
 	}
 
-	private static void sendFrame(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, byte[] previewPixels, byte[] fullPixels) {
+	private static void sendFrame(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, byte[] fullPixels) {
 		if (payload == null || !isPendingCapture(payload.requestId())) return;
-		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotPreviewFrameC2SPayload.TYPE)
-				|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotFullFrameC2SPayload.TYPE)) return;
-		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotPreviewFrameC2SPayload(payload.requestId(), previewPixels));
+		if (!ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotFullFrameC2SPayload.TYPE)) return;
 		ClientPlayNetworking.send(new RendererBotPayloads.RendererBotFullFrameC2SPayload(payload.requestId(), fullPixels));
 		RendererClientDiagnostics.cameraPhotoCompleted(payload.requestId());
 	}
@@ -1183,13 +1206,13 @@ public final class RendererBotClientCapture {
 		}
 	}
 
-	private static boolean markPendingCaptureRequested(UUID requestId) {
+	private static boolean markPendingCaptureRequested(UUID requestId, long nowNanos) {
 		synchronized (LOCK) {
 			PendingCapture capture = PENDING_CAPTURES.get(requestId);
 			if (capture == null || capture.screenshotRequested()) {
 				return false;
 			}
-			capture.markScreenshotRequested();
+			capture.markScreenshotRequested(nowNanos);
 			return true;
 		}
 	}
@@ -1433,10 +1456,17 @@ public final class RendererBotClientCapture {
 		private final RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload;
 		private final long requestStartedAt;
 		private boolean screenshotRequested;
+		private boolean renderedFrame;
 		private boolean finalCaptureReady;
 		private int probeCount;
 		private int stableProbeCount;
 		private long stableContentRevision = Long.MIN_VALUE;
+		private int stableVisibleSections = -1;
+		private long nextProbeAtNanos;
+		private long lastRenderAttemptNanos;
+		private long lastProgressPreviewAtMillis;
+		private boolean progressPreviewRequested;
+		private int lastReportedProgress = -1;
 
 		private PendingCapture(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload, long requestStartedAt) {
 			this.payload = payload;
@@ -1457,8 +1487,24 @@ public final class RendererBotClientCapture {
 			return this.screenshotRequested;
 		}
 
-		private void markScreenshotRequested() {
+		private boolean hasRenderedFrame() {
+			return this.renderedFrame;
+		}
+
+		private void markRenderedFrame() {
+			this.renderedFrame = true;
+		}
+
+		private boolean canScheduleRender(long nowNanos) {
+			return this.finalCaptureReady || nowNanos >= this.nextProbeAtNanos;
+		}
+
+		private void markScreenshotRequested(long nowNanos) {
+			this.lastRenderAttemptNanos = nowNanos;
 			this.screenshotRequested = true;
+			if (!this.finalCaptureReady) {
+				this.nextProbeAtNanos = nowNanos + PHOTO_WARMUP_INTERVAL_NANOS;
+			}
 		}
 
 		private void clearScreenshotRequested() {
@@ -1469,6 +1515,47 @@ public final class RendererBotClientCapture {
 			return this.finalCaptureReady;
 		}
 
+		private boolean markProgressPreviewRequested() {
+			long now = System.currentTimeMillis();
+			if (this.progressPreviewRequested || now - this.lastProgressPreviewAtMillis < 250L) return false;
+			this.progressPreviewRequested = true;
+			this.lastProgressPreviewAtMillis = now;
+			return true;
+		}
+
+		private void clearProgressPreviewRequested() {
+			this.progressPreviewRequested = false;
+		}
+
+		private void sendProgressIfChanged(RendererBotShadowWorldManager.RenderReadiness readiness, boolean readyForFinalCapture) {
+			// The renderer can report an empty compiler queue while the occlusion
+			// graph is still discovering more distant sections.  Reserve 99% for
+			// the two stable probes that actually authorize the final capture.
+			int progress = readyForFinalCapture ? 99 : estimateTerrainProgress(readiness);
+			if (progress <= this.lastReportedProgress
+					|| !ClientPlayNetworking.canSend(RendererBotPayloads.RendererBotPhotoRenderProgressC2SPayload.TYPE)) {
+				return;
+			}
+			this.lastReportedProgress = progress;
+			ClientPlayNetworking.send(new RendererBotPayloads.RendererBotPhotoRenderProgressC2SPayload(this.payload.requestId(), progress));
+		}
+
+		private static int estimateTerrainProgress(RendererBotShadowWorldManager.RenderReadiness readiness) {
+			if (readiness == null) {
+				return 0;
+			}
+			int progress = 1;
+			if (readiness.visibilityReady()) progress = 8;
+			if (readiness.contentReady()) progress = Math.max(progress, 16);
+			if (readiness.currentContentRendered()) progress = Math.max(progress, 24);
+			int visible = Math.max(0, readiness.visibleSections());
+			if (visible > 0) {
+				int cleanVisible = Math.max(0, Math.min(visible, visible - readiness.dirtyVisibleSections()));
+				progress = Math.max(progress, 24 + cleanVisible * 70 / visible);
+			}
+			return Math.max(0, Math.min(94, progress));
+		}
+
 		private int probeCount() {
 			return this.probeCount;
 		}
@@ -1476,12 +1563,16 @@ public final class RendererBotClientCapture {
 		private boolean observeReadinessProbe(RendererBotShadowWorldManager.RenderReadiness readiness) {
 			this.probeCount++;
 			if (readiness == null || !readiness.settled()) {
+				this.finalCaptureReady = false;
 				this.stableProbeCount = 0;
 				this.stableContentRevision = Long.MIN_VALUE;
+				this.stableVisibleSections = -1;
 				return false;
 			}
-			if (this.stableContentRevision != readiness.contentRevision()) {
+			if (this.stableContentRevision != readiness.contentRevision()
+					|| this.stableVisibleSections != readiness.visibleSections()) {
 				this.stableContentRevision = readiness.contentRevision();
+				this.stableVisibleSections = readiness.visibleSections();
 				this.stableProbeCount = 1;
 				return becomeReadyIfStable();
 			}
@@ -1595,6 +1686,8 @@ public final class RendererBotClientCapture {
 	}
 
 	private record CapturedFrame(
+			UUID requestId,
+			UUID renderSessionId,
 			String dimensionId,
 			UUID followEntityUuid,
 			UUID hiddenEntityUuid,
@@ -1613,7 +1706,9 @@ public final class RendererBotClientCapture {
 			long capturedAtMillis
 	) {
 		private boolean matches(RendererBotPayloads.RendererBotCaptureRequestS2CPayload payload) {
-			return Objects.equals(this.dimensionId, payload.dimensionId())
+			return Objects.equals(this.requestId, payload.requestId())
+					&& Objects.equals(this.renderSessionId, payload.renderSessionId())
+					&& Objects.equals(this.dimensionId, payload.dimensionId())
 					&& Objects.equals(this.followEntityUuid, payload.followEntityUuid())
 					&& Objects.equals(this.hiddenEntityUuid, payload.hiddenEntityUuid())
 					&& Math.abs(this.expectedX - payload.expectedX()) <= 0.01D

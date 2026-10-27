@@ -1,0 +1,8 @@
+{
+  "parent": "lg2:item/camera",
+  "display": {
+    "fixed": {
+      "rotation": [0, -180, 0]
+    }
+  }
+}

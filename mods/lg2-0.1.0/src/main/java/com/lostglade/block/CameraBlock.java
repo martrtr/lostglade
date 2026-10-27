@@ -114,6 +114,24 @@ public final class CameraBlock extends SimplePolymerBlock implements PolymerHead
 		return PolymerBlockUtils.createBlockEntityPacket(pos, BlockEntityType.SKULL, blockEntityData);
 	}
 
+	/**
+	 * Reapplies the client-only transparent skin after a client predicted a
+	 * break which the server then cancelled.  That prediction can replace the
+	 * Polymer block-entity data with the vanilla PLAYER_HEAD data for a moment,
+	 * exposing the default Steve head even though the real camera block remains.
+	 */
+	public static void resendCollisionHead(ServerPlayer player, BlockPos pos) {
+		if (player == null || pos == null || !(player.level() instanceof ServerLevel level)) {
+			return;
+		}
+		BlockState state = level.getBlockState(pos);
+		if (!(state.getBlock() instanceof CameraBlock camera)) {
+			return;
+		}
+		PacketContext.NotNullWithPlayer context = PacketContext.create(player);
+		player.connection.send(camera.getPolymerHeadPacket(state, pos, context));
+	}
+
 	@Override
 	protected VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
 		return this.hitboxState.getShape(level, pos, context);

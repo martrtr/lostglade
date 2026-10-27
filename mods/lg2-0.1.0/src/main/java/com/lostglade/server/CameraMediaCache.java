@@ -46,6 +46,16 @@ public final class CameraMediaCache {
 		return cacheRoot.resolve("videos").resolve(normalizedKey(key) + ".tmp.mp4");
 	}
 
+	/**
+	 * The server-side description of an unfinished hand-camera video.  This is
+	 * intentionally kept beside the media cache: the print keeps the public
+	 * identity, while this file lets a graceful server restart reconnect it to
+	 * the renderer that still owns the frozen shadow timeline.
+	 */
+	public static Path videoRecoveryPath() {
+		return cacheRoot.resolve("video-recovery.json");
+	}
+
 	public static BufferedImage loadPhotoSource(String key) throws IOException {
 		Path path = photoSourcePath(key);
 		if (!Files.isRegularFile(path)) {

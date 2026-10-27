@@ -211,7 +211,11 @@ public final class RendererBotOffscreenWorldRenderer {
 			TextureTarget renderTarget
 	) {
 		FogRenderer fogRenderer = sessionState.fogRenderer;
-		float partialTick = client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		// A deferred recording owns a historic world clock.  Letting the volunteer
+		// client's real partial tick leak into it made water, player interpolation
+		// and shader animations run at render speed rather than at recorded FPS.
+		boolean frozenTimeline = RendererBotShadowWorldManager.usesFrozenTime(renderLevel);
+		float partialTick = frozenTimeline ? 0.0F : client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
 		if (!sessionState.cameraPrimed) {
 			cameraState.camera().attributeProbe().reset();
 			cameraState.camera().attributeProbe().tick(renderLevel, cameraState.camera().position());
@@ -278,7 +282,9 @@ public final class RendererBotOffscreenWorldRenderer {
 			OffscreenSessionState sessionState,
 			Entity followTarget
 	) {
-		float partialTick = client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		float partialTick = RendererBotShadowWorldManager.usesFrozenTime(renderLevel)
+				? 0.0F
+				: client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
 		if (renderLevel == null) {
 			return null;
 		}

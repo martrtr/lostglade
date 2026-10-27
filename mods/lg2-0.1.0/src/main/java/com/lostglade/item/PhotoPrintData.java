@@ -214,6 +214,8 @@ public record PhotoPrintData(
 
 	public boolean samePhoto(PhotoPrintData other) {
 		return other != null
+				&& (this.sourceKey.isBlank() || other.sourceKey.isBlank() || this.sourceKey.equals(other.sourceKey))
+				&& this.mediaKind == other.mediaKind
 				&& this.mapsWide == other.mapsWide
 				&& this.mapsHigh == other.mapsHigh
 				&& Arrays.equals(this.mapIds, other.mapIds);
@@ -232,6 +234,14 @@ public record PhotoPrintData(
 			return -1;
 		}
 		return this.mapIds[tileY * this.mapsWide + tileX];
+	}
+
+	/** Includes the compact held preview, which creative pick-block can copy. */
+	public boolean ownsMapId(int mapId) {
+		if (mapId < 0) return false;
+		if (this.previewMapId == mapId) return true;
+		for (int tile : this.mapIds) if (tile == mapId) return true;
+		return false;
 	}
 
 	public PlacedPhotoFrameData placed(UUID groupId, BlockPos anchorPos, Direction direction, int tileX, int tileY) {

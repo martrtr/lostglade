@@ -65,6 +65,7 @@ public final class MapImageRenderSystem {
 	private static final long PHOTO_PREVIEW_REPRIME_INTERVAL_TICKS = 5L;
 	private static final Map<UUID, RenderJob> PLAYER_JOBS = new HashMap<>();
 	private static final Map<UUID, Long> PENDING_PREVIEW_REPRIME_DEADLINES = new HashMap<>();
+	private static final Set<UUID> PENDING_CAMERA_COOLDOWN_CLEARS = new HashSet<>();
 	private static final Queue<UUID> QUEUE = new ArrayDeque<>();
 	private static UUID activePlayerId;
 	private static ExecutorService executor;
@@ -74,6 +75,7 @@ public final class MapImageRenderSystem {
 
 	public static void register() {
 		ensureExecutor();
+		PhotoMapDeliverySystem.register();
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
 				AccountAuthSystem.runWhenAuthenticated(handler.player,
 						() -> server.execute(() -> schedulePhotoPreviewReprime((ServerPlayer) handler.player, server)))
@@ -90,6 +92,10 @@ public final class MapImageRenderSystem {
 		ServerTickEvents.END_SERVER_TICK.register(MapImageRenderSystem::tick);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			PENDING_PREVIEW_REPRIME_DEADLINES.clear();
+			for (UUID playerId : new HashSet<>(PLAYER_JOBS.keySet())) removeJob(playerId);
+			QUEUE.clear();
+			activePlayerId = null;
+			PENDING_CAMERA_COOLDOWN_CLEARS.clear();
 			shutdownExecutor();
 		});
 	}
@@ -103,6 +109,19 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		removeJob(playerId);
+	}
+
+	/** Receives shadow-render warm-up progress before the one-shot full frame arrives. */
+	public static void notifyPhotoRenderProgress(UUID requestId, int progressPercent) {
+		if (requestId == null) {
+			return;
+		}
+		String sourceKey = requestId.toString();
+		for (RenderJob job : PLAYER_JOBS.values()) {
+			if (job != null && sourceKey.equals(job.provider().sourceKey())) {
+				job.recordRendererProgress(progressPercent);
+			}
+		}
 	}
 
 	public static boolean startRender(ServerPlayer player, Component itemName, MapPixelProvider provider) {
@@ -134,7 +153,9 @@ public final class MapImageRenderSystem {
 				)
 		);
 		RenderJob job = new RenderJob(player.getUUID(), photoMapSet.mapIds(), photoMapSet.mapDataSet(), mapsWide, mapsHigh, previewMap.previewMapId().id(), previewMap.previewMapData(), provider);
+		job.server = player.level().getServer();
 		PLAYER_JOBS.put(player.getUUID(), job);
+		CameraCaptureSystem.updateRenderCooldown(player);
 		QUEUE.offer(player.getUUID());
 		ServerMechanicsGateSystem.syncPlayerInventory(player);
 		if (activePlayerId == null) {
@@ -146,7 +167,7 @@ public final class MapImageRenderSystem {
 		return true;
 	}
 
-	private static ServerLevel photoMapLevel(MinecraftServer server, ServerLevel fallback) {
+	static ServerLevel photoMapLevel(MinecraftServer server, ServerLevel fallback) {
 		if (server == null) {
 			return fallback;
 		}
@@ -160,12 +181,14 @@ public final class MapImageRenderSystem {
 
 	private static void tick(MinecraftServer server) {
 		ensureExecutor();
+		flushPendingCameraCooldownClears(server);
 		tickQueuedPhotoPreviewReprimes(server);
 		if (PLAYER_JOBS.isEmpty()) {
 			activePlayerId = null;
 			return;
 		}
 		normalizeQueue();
+		refreshPhotoCameraCooldowns(server);
 		if (activePlayerId == null) {
 			return;
 		}
@@ -183,13 +206,25 @@ public final class MapImageRenderSystem {
 			pollNextActive();
 			return;
 		}
+		if (!isPhotoStillReachable(server, player, job.photoData())) {
+			// Dropping the print freezes the part already written to its maps.
+			lockRenderedPhoto(level, job);
+			finalizePhotoDisplay(server, job);
+			player.displayClientMessage(Component.literal("Рендер снимка остановлен: сохранена готовая часть."), true);
+			removeJob(job.playerId());
+			pollNextActive();
+			return;
+		}
 		beginRender(player, job);
 		if (job.provider().prefersWholeFrameRendering()) {
 			if (!ensureWholeFrameTaskDispatched(server, player, job)) {
 				return;
 			}
 		}
-		if (!tickPreviewStage(server, player, job)) {
+		// Whole-frame providers already have the final map-sized image.  A second,
+		// independent 128x128 readback made the optional preview a hard dependency
+		// and could abort an otherwise valid photo.
+		if (!job.provider().prefersWholeFrameRendering() && !tickPreviewStage(server, player, job)) {
 			return;
 		}
 
@@ -278,6 +313,10 @@ public final class MapImageRenderSystem {
 		if (!ensureWholeFrameTaskDispatched(server, player, job)) {
 			return;
 		}
+		applyProgressPreview(server, player, job);
+		// A whole-frame photo only receives its pixels at the very end.  Its live
+		// percentage instead comes from the renderer's terrain warm-up signal.
+		updatePhotoProgress(server, job);
 
 		FrameResult frameResult = job.frameResult();
 		if (frameResult == null) {
@@ -300,6 +339,7 @@ public final class MapImageRenderSystem {
 			return;
 		}
 
+		applyPreviewToMaps(job, downscaleFrame(frame, job.outputWidth(), job.outputHeight()));
 		applyWholeFrameToMaps(job, frame);
 		updatePhotoProgress(server, job);
 
@@ -313,6 +353,44 @@ public final class MapImageRenderSystem {
 			removeJob(job.playerId());
 			pollNextActive();
 		}
+	}
+
+	private static void applyProgressPreview(MinecraftServer server, ServerPlayer player, RenderJob job) {
+		byte[] preview = job == null ? null : job.provider().pollProgressPreview();
+		if (!isValidFrame(preview, MAP_SIZE * MAP_SIZE) || !job.acceptPreview(preview)) {
+			return;
+		}
+		applyPreviewToMaps(job, preview);
+		if (player != null) {
+			sendPhotoPreviewMap(player, new MapId(job.previewMapId()), job.previewMapData());
+		}
+		sendCompletedPhotoMaps(server, job.photoData());
+	}
+
+	private static void applyPreviewToMaps(RenderJob job, byte[] preview) {
+		if (job == null || !isValidFrame(preview, MAP_SIZE * MAP_SIZE)) return;
+		applyFrameToMap(job.previewMapData(), preview);
+		for (int tileY = 0; tileY < job.mapsHigh(); tileY++) {
+			for (int tileX = 0; tileX < job.mapsWide(); tileX++) {
+				MapItemSavedData mapData = job.mapDataSet()[tileY * job.mapsWide() + tileX];
+				if (mapData == null || mapData.colors == null || mapData.colors.length < MAP_SIZE * MAP_SIZE) continue;
+				for (int y = 0; y < MAP_SIZE; y++) for (int x = 0; x < MAP_SIZE; x++) {
+					int sourceX = (tileX * MAP_SIZE + x) * MAP_SIZE / job.outputWidth();
+					int sourceY = (tileY * MAP_SIZE + y) * MAP_SIZE / job.outputHeight();
+					mapData.colors[y * MAP_SIZE + x] = preview[sourceY * MAP_SIZE + sourceX];
+				}
+				mapData.setDirty();
+			}
+		}
+	}
+
+	private static byte[] downscaleFrame(byte[] frame, int width, int height) {
+		byte[] preview = new byte[MAP_SIZE * MAP_SIZE];
+		if (frame == null || frame.length < width * height) return preview;
+		for (int y = 0; y < MAP_SIZE; y++) for (int x = 0; x < MAP_SIZE; x++) {
+			preview[y * MAP_SIZE + x] = frame[(y * height / MAP_SIZE) * width + x * width / MAP_SIZE];
+		}
+		return preview;
 	}
 
 	private static boolean ensureWholeFrameTaskDispatched(MinecraftServer server, ServerPlayer player, RenderJob job) {
@@ -417,7 +495,10 @@ public final class MapImageRenderSystem {
 		if (progress <= job.lastDisplayedProgress() || progress >= 100) {
 			return;
 		}
-		player.displayClientMessage(CameraCaptureSystem.createQueuedPhotoName(progress), true);
+		Component progressName = CameraCaptureSystem.createQueuedPhotoName(progress);
+		player.displayClientMessage(progressName, true);
+		updatePhotoItemsInInventories(server, job.photoData(), progressName);
+		updatePlacedPhotoFrameNames(server, job.photoData(), progressName);
 		job.setLastDisplayedProgress(progress);
 	}
 
@@ -427,6 +508,7 @@ public final class MapImageRenderSystem {
 		}
 		Component completedName = CameraCaptureSystem.createCompletedPhotoName(server);
 		updatePhotoItemsInInventories(server, job.photoData(), completedName);
+		updateDroppedPhotoItemNames(server, job.photoData(), completedName);
 		updatePlacedPhotoFrameNames(server, job.photoData(), completedName);
 		job.setLastDisplayedProgress(100);
 	}
@@ -446,7 +528,10 @@ public final class MapImageRenderSystem {
 			return;
 		}
 		ServerLevel mapLevel = photoMapLevel(server, fallbackLevel);
-		for (int rawMapId : photoData.mapIds()) {
+		Set<Integer> deliveredMapIds = new HashSet<>();
+		deliveredMapIds.add(photoData.previewMapId());
+		for (int rawMapId : photoData.mapIds()) deliveredMapIds.add(rawMapId);
+		for (int rawMapId : deliveredMapIds) {
 			if (rawMapId < 0) {
 				continue;
 			}
@@ -603,6 +688,17 @@ public final class MapImageRenderSystem {
 				updated.remove(DataComponents.CUSTOM_NAME);
 				PhotoPrintData.writeFrameStoredName(updated, name);
 				frame.setItem(updated, false);
+			}
+		}
+	}
+
+	private static void updateDroppedPhotoItemNames(MinecraftServer server, PhotoPrintData photoData, Component name) {
+		if (server == null || photoData == null || name == null) return;
+		for (ServerLevel level : server.getAllLevels()) {
+			for (var entity : level.getAllEntities()) {
+				if (entity instanceof ItemEntity item && isMatchingPhoto(item.getItem(), photoData)) {
+					item.getItem().set(DataComponents.CUSTOM_NAME, name.copy());
+				}
 			}
 		}
 	}
@@ -815,7 +911,7 @@ public final class MapImageRenderSystem {
 		return output;
 	}
 
-	private static void sendPhotoMap(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
+	static void sendPhotoMap(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
 		if (player == null || mapId == null || mapData == null || mapData.colors == null || mapData.colors.length < MAP_SIZE * MAP_SIZE) {
 			return;
 		}
@@ -859,7 +955,13 @@ public final class MapImageRenderSystem {
 		if (playerId == null) {
 			return;
 		}
-		PLAYER_JOBS.remove(playerId);
+		RenderJob removed = PLAYER_JOBS.remove(playerId);
+		if (removed != null) {
+			// Every exit must release the renderer, including invalid owners,
+			// preparation errors and external cancelRender calls.
+			removed.provider().onCancelled(removed.server);
+		}
+		PENDING_CAMERA_COOLDOWN_CLEARS.add(playerId);
 		if (playerId.equals(activePlayerId)) {
 			activePlayerId = null;
 		}
@@ -870,6 +972,72 @@ public final class MapImageRenderSystem {
 				break;
 			}
 		}
+	}
+
+	private static void flushPendingCameraCooldownClears(MinecraftServer server) {
+		if (server == null || PENDING_CAMERA_COOLDOWN_CLEARS.isEmpty()) {
+			return;
+		}
+		for (UUID playerId : new HashSet<>(PENDING_CAMERA_COOLDOWN_CLEARS)) {
+			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+			if (player != null) {
+				CameraCaptureSystem.clearRenderCooldown(player);
+			}
+			PENDING_CAMERA_COOLDOWN_CLEARS.remove(playerId);
+		}
+	}
+
+	private static void refreshPhotoCameraCooldowns(MinecraftServer server) {
+		if (server == null) {
+			return;
+		}
+		for (RenderJob job : PLAYER_JOBS.values()) {
+			if (job == null) {
+				continue;
+			}
+			ServerPlayer player = server.getPlayerList().getPlayer(job.playerId());
+			if (player != null) {
+				CameraCaptureSystem.updateRenderCooldown(player);
+			}
+		}
+	}
+
+	private static boolean isPhotoStillReachable(MinecraftServer server, ServerPlayer owner, PhotoPrintData photoData) {
+		if (server == null || owner == null || photoData == null) {
+			return false;
+		}
+		// A click-drag removes the stack from its slot before the destination slot
+		// is populated. It is still owned by this player while carried by the
+		// active menu, so that short transition must not cancel its render.
+		if (isMatchingPhoto(owner.containerMenu.getCarried(), photoData)
+				|| isMatchingPhoto(owner.inventoryMenu.getCarried(), photoData)) {
+			return true;
+		}
+		for (int slot = 0; slot < owner.getInventory().getContainerSize(); slot++) {
+			if (isMatchingPhoto(owner.getInventory().getItem(slot), photoData)) {
+				return true;
+			}
+		}
+		for (ServerLevel level : server.getAllLevels()) {
+			var bounds = new net.minecraft.world.phys.AABB(
+					-30_000_000.0D, level.getMinY(), -30_000_000.0D,
+					30_000_000.0D, level.getMaxY(), 30_000_000.0D
+			);
+			for (net.minecraft.world.entity.decoration.ItemFrame frame : level.getEntitiesOfClass(
+					net.minecraft.world.entity.decoration.ItemFrame.class, bounds
+			)) {
+				PhotoPrintData.PlacedPhotoFrameData frameData = PhotoPrintData.readFrameTile(frame.getItem());
+				if (frameData != null && frameData.samePhoto(photoData)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean isMatchingPhoto(net.minecraft.world.item.ItemStack stack, PhotoPrintData photoData) {
+		PhotoPrintData stackData = PhotoPrintData.readPhotoItem(stack);
+		return stackData != null && stackData.samePhoto(photoData);
 	}
 
 	private static void ensureExecutor() {
@@ -901,6 +1069,7 @@ public final class MapImageRenderSystem {
 	}
 
 	private static final class RenderJob {
+		private MinecraftServer server;
 		private final UUID playerId;
 		private final MapId[] mapIds;
 		private final MapItemSavedData[] mapDataSet;
@@ -922,7 +1091,9 @@ public final class MapImageRenderSystem {
 		private boolean startedRendering;
 		private volatile FrameResult frameResult;
 		private volatile FrameResult previewResult;
+		private byte[] lastAppliedProgressPreview;
 		private int frameApplyIndex;
+		private volatile int rendererProgressPercent;
 		private int lastDisplayedProgress = -1;
 
 		private RenderJob(UUID playerId, MapId[] mapIds, MapItemSavedData[] mapDataSet, int mapsWide, int mapsHigh, int previewMapId, MapItemSavedData previewMapData, MapPixelProvider provider) {
@@ -977,7 +1148,8 @@ public final class MapImageRenderSystem {
 		}
 
 		private PhotoPrintData photoData() {
-			return new PhotoPrintData(this.mapsWide, this.mapsHigh, this.previewMapId, photoMapIdsToRawIds(this.mapIds));
+			return new PhotoPrintData(this.mapsWide, this.mapsHigh, this.previewMapId, photoMapIdsToRawIds(this.mapIds),
+					this.provider.mediaKind(), this.provider.sourceKey(), this.provider.mediaDurationMs(), this.provider.mediaFps());
 		}
 
 		private MapPixelProvider provider() {
@@ -1087,6 +1259,13 @@ public final class MapImageRenderSystem {
 			return this.previewResult;
 		}
 
+		private boolean acceptPreview(byte[] preview) {
+			if (preview == null || preview.length < MAP_SIZE * MAP_SIZE) return false;
+			if (java.util.Arrays.equals(this.lastAppliedProgressPreview, preview)) return false;
+			this.lastAppliedProgressPreview = preview.clone();
+			return true;
+		}
+
 		private int frameApplyIndex() {
 			return this.frameApplyIndex;
 		}
@@ -1097,6 +1276,11 @@ public final class MapImageRenderSystem {
 
 		private void markFrameFullyApplied() {
 			this.frameApplyIndex = this.totalPixels();
+		}
+
+		private void recordRendererProgress(int progressPercent) {
+			int safeProgress = Math.max(0, Math.min(99, progressPercent));
+			this.rendererProgressPercent = Math.max(this.rendererProgressPercent, safeProgress);
 		}
 
 		private void pushResult(PixelResult result) {
@@ -1116,7 +1300,8 @@ public final class MapImageRenderSystem {
 				if (this.totalPixels() <= 0) {
 					return 100;
 				}
-				return Math.max(0, Math.min(99, this.frameApplyIndex * 100 / this.totalPixels()));
+				int appliedProgress = this.frameApplyIndex * 100 / this.totalPixels();
+				return Math.max(0, Math.min(99, Math.max(appliedProgress, this.rendererProgressPercent)));
 			}
 			if (this.totalPixels() <= 0) {
 				return 100;

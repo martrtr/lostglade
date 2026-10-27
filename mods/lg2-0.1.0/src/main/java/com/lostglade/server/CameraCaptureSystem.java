@@ -1,6 +1,7 @@
 package com.lostglade.server;
 
 import com.lostglade.Lg2;
+import com.lostglade.block.CameraBlock;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.item.CameraPhotoSettings;
 import com.lostglade.item.ModItems;
@@ -40,7 +41,8 @@ public final class CameraCaptureSystem {
 	private static final String IT_CAMERA = "it_camera";
 	private static final Identifier CAMERA_SHUTTER_SOUND_ID = Identifier.fromNamespaceAndPath("lg2", "camera_shutter");
 	private static final Holder<SoundEvent> CAMERA_SHUTTER_SOUND = Holder.direct(SoundEvent.createVariableRangeEvent(CAMERA_SHUTTER_SOUND_ID));
-	private static final int CAMERA_COOLDOWN_TICKS = 40;
+	private static final int RENDER_COOLDOWN_TICKS = 1_000_000;
+	private static final int RENDER_COOLDOWN_REFRESH_TICKS = 20;
 	private static final int USE_SWING_SUPPRESSION_TICKS = 2;
 	private static final double MAX_SHUTTER_SOUND_DISTANCE_SQR = 24.0D * 24.0D;
 	private static final float SHUTTER_SOUND_VOLUME = 0.45F;
@@ -65,6 +67,10 @@ public final class CameraCaptureSystem {
 				return InteractionResult.PASS;
 			}
 			CameraPhotoMenuSystem.open(serverPlayer);
+			// Cancelling a predicted break of a placed camera can make the client
+			// briefly restore PLAYER_HEAD's default Steve skin.  The collision head
+			// is intentionally invisible, so immediately resend its Polymer profile.
+			CameraBlock.resendCollisionHead(serverPlayer, pos);
 			return InteractionResult.SUCCESS;
 		});
 		AttackEntityCallback.EVENT.register(CameraCaptureSystem::onAttackEntity);
@@ -122,6 +128,10 @@ public final class CameraCaptureSystem {
 			}
 			return CameraVideoRecordingSystem.toggleRecording(player, settings);
 		}
+		if (CameraVideoRecordingSystem.isRecording(player.getUUID())) {
+			player.displayClientMessage(cameraBusyMessage(player), true);
+			return false;
+		}
 		if (MapImageRenderSystem.hasActiveRender(player.getUUID())) {
 			player.displayClientMessage(cameraBusyMessage(player), true);
 			return false;
@@ -138,13 +148,33 @@ public final class CameraCaptureSystem {
 			player.displayClientMessage(capturePrepareFailedMessage(player), true);
 			return false;
 		}
-		boolean started = MapImageRenderSystem.startRender(player, createCompletedPhotoName(player.level().getServer()), provider);
+		boolean started = MapImageRenderSystem.startRender(player, createQueuedPhotoName(0), provider);
 		if (!started) {
 			return false;
 		}
-
-		player.getCooldowns().addCooldown(stack, CAMERA_COOLDOWN_TICKS);
 		return true;
+	}
+
+	/** Holds the camera overlay full until its photo/video job explicitly releases it. */
+	public static void updateRenderCooldown(ServerPlayer player) {
+		if (player == null) {
+			return;
+		}
+		// Address the item group directly: switching slots or putting the camera
+		// away must never stop renewal. A large rolling duration keeps the overlay
+		// visually full without flooding the client with a packet on every tick.
+		ItemStack camera = ModItems.CAMERA.getDefaultInstance();
+		if (player.tickCount % RENDER_COOLDOWN_REFRESH_TICKS == 0
+				|| player.getCooldowns().getCooldownPercent(camera, 0.0F) < 0.99F) {
+			player.getCooldowns().addCooldown(BuiltInRegistries.ITEM.getKey(ModItems.CAMERA), RENDER_COOLDOWN_TICKS);
+		}
+	}
+
+	/** Completion, failure and cancellation release the held overlay immediately. */
+	public static void clearRenderCooldown(ServerPlayer player) {
+		if (player != null) {
+			player.getCooldowns().removeCooldown(BuiltInRegistries.ITEM.getKey(ModItems.CAMERA));
+		}
 	}
 
 	public static Component createQueuedPhotoName(int progressPercent) {
@@ -366,6 +396,16 @@ public final class CameraCaptureSystem {
 		@Override
 		public byte[] renderImmediatePreview(MinecraftServer server) {
 			return this.captureHandle.awaitPreview();
+		}
+
+		@Override
+		public byte[] pollProgressPreview() {
+			return this.captureHandle.pollPreview();
+		}
+
+		@Override
+		public void onCancelled(MinecraftServer server) {
+			RendererBotCameraSystem.cancelCapture(this.captureHandle.requestId());
 		}
 
 		@Override

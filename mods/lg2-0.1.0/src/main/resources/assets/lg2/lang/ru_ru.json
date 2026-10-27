@@ -123,6 +123,7 @@
   "message.lg2.camera.video.started": "Запись видео началась. Нажми камеру ещё раз, чтобы остановить.",
   "message.lg2.camera.video.stopping": "Останавливаю запись видео...",
   "message.lg2.camera.video.failed": "Запись видео не удалась.",
+  "message.lg2.camera.video.cancelled": "Рендер видео отменён. Готовая часть превью сохранена.",
   "message.lg2.camera.video.persist_failed": "Видео записалось, но файл не сохранился на сервере.",
   "message.lg2.camera.video.map_failed": "Не удалось собрать видео-карту.",
   "message.lg2.camera.video.ready": "Видео готово.",

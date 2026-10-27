@@ -115,7 +115,10 @@ final class CameraDisplayHelper {
 		Vec3 origin = captureBaseOrigin;
 		Vec3 forward = CameraBlock.captureOrigin(origin, yaw, pitch).subtract(origin).normalize();
 		Vec3 displayOrigin = origin.add(forward.scale(MODEL_FORWARD_OFFSET));
-		float displayYaw = yaw;
+		// camera_placed has the original fixed item transform. Its local forward
+		// axis is opposite to the capture vector, therefore this is intentionally
+		// the same pose calculation as 535c4abb.
+		float displayYaw = yaw + 180.0F;
 		display.setPos(displayOrigin.x, displayOrigin.y, displayOrigin.z);
 		display.setYRot(displayYaw);
 		display.setXRot(-pitch);
