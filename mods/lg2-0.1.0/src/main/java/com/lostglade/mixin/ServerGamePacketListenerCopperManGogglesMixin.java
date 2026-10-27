@@ -19,8 +19,10 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArgs;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 @Mixin(ServerGamePacketListenerImpl.class)
 public abstract class ServerGamePacketListenerCopperManGogglesMixin {
@@ -129,6 +131,26 @@ public abstract class ServerGamePacketListenerCopperManGogglesMixin {
 	)
 	private ServerboundMovePlayerPacket lg2$lockLittleDictatorHorizontalMovement(ServerboundMovePlayerPacket packet) {
 		return ServerRaceSystem.sanitizeKilkaSalmonMovementPacket(this.player, ServerRaceSystem.sanitizeLittleDictatorUniqueMovementPacket(this.player, packet));
+	}
+
+	@ModifyArgs(
+			method = "handleMovePlayer",
+			at = @At(
+					value = "INVOKE",
+					target = "Lnet/minecraft/server/network/ServerGamePacketListenerImpl;teleport(DDDFF)V",
+					ordinal = 2
+			)
+	)
+	private void lg2$keepKilkaSalmonWallSlide(Args args) {
+		if (!ServerRaceSystem.isKilkaSalmonForm(this.player)
+				|| !this.player.level().noCollision(this.player, this.player.getBoundingBox())) {
+			return;
+		}
+		// Vanilla has already moved the salmon-sized server hitbox and resolved the
+		// wall contact. Correct the client to that slid position, not the old one.
+		args.set(0, this.player.getX());
+		args.set(1, this.player.getY());
+		args.set(2, this.player.getZ());
 	}
 
 	@Inject(method = "handleMovePlayer", at = @At("TAIL"))

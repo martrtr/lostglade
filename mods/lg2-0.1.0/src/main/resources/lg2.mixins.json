@@ -94,6 +94,7 @@
 		"LivingEntityGennadiyReportTrackerMixin",
 		"LivingEntityGennadiyDefenseKnockbackMixin",
 		"LivingEntityKilkaStockAirMixin",
+		"LivingEntityKilkaSalmonDimensionsMixin",
 		"LivingEntityMarkStockHealingMixin",
 		"LivingEntityLittleDictatorDecreeLootContextMixin",
 		"LivingEntityLittleDictatorPropagandaHasteMixin",

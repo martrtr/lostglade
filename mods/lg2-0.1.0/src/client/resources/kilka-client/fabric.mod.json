@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "lg2-client",
+  "version": "${version}",
+  "name": "Lostglade Client (kilka)",
+  "description": "Lostglade client with local salmon transformation for Kilka.",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.lostglade.Lg2Client"],
+    "modmenu": ["com.lostglade.client.LostgladeModMenuApi"]
+  },
+  "icon": "assets/lg2/icon.png",
+  "mixins": [
+    "lg2.client.mixins.json",
+    "lg2.absolute_invisibility.client.mixins.json",
+    "lg2-race-client.mixins.json",
+    "lg2.kilka.client.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.18.4",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*",
+    "voicechat": ">=1.21.11-2.6.22"
+  }
+}

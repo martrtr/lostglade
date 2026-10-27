@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class Lg2Payloads {
 	private static final AtomicBoolean REGISTERED = new AtomicBoolean(false);
 	private static final AtomicBoolean CLIENT_AUTH_REGISTERED = new AtomicBoolean(false);
+	private static final AtomicBoolean CLIENT_KILKA_REGISTERED = new AtomicBoolean(false);
 
 	private Lg2Payloads() {
 	}
@@ -26,6 +27,8 @@ public final class Lg2Payloads {
 		PayloadTypeRegistry.playC2S().register(RaceAbilityC2SPayload.TYPE, RaceAbilityC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(RaceAbilityStateRequestC2SPayload.TYPE, RaceAbilityStateRequestC2SPayload.STREAM_CODEC);
 		PayloadTypeRegistry.playC2S().register(AuthTokenC2SPayload.TYPE, AuthTokenC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playC2S().register(KilkaClientHelloC2SPayload.TYPE, KilkaClientHelloC2SPayload.STREAM_CODEC);
+		PayloadTypeRegistry.playS2C().register(KilkaFormStateS2CPayload.TYPE, KilkaFormStateS2CPayload.STREAM_CODEC);
 	}
 
 	/**
@@ -36,6 +39,43 @@ public final class Lg2Payloads {
 	public static void registerClientPayloadTypes() {
 		if (CLIENT_AUTH_REGISTERED.compareAndSet(false, true)) {
 			PayloadTypeRegistry.playC2S().register(AuthTokenC2SPayload.TYPE, AuthTokenC2SPayload.STREAM_CODEC);
+		}
+	}
+
+	public static void registerKilkaClientPayloadTypes() {
+		if (CLIENT_KILKA_REGISTERED.compareAndSet(false, true)) {
+			PayloadTypeRegistry.playC2S().register(KilkaClientHelloC2SPayload.TYPE, KilkaClientHelloC2SPayload.STREAM_CODEC);
+			PayloadTypeRegistry.playS2C().register(KilkaFormStateS2CPayload.TYPE, KilkaFormStateS2CPayload.STREAM_CODEC);
+		}
+	}
+
+	public record KilkaClientHelloC2SPayload() implements CustomPacketPayload {
+		public static final Type<KilkaClientHelloC2SPayload> TYPE = new Type<>(id("kilka_client_hello"));
+		public static final StreamCodec<FriendlyByteBuf, KilkaClientHelloC2SPayload> STREAM_CODEC =
+				StreamCodec.unit(new KilkaClientHelloC2SPayload());
+
+		@Override
+		public Type<KilkaClientHelloC2SPayload> type() {
+			return TYPE;
+		}
+	}
+
+	public record KilkaFormStateS2CPayload(boolean active) implements CustomPacketPayload {
+		public static final Type<KilkaFormStateS2CPayload> TYPE = new Type<>(id("kilka_form_state"));
+		public static final StreamCodec<FriendlyByteBuf, KilkaFormStateS2CPayload> STREAM_CODEC =
+				CustomPacketPayload.codec(KilkaFormStateS2CPayload::write, KilkaFormStateS2CPayload::new);
+
+		public KilkaFormStateS2CPayload(FriendlyByteBuf buffer) {
+			this(buffer.readBoolean());
+		}
+
+		private void write(FriendlyByteBuf buffer) {
+			buffer.writeBoolean(this.active);
+		}
+
+		@Override
+		public Type<KilkaFormStateS2CPayload> type() {
+			return TYPE;
 		}
 	}
 

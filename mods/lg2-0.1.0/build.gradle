@@ -476,6 +476,42 @@ tasks.register("remapGameplayClientJar", RemapJarTask) {
 	addNestedDependencies.set(false)
 }
 
+def kilkaClientDevJar = tasks.register("kilkaClientDevJar", Jar) {
+	group = "build"
+	description = "Assembles the optional Kilka client variant before remapping."
+	dependsOn(tasks.named("classes"))
+	archiveBaseName.set("lg2-client")
+	archiveVersion.set(project.version.toString())
+	archiveClassifier.set("kilka-dev")
+	destinationDirectory.set(layout.buildDirectory.dir("devlibs"))
+	from(sourceSets.main.output) {
+		exclude("fabric.mod.json", "data/**")
+	}
+	from(sourceSets.client.output)
+	from("src/client/resources/race-client") {
+		exclude("fabric.mod.json")
+	}
+	from("src/client/resources/kilka-client") {
+		exclude("fabric.mod.json")
+	}
+	from("src/client/resources/kilka-client") {
+		include("fabric.mod.json")
+		expand(version: "${project.version}+kilka")
+	}
+}
+
+tasks.register("remapKilkaClientJar", RemapJarTask) {
+	group = "build"
+	description = "Builds the optional Lostglade client (kilka) jar."
+	dependsOn(kilkaClientDevJar)
+	inputFile.set(kilkaClientDevJar.flatMap { it.archiveFile })
+	archiveBaseName.set("lg2-client")
+	archiveVersion.set(project.version.toString())
+	archiveClassifier.set("kilka")
+	destinationDirectory.set(layout.buildDirectory.dir("libs"))
+	addNestedDependencies.set(false)
+}
+
 tasks.register("installGameplayClientJar", Sync) {
 	group = "build"
 	description = "Publishes the lightweight client jar into the repository's client-mods directory."

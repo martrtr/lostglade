@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"package": "com.lostglade.mixin.client",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"AbstractClientPlayerKilkaFovMixin",
+		"LivingEntityKilkaLocalDimensionsMixin",
+		"EntityRenderDispatcherKilkaLocalMixin",
+		"ItemInHandRendererKilkaMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

@@ -3,6 +3,10 @@ package com.lostglade.server;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.entity.EntityDimensions;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import java.util.ArrayList;
@@ -14,6 +18,8 @@ public final class RaceFixRegressionTest {
 		packetsStayOrderedAndDirectional();
 		overflowNeverLosesPackets();
 		helmetsKeepTheirArmor();
+		kilkaSalmonEffectsKeepTheirRemainingTime();
+		kilkaSalmonHitboxMatchesFish();
 		markDefenseTimerUsesWholeSeconds();
 		manaUsesNativeBossBar();
 		visualAssetsKeepAuthoredDimensions();
@@ -99,6 +105,35 @@ public final class RaceFixRegressionTest {
 		check(helmet.get(DataComponents.ATTRIBUTE_MODIFIERS).equals(visual.get(DataComponents.ATTRIBUTE_MODIFIERS)), "mask lost armor modifiers");
 		check(helmet.is(Items.DIAMOND_HELMET) && helmet.getDamageValue() == 42, "visual rewrite changed real helmet");
 		check(!visual.isEnchanted(), "mask was enchanted");
+	}
+
+	private static void kilkaSalmonEffectsKeepTheirRemainingTime() {
+		MobEffectInstance owner = new MobEffectInstance(MobEffects.SPEED, 100, 0);
+		check(ServerRaceSystem.shouldSyncKilkaSalmonEffect(owner, null), "missing salmon effect was not copied");
+		check(!ServerRaceSystem.shouldSyncKilkaSalmonEffect(owner, new MobEffectInstance(MobEffects.SPEED, 100, 0)),
+				"unchanged salmon effect was restarted");
+		check(!ServerRaceSystem.shouldSyncKilkaSalmonEffect(owner, new MobEffectInstance(MobEffects.SPEED, 99, 0)),
+				"one tick of natural expiry restarted salmon effect");
+		check(ServerRaceSystem.shouldSyncKilkaSalmonEffect(owner, new MobEffectInstance(MobEffects.SPEED, 95, 0)),
+				"changed effect duration was not synchronized");
+		check(ServerRaceSystem.shouldSyncKilkaSalmonEffect(owner, new MobEffectInstance(MobEffects.SPEED, 100, 1)),
+				"changed effect amplifier was not synchronized");
+	}
+
+	private static void kilkaSalmonHitboxMatchesFish() throws Exception {
+		EntityDimensions salmon = EntityType.SALMON.getDimensions();
+		check(Math.abs(salmon.width() - 0.7F) < 1.0E-6F && Math.abs(salmon.height() - 0.4F) < 1.0E-6F,
+				"salmon dimensions changed");
+		for (float poseHeight : new float[]{1.8F, 1.5F, 0.6F}) {
+			double scale = ServerRaceSystem.kilkaSalmonTargetScale(EntityDimensions.scalable(0.6F, poseHeight));
+			check(Math.abs(poseHeight * scale - salmon.height()) < 1.0E-5D,
+					"Kilka height differs from salmon at pose height " + poseHeight);
+		}
+		var mixinConfig = com.google.gson.JsonParser.parseString(java.nio.file.Files.readString(
+				java.nio.file.Path.of("src/main/resources/lg2.mixins.json"))).getAsJsonObject();
+		check(mixinConfig.getAsJsonArray("mixins").asList().stream().anyMatch(entry ->
+				entry.getAsString().equals("LivingEntityKilkaSalmonDimensionsMixin")),
+				"server-side salmon hitbox mixin is not registered");
 	}
 
 	private static void waterSpeedMatchesFloor() {

@@ -81,6 +81,7 @@ import net.minecraft.network.chat.PlayerChatMessage;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
@@ -428,9 +429,6 @@ public final class ServerRaceSystem {
 	private static final int KILKA_SALMON_LAND_SLOWNESS_AMPLIFIER = 7;
 	private static final double KILKA_SALMON_LAND_MOVEMENT_MULTIPLIER = 0.001D;
 	private static final double KILKA_SALMON_LAND_SPEED_MODIFIER_AMOUNT = KILKA_SALMON_LAND_MOVEMENT_MULTIPLIER - 1.0D;
-	private static final double KILKA_SALMON_PLAYER_HEIGHT_BLOCKS = 0.171875D;
-	private static final double KILKA_SALMON_PLAYER_STANDING_BASE_HEIGHT_BLOCKS = 1.8D;
-	private static final double KILKA_SALMON_PLAYER_SWIMMING_BASE_HEIGHT_BLOCKS = 0.6D;
 	private static final double KILKA_SALMON_VIEWER_BACK_OFFSET_BLOCKS = 0.42D;
 	private static final double KILKA_SALMON_VISUAL_RECENTER_BLOCKS_PER_TICK = 0.08D;
 	private static final double KILKA_SALMON_NORMAL_SWIM_BLOCKS_PER_TICK = 0.07D;
@@ -1191,6 +1189,7 @@ public final class ServerRaceSystem {
 
 	private static final Map<UUID, KilkaSalmonFormSession> KILKA_SALMON_FORMS = new LinkedHashMap<>();
 	private static final Set<UUID> KILKA_SALMON_VOICE_PLAYERS = ConcurrentHashMap.newKeySet();
+	private static final Set<UUID> KILKA_ENHANCED_CLIENTS = ConcurrentHashMap.newKeySet();
 	private static final Map<UUID, Float> KILKA_STOCK_CLIENT_WALKING_SPEEDS = new HashMap<>();
 	private static final Map<UUID, List<KilkaSeaBeaconLink>> KILKA_SEA_BEACONS = new LinkedHashMap<>();
 	private static final Set<UUID> KILKA_SHNYAGA_BUFFED_PLAYERS = new HashSet<>();
@@ -1660,6 +1659,16 @@ public final class ServerRaceSystem {
 				server.execute(() -> sendRaceAbilityState(context.player()));
 			}
 		});
+		ServerPlayNetworking.registerGlobalReceiver(Lg2Payloads.KilkaClientHelloC2SPayload.TYPE, (payload, context) -> {
+			MinecraftServer server = context.player().level().getServer();
+			if (server != null) {
+				server.execute(() -> {
+					ServerPlayer player = context.player();
+					KILKA_ENHANCED_CLIENTS.add(player.getUUID());
+					sendKilkaEnhancedFormState(player, isKilkaSalmonForm(player));
+				});
+			}
+		});
 		AncientUkrCreditorChatSystem.register();
 		AncientUkrCreditSystem.register();
 
@@ -1681,6 +1690,7 @@ public final class ServerRaceSystem {
 			Lg2.LOGGER.info("Loaded {} configured personal races", RACES_BY_NICKNAME.size());
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			KILKA_ENHANCED_CLIENTS.clear();
 			clearAllKilkaStockNightVision(server);
 			SEASON_START_RACES.clear();
 			saveWomanShnyagaLinks(server);
@@ -1840,6 +1850,7 @@ public final class ServerRaceSystem {
 			}
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+			KILKA_ENHANCED_CLIENTS.remove(handler.player.getUUID());
 			cleanupCartelEntitiesForDisconnect(server, handler.player);
 			removeAncientUkrCreditor(server, handler.player.getUUID(), true);
 			CartelWebcamBridge.handlePlayerDisconnected(handler.player.getUUID());
@@ -5196,7 +5207,6 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 		private boolean deathVisualPlayed;
 		private boolean cleaningUp;
 		private final double sprintSwimMultiplier;
-		private final MobEffectInstance originalInvisibility;
 		private final boolean originalNoGravity;
 		private final float originalWalkingSpeed;
 		private final String originalCollisionTeamName;
@@ -5220,11 +5230,10 @@ private record KilkaDefenseProjectileDiversion(Vec3 forward, Vec3 bypassSide) {
 		private Vec3 lastSyncedVisualPosition = null;
 		private final Set<Holder<MobEffect>> mirroredVisualEffects = new HashSet<>();
 
-		private KilkaSalmonFormSession(ResourceKey<Level> dimension, UUID visualSalmonId, double sprintSwimMultiplier, MobEffectInstance originalInvisibility, boolean originalNoGravity, float originalWalkingSpeed, String originalCollisionTeamName, String collisionTeamName) {
+		private KilkaSalmonFormSession(ResourceKey<Level> dimension, UUID visualSalmonId, double sprintSwimMultiplier, boolean originalNoGravity, float originalWalkingSpeed, String originalCollisionTeamName, String collisionTeamName) {
 			this.dimension = dimension;
 			this.visualSalmonId = visualSalmonId;
 			this.sprintSwimMultiplier = Math.max(0.0D, sprintSwimMultiplier);
-			this.originalInvisibility = originalInvisibility;
 			this.originalNoGravity = originalNoGravity;
 			this.originalWalkingSpeed = originalWalkingSpeed;
 			this.originalCollisionTeamName = originalCollisionTeamName;
@@ -7986,8 +7995,8 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		boolean targetInWater = isKilkaSalmonPacketTargetInWater(player, packet);
 		boolean landingOnSolidGround = !targetInWater && isKilkaSalmonLandingAt(player, packet);
 		if (landingOnSolidGround || (!inWater && (player.onGround() || packet.isOnGround()))) {
-			// Evaluate the packet target as well as the current position. Otherwise the
-			// first packet that leaves water is incorrectly capped as aquatic movement.
+			// Evaluate the packet target as well as the current position so the
+			// first landing packet switches to land movement immediately.
 			syncKilkaSalmonAquaticSpeedModifier(player, session, false);
 			syncKilkaSalmonLandSpeedModifier(player, true);
 			return packet;
@@ -7998,29 +8007,11 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 		if (!Double.isFinite(packetX) || !Double.isFinite(packetY) || !Double.isFinite(packetZ)) {
 			return packet;
 		}
-		if (inWater) {
-			double deltaX = packetX - player.getX();
-			double deltaZ = packetZ - player.getZ();
-			double rawHorizontalDistance = Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
-			if (rawHorizontalDistance > 1.0E-8D) {
-				boolean sprintSwimming = isKilkaSalmonSprintSwimming(player, session, true);
-				// The input packet is accepted at the exact form speed. Vanilla player
-				// sprint-swimming is 0.20 blocks/tick; ordinary salmon swim is 0.07.
-				double targetDistance = sprintSwimming
-						? KILKA_SALMON_PLAYER_SPRINT_SWIM_BLOCKS_PER_TICK * getKilkaSalmonSprintSwimMultiplier(session)
-						: KILKA_SALMON_NORMAL_SWIM_BLOCKS_PER_TICK;
-				// Never amplify a tiny client correction near a wall. Only cap a move
-				// that exceeds the form's allowed distance; the synced attributes drive
-				// normal movement and preserve vanilla collision resolution.
-				if (rawHorizontalDistance > targetDistance) {
-					double scale = targetDistance / rawHorizontalDistance;
-					packetX = player.getX() + deltaX * scale;
-					packetZ = player.getZ() + deltaZ * scale;
-				}
-			}
-		} else {
+		if (!inWater) {
 			return packet;
 		}
+		// Keep the client displacement intact. Dolphins' Grace and other effects
+		// can move the salmon farther than its unboosted per-tick swim distance.
 		boolean onGround = false;
 		boolean horizontalCollision = packet.horizontalCollision();
 		if (packet.hasRotation()) {
@@ -15423,7 +15414,6 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 				level.dimension(),
 				null,
 				positiveOrDefault(ability.kilkaSalmonSprintSwimMultiplier, KILKA_UNIQUE_DEFAULT_SALMON_SPRINT_SWIM_MULTIPLIER),
-				player.getEffect(MobEffects.INVISIBILITY),
 				player.isNoGravity(),
 				player.getAbilities().getWalkingSpeed(),
 				originalCollisionTeam == null ? null : originalCollisionTeam.getName(),
@@ -15436,10 +15426,11 @@ private static void applyLittleDictatorSanctions(ServerPlayer dictator, ServerPl
 			sendKilkaSalmonOwnerPassengerAttachment(player, visual);
 		}
 		KILKA_SALMON_FORMS.put(playerId, session);
+		sendKilkaEnhancedFormState(player, true);
 		KILKA_SALMON_VOICE_PLAYERS.add(playerId);
 		KILKA_SALMON_FORM_PLAYERS.add(playerId);
 		saveKilkaSalmonFormPlayers(level.getServer());
-		applyKilkaSalmonScale(player, true);
+		applyKilkaSalmonScale(player);
 		hideKilkaSalmonPlayerFromOthers(player);
 		if (playTransition) {
 			spawnMilkMousePoof(level, player.position(), 4);
@@ -15553,7 +15544,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			applyKilkaSalmonInvisibility(player);
 			boolean aquaticMovementState = updateKilkaSalmonAquaticMovementState(player, session);
 			syncKilkaSalmonMovementPose(player, session, aquaticMovementState);
-			applyKilkaSalmonScale(player, aquaticMovementState);
+			applyKilkaSalmonScale(player);
 			syncKilkaSalmonAquaticSpeedModifier(player, session, aquaticMovementState);
 			syncKilkaSalmonLandSpeedModifier(player, !aquaticMovementState);
 			Entity visual = getOrCreateKilkaSalmonVisual(level, player, session);
@@ -15823,6 +15814,10 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			return packet;
 		}
 		int visualEntityId = visual.getId();
+		boolean enhancedClient = KILKA_ENHANCED_CLIENTS.contains(receiver.getUUID());
+		if (packet instanceof ClientboundAddEntityPacket addEntityPacket && addEntityPacket.getId() == visualEntityId) {
+			return enhancedClient ? null : packet;
+		}
 		if (packet instanceof ClientboundSetEntityMotionPacket entityMotionPacket && entityMotionPacket.getId() == visualEntityId) {
 			return null;
 		}
@@ -15834,16 +15829,17 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		}
 		if (packet instanceof ClientboundMoveEntityPacket moveEntityPacket
 				&& ((ClientboundMoveEntityPacketAccessor) (Object) moveEntityPacket).lg2$getEntityId() == visualEntityId) {
-			return moveEntityPacket instanceof ClientboundMoveEntityPacket.Rot ? packet : null;
+			return !enhancedClient && moveEntityPacket instanceof ClientboundMoveEntityPacket.Rot ? packet : null;
 		}
 		if (packet instanceof ClientboundRotateHeadPacket rotateHeadPacket) {
 			Entity rotated = rotateHeadPacket.getEntity(receiver.level());
 			if (rotated != null && rotated.getId() == visualEntityId) {
-				return packet;
+				return enhancedClient ? null : packet;
 			}
 		}
 		if (packet instanceof ClientboundSetEntityDataPacket entityDataPacket) {
-			return rewriteKilkaSalmonOwnerVisualMetadataPacket(visual, entityDataPacket);
+			return enhancedClient && entityDataPacket.id() == visualEntityId
+					? null : rewriteKilkaSalmonOwnerVisualMetadataPacket(visual, entityDataPacket);
 		}
 		return packet;
 	}
@@ -15905,7 +15901,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		}
 		return null;
 	}
-	private static void applyKilkaSalmonScale(ServerPlayer player, boolean aquaticMovementState) {
+	private static void applyKilkaSalmonScale(ServerPlayer player) {
 		if (player == null) {
 			return;
 		}
@@ -15913,8 +15909,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		if (scale == null) {
 			return;
 		}
-		double baseHeight = aquaticMovementState ? KILKA_SALMON_PLAYER_SWIMMING_BASE_HEIGHT_BLOCKS : KILKA_SALMON_PLAYER_STANDING_BASE_HEIGHT_BLOCKS;
-		double targetScale = Mth.clamp(KILKA_SALMON_PLAYER_HEIGHT_BLOCKS / baseHeight, 0.0625D, 1.0D);
+		double targetScale = kilkaSalmonTargetScale(player.getDefaultDimensions(player.getPose()));
 		double amount = targetScale - 1.0D;
 		AttributeModifier current = scale.getModifier(KILKA_SALMON_SCALE_MODIFIER_ID);
 		if (current == null || Math.abs(current.amount() - amount) > 1.0E-6D || current.operation() != AttributeModifier.Operation.ADD_VALUE) {
@@ -15924,6 +15919,13 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			scale.addTransientModifier(new AttributeModifier(KILKA_SALMON_SCALE_MODIFIER_ID, amount, AttributeModifier.Operation.ADD_VALUE));
 			player.refreshDimensions();
 		}
+	}
+
+	static double kilkaSalmonTargetScale(EntityDimensions playerPoseDimensions) {
+		if (playerPoseDimensions == null || playerPoseDimensions.height() <= 0.0F) {
+			return 1.0D;
+		}
+		return Mth.clamp(EntityType.SALMON.getDimensions().height() / playerPoseDimensions.height(), 0.0625D, 1.0D);
 	}
 
 	private static void maintainKilkaSalmonVisualSurvival(Entity visual) {
@@ -16005,6 +16007,8 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		if (visual == null || !visual.isAlive() || !visual.getTags().contains(KILKA_SALMON_VISUAL_TAG)) {
 			visual = spawnKilkaSalmonVisual(level, player);
 			session.visualSalmonId = visual == null ? null : visual.getUUID();
+			sendKilkaEnhancedFormState(player, true);
+			session.mirroredVisualEffects.clear();
 			session.visualWallHoldXSign = 0;
 			session.visualWallHoldZSign = 0;
 			session.lastVisualOwnerPosition = null;
@@ -16026,7 +16030,9 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			mob.setAggressive(false);
 		}
 		syncKilkaSalmonVisualExternalMotion(player, session);
-		Vec3 safeTargetPos = resolveKilkaSalmonVisualSafePosition(level, visual, session, player.position());
+		// The owner now has the same collision box as the salmon, so no wall-lock
+		// offset is needed for the fish seen by unmodified clients.
+		Vec3 safeTargetPos = player.position();
 		// setPos keeps the normal entity-tracker relative packets. teleportTo and a
 		// forced motion packet every tick made the salmon stutter for other players.
 		visual.setPos(safeTargetPos);
@@ -16126,7 +16132,8 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 	}
 
 	private static void sendKilkaSalmonOwnerVisualRotation(ServerPlayer player, Entity visual) {
-		if (player == null || player.connection == null || visual == null) {
+		if (player == null || player.connection == null || visual == null
+				|| KILKA_ENHANCED_CLIENTS.contains(player.getUUID())) {
 			return;
 		}
 		byte yaw = toGennadiyDefenseRotationByte(visual.getYRot());
@@ -16156,64 +16163,50 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 			return;
 		}
 
-		// The player entity is hidden from everyone else in this form, therefore every
-		// active effect is mirrored to the salmon so its particles remain visible.
+		// Effects received by the physical salmon are applied to its owner first.
+		for (MobEffectInstance effect : List.copyOf(visual.getActiveEffects())) {
+			if (effect == null) {
+				continue;
+			}
+			Holder<MobEffect> type = effect.getEffect();
+			MobEffectInstance ownerEffect = player.getEffect(type);
+			if (!session.mirroredVisualEffects.contains(type)
+					|| (ownerEffect != null && (effect.getAmplifier() > ownerEffect.getAmplifier()
+							|| (!ownerEffect.isInfiniteDuration() && (effect.isInfiniteDuration()
+									|| effect.getDuration() > ownerEffect.getDuration() + 1))))) {
+				player.addEffect(new MobEffectInstance(effect));
+			}
+		}
+
 		Set<Holder<MobEffect>> activePlayerEffects = new HashSet<>();
 		for (MobEffectInstance effect : List.copyOf(player.getActiveEffects())) {
 			if (effect == null) {
 				continue;
 			}
 			Holder<MobEffect> type = effect.getEffect();
-			visual.addEffect(new MobEffectInstance(effect));
-			if (isKilkaSalmonOnlyVisualEffect(type)) {
-				// This effect belongs to the salmon after transfer, so it must not be
-				// removed as a short-lived visual mirror on the next tick.
-				player.removeEffect(type);
-			} else {
-				activePlayerEffects.add(type);
-				session.mirroredVisualEffects.add(type);
+			activePlayerEffects.add(type);
+			if (shouldSyncKilkaSalmonEffect(effect, visual.getEffect(type))) {
+				visual.removeEffect(type);
+				visual.addEffect(new MobEffectInstance(effect));
 			}
+			session.mirroredVisualEffects.add(type);
 		}
-
-		// Remove only copies created above. Effects applied directly to the salmon are
-		// still handled below and may be transferred to their logical owner.
 		for (Holder<MobEffect> type : Set.copyOf(session.mirroredVisualEffects)) {
 			if (!activePlayerEffects.contains(type)) {
 				visual.removeEffect(type);
 				session.mirroredVisualEffects.remove(type);
 			}
 		}
-
-		for (MobEffectInstance effect : List.copyOf(visual.getActiveEffects())) {
-			if (effect == null) {
-				continue;
-			}
-			Holder<MobEffect> type = effect.getEffect();
-			if (session.mirroredVisualEffects.contains(type)) {
-				continue;
-			}
-			if (isKilkaSalmonOnlyVisualEffect(type)) {
-				continue;
-			}
-			player.addEffect(new MobEffectInstance(effect));
-			if (!isKilkaSalmonSharedEffect(type)) {
-				visual.removeEffect(type);
-			}
-		}
 	}
 
-	private static boolean isKilkaSalmonOnlyVisualEffect(Holder<MobEffect> type) {
-		return type == MobEffects.INVISIBILITY
-				|| type == MobEffects.WEAVING
-				|| type == MobEffects.OOZING
-				|| type == MobEffects.WIND_CHARGED
-				|| type == MobEffects.GLOWING;
-	}
-
-	private static boolean isKilkaSalmonSharedEffect(Holder<MobEffect> type) {
-		return type == MobEffects.FIRE_RESISTANCE
-				|| type == MobEffects.RESISTANCE
-				|| type == MobEffects.NIGHT_VISION;
+	static boolean shouldSyncKilkaSalmonEffect(MobEffectInstance owner, MobEffectInstance visual) {
+		return visual == null
+				|| owner.getAmplifier() != visual.getAmplifier()
+				|| owner.isInfiniteDuration() != visual.isInfiniteDuration()
+				|| (!owner.isInfiniteDuration() && Math.abs(owner.getDuration() - visual.getDuration()) > 1)
+				|| owner.isAmbient() != visual.isAmbient()
+				|| owner.isVisible() != visual.isVisible()
+				|| owner.showIcon() != visual.showIcon();
 	}
 
 	private static boolean isPersistedKilkaStockNightVision(MobEffectInstance effect) {
@@ -16422,7 +16415,7 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 	}
 
 	private static void sendKilkaSalmonOwnerPassengerAttachment(ServerPlayer player, Entity visual) {
-		if (player == null || player.connection == null) {
+		if (player == null || player.connection == null || KILKA_ENHANCED_CLIENTS.contains(player.getUUID())) {
 			return;
 		}
 		ClientboundSetPassengersPacket packet = new ClientboundSetPassengersPacket(player);
@@ -16632,10 +16625,8 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 		removeAttributeModifier(player.getAttribute(Attributes.MOVEMENT_SPEED), KILKA_SALMON_AQUATIC_SPEED_MODIFIER_ID);
 		removeAttributeModifier(player.getAttribute(Attributes.WATER_MOVEMENT_EFFICIENCY), KILKA_SALMON_WATER_EFFICIENCY_MODIFIER_ID);
 		player.refreshDimensions();
-		if (restorePlayer && session != null && session.originalInvisibility != null) {
-			player.addEffect(session.originalInvisibility);
-		}
 		player.setInvisible(player.hasEffect(MobEffects.INVISIBILITY));
+		sendKilkaEnhancedFormState(player, false);
 		if (restorePlayer && player.level() instanceof ServerLevel level) {
 			spawnMilkMousePoof(level, player.position(), 4);
 		}
@@ -16736,6 +16727,25 @@ private static void restoreKilkaSalmonFormAfterJoin(MinecraftServer server, Serv
 
 	public static boolean isKilkaSalmonForm(ServerPlayer player) {
 		return player != null && KILKA_SALMON_FORMS.containsKey(player.getUUID());
+	}
+
+	private static void sendKilkaEnhancedFormState(ServerPlayer player, boolean active) {
+		if (player == null || player.connection == null || !KILKA_ENHANCED_CLIENTS.contains(player.getUUID())
+				|| !ServerPlayNetworking.canSend(player, Lg2Payloads.KilkaFormStateS2CPayload.TYPE)) {
+			return;
+		}
+		ServerPlayNetworking.send(player, new Lg2Payloads.KilkaFormStateS2CPayload(active));
+		if (active) {
+			Entity visual = resolveKilkaSalmonOwnerVisual(player);
+			if (visual != null) {
+				player.connection.send(new ClientboundRemoveEntitiesPacket(visual.getId()));
+			}
+		}
+	}
+
+	public static boolean shouldUseKilkaSalmonDimensions(ServerPlayer player) {
+		KilkaSalmonFormSession session = player == null ? null : KILKA_SALMON_FORMS.get(player.getUUID());
+		return session != null && !session.cleaningUp;
 	}
 
 	public static boolean isKilkaSalmonVoiceSender(UUID playerId) {

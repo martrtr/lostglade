@@ -8,6 +8,7 @@ import com.lostglade.client.RendererBotClientVideoRecording;
 import com.lostglade.client.RendererBotVolunteerClient;
 import com.lostglade.client.LostgladeClientSettings;
 import com.lostglade.client.VoiceChatCompatibilityGuard;
+import com.lostglade.client.KilkaClientForm;
 import com.lostglade.client.maprender.YandexMapRenderClient;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.client.MilkPocketVoidFadeClient;
@@ -30,6 +31,7 @@ public class Lg2Client implements ClientModInitializer {
 		RendererBotPayloads.registerPayloadTypes();
 		YandexMapRenderPayloads.registerPayloadTypes();
 		Lg2Payloads.registerClientPayloadTypes();
+		KilkaClientForm.register();
 		AccountAuthClient.register();
 		MilkPocketVoidFadeClient.register();
 		RendererBotClientMode.register();
