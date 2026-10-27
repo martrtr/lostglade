@@ -1569,14 +1569,13 @@ public final class RendererBotCameraSystem {
 				// but remains bounded if a renderer disappears.
 				.orTimeout(Math.max(timeoutMillis, recording.maxDurationSeconds() * 5_000L + 60_000L), TimeUnit.MILLISECONDS)
 				.exceptionally(throwable -> {
-					if (PENDING_VIDEO_RECORDINGS.remove(recording.requestId(), recording)) {
-						markVideoRecoveryDirty();
-						MinecraftServer callbackServer = recording.server();
-						if (callbackServer != null) {
-							callbackServer.execute(() -> releaseBotCameraIfNeeded(callbackServer, recording.botUuid(), recording.resetCameraOnFinish()));
-						}
-						recording.completionFuture().completeExceptionally(throwable);
-					}
+					// A terminal timeout must cancel the client's encoder too. Merely
+					// removing the server job leaves it rendering and blocking the queue.
+					Runnable cleanup = () -> failVideoRecording(recording.requestId(), recording,
+							"Camera video renderer failed or timed out: " + throwable);
+					MinecraftServer callbackServer = recording.server();
+					if (callbackServer != null) callbackServer.execute(cleanup);
+					else cleanup.run();
 					return null;
 				});
 	}

@@ -41,7 +41,8 @@ public final class CameraCaptureSystem {
 	private static final String IT_CAMERA = "it_camera";
 	private static final Identifier CAMERA_SHUTTER_SOUND_ID = Identifier.fromNamespaceAndPath("lg2", "camera_shutter");
 	private static final Holder<SoundEvent> CAMERA_SHUTTER_SOUND = Holder.direct(SoundEvent.createVariableRangeEvent(CAMERA_SHUTTER_SOUND_ID));
-	private static final int CAMERA_COOLDOWN_TICKS = 40;
+	private static final int RENDER_COOLDOWN_TICKS = 1_000_000;
+	private static final int RENDER_COOLDOWN_REFRESH_TICKS = 20;
 	private static final int USE_SWING_SUPPRESSION_TICKS = 2;
 	private static final double MAX_SHUTTER_SOUND_DISTANCE_SQR = 24.0D * 24.0D;
 	private static final float SHUTTER_SOUND_VOLUME = 0.45F;
@@ -154,18 +155,22 @@ public final class CameraCaptureSystem {
 		return true;
 	}
 
-	/** Keeps the visual camera cooldown aligned with an active render's remaining work. */
-	public static void updateRenderCooldown(ServerPlayer player, int remainingTicks) {
+	/** Holds the camera overlay full until its photo/video job explicitly releases it. */
+	public static void updateRenderCooldown(ServerPlayer player) {
 		if (player == null) {
 			return;
 		}
-		ItemStack camera = player.getMainHandItem().is(ModItems.CAMERA) ? player.getMainHandItem() : player.getOffhandItem();
-		if (camera.is(ModItems.CAMERA)) {
-			player.getCooldowns().addCooldown(camera, Math.max(1, remainingTicks));
+		// Address the item group directly: switching slots or putting the camera
+		// away must never stop renewal. A large rolling duration keeps the overlay
+		// visually full without flooding the client with a packet on every tick.
+		ItemStack camera = ModItems.CAMERA.getDefaultInstance();
+		if (player.tickCount % RENDER_COOLDOWN_REFRESH_TICKS == 0
+				|| player.getCooldowns().getCooldownPercent(camera, 0.0F) < 0.99F) {
+			player.getCooldowns().addCooldown(BuiltInRegistries.ITEM.getKey(ModItems.CAMERA), RENDER_COOLDOWN_TICKS);
 		}
 	}
 
-	/** Completion and cancellation must release a conservative estimate immediately. */
+	/** Completion, failure and cancellation release the held overlay immediately. */
 	public static void clearRenderCooldown(ServerPlayer player) {
 		if (player != null) {
 			player.getCooldowns().removeCooldown(BuiltInRegistries.ITEM.getKey(ModItems.CAMERA));

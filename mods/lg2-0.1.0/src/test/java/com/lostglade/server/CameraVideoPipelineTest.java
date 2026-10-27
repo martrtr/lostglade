@@ -18,9 +18,36 @@ public final class CameraVideoPipelineTest {
 		cachedPhotosCannotCrossRequestsOrSessions();
 		photoDeliveryTracksEachViewerIndependently();
 		completedVideoReleasesPhotoRenderer();
+		terrainWarmupPreservesCaptureResolution();
 		photoCancellationReleasesProviderExactlyOnce();
 		historyCheckpointPreservesDifferentFrames();
 		System.out.println("Camera video pipeline behavior checks passed");
+	}
+
+	private static void terrainWarmupPreservesCaptureResolution() throws Exception {
+		Class<?> video = Class.forName("com.lostglade.client.RendererBotClientVideoRecording");
+		var dimension = video.getDeclaredMethod("warmupDimension", int.class, int.class);
+		dimension.setAccessible(true);
+		require((int) dimension.invoke(null, 2048, 1024) == 256, "terrain warmup must bound its long edge");
+		require((int) dimension.invoke(null, 1024, 2048) == 128, "terrain warmup must preserve the camera aspect ratio");
+		require((int) dimension.invoke(null, 128, 128) == 128, "small targets must not be enlarged");
+		var pose = new com.lostglade.network.RendererBotPayloads.VideoCameraFrame(0D, 0D, 0D, 0F, 0F);
+		var payload = new com.lostglade.network.RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload(
+				UUID.randomUUID(), UUID.randomUUID(), "minecraft:overworld", 0D, 0D, 0D, 0F, 0F,
+				null, 128, 128, 128, 128, 70, 10, 600, List.of(pose, pose));
+		Class<?> type = Class.forName("com.lostglade.client.RendererBotClientVideoRecording$PendingRecording");
+		var constructor = type.getDeclaredConstructors()[0]; constructor.setAccessible(true);
+		Object recording = constructor.newInstance(payload, null, java.io.OutputStream.nullOutputStream(),
+				java.nio.file.Path.of("unused.tmp"), java.nio.file.Path.of("unused.mp4"), 2048, 1024);
+		require(!(boolean) call(recording, "prepareCaptureResolution", new Class<?>[]{boolean.class}, false), "unsettled terrain should warm up cheaply");
+		require((boolean) call(recording, "prepareCaptureResolution", new Class<?>[]{boolean.class}, true), "settled terrain must promote to encoder resolution");
+		for (int retry = 0; retry < 10; retry++) {
+			require((boolean) call(recording, "prepareCaptureResolution", new Class<?>[]{boolean.class}, false), "resize must not oscillate between warmup and capture targets");
+		}
+		call(recording, "advanceAfterEncodedFrame", new Class<?>[0]);
+		require(!(boolean) call(recording, "prepareCaptureResolution", new Class<?>[]{boolean.class}, false), "the next scene must wait for its own terrain");
+		require(field(recording, "captureWidth").getInt(recording) == 2048 && field(recording, "captureHeight").getInt(recording) == 1024,
+				"warmup must preserve final MP4 dimensions");
 	}
 
 	private static void completedVideoReleasesPhotoRenderer() throws Exception {

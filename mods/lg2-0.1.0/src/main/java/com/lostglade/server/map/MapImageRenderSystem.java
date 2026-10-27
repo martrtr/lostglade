@@ -155,6 +155,7 @@ public final class MapImageRenderSystem {
 		RenderJob job = new RenderJob(player.getUUID(), photoMapSet.mapIds(), photoMapSet.mapDataSet(), mapsWide, mapsHigh, previewMap.previewMapId().id(), previewMap.previewMapData(), provider);
 		job.server = player.level().getServer();
 		PLAYER_JOBS.put(player.getUUID(), job);
+		CameraCaptureSystem.updateRenderCooldown(player);
 		QUEUE.offer(player.getUUID());
 		ServerMechanicsGateSystem.syncPlayerInventory(player);
 		if (activePlayerId == null) {
@@ -996,7 +997,7 @@ public final class MapImageRenderSystem {
 			}
 			ServerPlayer player = server.getPlayerList().getPlayer(job.playerId());
 			if (player != null) {
-				CameraCaptureSystem.updateRenderCooldown(player, job.estimatedRemainingCooldownTicks());
+				CameraCaptureSystem.updateRenderCooldown(player);
 			}
 		}
 	}
@@ -1088,7 +1089,6 @@ public final class MapImageRenderSystem {
 		private boolean previewTaskDispatched;
 		private boolean previewRendered;
 		private boolean startedRendering;
-		private long startedRenderingAtMillis;
 		private volatile FrameResult frameResult;
 		private volatile FrameResult previewResult;
 		private byte[] lastAppliedProgressPreview;
@@ -1241,28 +1241,6 @@ public final class MapImageRenderSystem {
 
 		private void markStartedRendering() {
 			this.startedRendering = true;
-			this.startedRenderingAtMillis = System.currentTimeMillis();
-		}
-
-		private int estimatedRemainingCooldownTicks() {
-			if (!this.startedRendering) {
-				// Queue order is not a reliable duration predictor; keep a small rolling
-				// lock until this job becomes active rather than leaving a stale long one.
-				return 40;
-			}
-			int completed = this.provider.prefersWholeFrameRendering() ? this.frameApplyIndex : this.nextPixel;
-			int total = Math.max(1, this.totalPixels());
-			if (this.provider.prefersWholeFrameRendering() && completed <= 0) {
-				// Terrain capture exposes no trustworthy intermediate pixel count while
-				// the volunteer renderer is preparing its one full frame.
-				return 600;
-			}
-			int remaining = Math.max(0, total - completed);
-			long perUnitMillis = completed > 0 && this.startedRenderingAtMillis > 0L
-					? Math.max(1L, (System.currentTimeMillis() - this.startedRenderingAtMillis) / completed)
-					: 30_000L;
-			long remainingMillis = Math.min(30L * 60_000L, remaining * perUnitMillis + 2_000L);
-			return Math.max(1, (int) Math.min(Integer.MAX_VALUE, (remainingMillis + 49L) / 50L));
 		}
 
 		private void pushFrameResult(FrameResult frameResult) {

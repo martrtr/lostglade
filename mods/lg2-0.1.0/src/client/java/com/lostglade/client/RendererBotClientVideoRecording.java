@@ -40,6 +40,7 @@ public final class RendererBotClientVideoRecording {
 	private static final long REPLAY_FRAME_STALL_TIMEOUT_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(30L);
 	private static final int MIN_RECORDING_FRAMES = 1;
 	private static final int MAX_TARGET_FPS = 20;
+	private static final int TERRAIN_WARMUP_MAX_SIZE = 256;
 	private static final int REMOTE_VIDEO_CHUNK_BYTES = 192 * 1024;
 	private static final long MAX_REMOTE_VIDEO_UPLOAD_BYTES = 96L * 1024L * 1024L;
 	private static final double TARGET_RENDER_SCALE = Math.max(1.0D, doubleProperty("lg2.rendererBotVideoRenderScale", 2.0D));
@@ -110,7 +111,12 @@ public final class RendererBotClientVideoRecording {
 
 	private static void beginRecording(RendererBotPayloads.RendererBotVideoRecordingStartS2CPayload payload, Minecraft client) {
 		if (!RendererBotVolunteerClient.isVolunteerRenderer()) {
-			sendFailure(payload.requestId(), "Volunteer renderer disabled by client");
+			String reason = "Volunteer renderer disabled by client: "
+					+ RendererBotRenderEnvironmentGuard.inspect(client).reason()
+					+ " (dedicated=" + RendererBotClientMode.isEnabled()
+					+ ", renderBudget=" + LostgladeClientSettings.renderBudgetPercent() + ")";
+			Lg2.LOGGER.warn("Renderer bot rejected video recording {}: {}", payload.requestId(), reason);
+			sendFailure(payload.requestId(), reason);
 			return;
 		}
 		try {
@@ -342,6 +348,14 @@ public final class RendererBotClientVideoRecording {
 				return;
 			}
 			recording.snapshotWaitStartedNanos = 0L;
+			var readiness = RendererBotShadowWorldManager.inspectRenderReadiness(recording.payload().renderSessionId());
+			boolean captureResolution = recording.prepareCaptureResolution(readiness != null && readiness.settled());
+			// Software OpenGL must still draw while chunk builds and uploads advance.
+			// Drawing every incomplete scene at encoder resolution makes each upload
+			// wait behind an expensive full-size frame. Keep the same camera/aspect
+			// during warm-up, then capture only at the original encoder resolution.
+			int renderWidth = captureResolution ? recording.captureWidth : warmupDimension(recording.captureWidth, recording.captureHeight);
+			int renderHeight = captureResolution ? recording.captureHeight : warmupDimension(recording.captureHeight, recording.captureWidth);
 			// Replay uses a static marker at the recorded pose. Vanilla therefore
 			// does not hide the operator as its camera entity. Historical entity
 			// packets can recreate the player, so hide it AFTER every restore.
@@ -353,8 +367,11 @@ public final class RendererBotClientVideoRecording {
 			}
 			boolean rendered = RendererBotOffscreenWorldRenderer.renderToTarget(
 					client,
-					recordingRenderRequest(recording, recording.captureWidth, recording.captureHeight),
-					renderTarget -> completeDeferredReplayRender(client, recording, renderTarget, frameAttempt)
+					recordingRenderRequest(recording, renderWidth, renderHeight),
+					renderTarget -> {
+						if (captureResolution) completeDeferredReplayRender(client, recording, renderTarget, frameAttempt);
+						else clearRecordingFrameInFlight(recording.payload().requestId(), frameAttempt);
+					}
 			);
 			if (!rendered) {
 				clearRecordingFrameInFlight(recording.payload().requestId(), frameAttempt);
@@ -362,6 +379,11 @@ public final class RendererBotClientVideoRecording {
 				RendererClientDiagnostics.cameraFrameRendered();
 			}
 		}
+	}
+
+	private static int warmupDimension(int dimension, int otherDimension) {
+		return Math.max(1, (int) Math.round(dimension * Math.min(1.0D,
+				TERRAIN_WARMUP_MAX_SIZE / (double) Math.max(dimension, otherDimension))));
 	}
 
 	private static void dispatchRecordingFrame(Minecraft client, PendingRecording recording, RenderTarget renderTarget, long frameAttempt) {
@@ -1085,6 +1107,7 @@ public final class RendererBotClientVideoRecording {
 		private boolean completionSent;
 		private long lastCompletionSentAtMillis;
 		private int nextFrameIndex;
+		private int captureResolutionFrameIndex = -1;
 		private int serverReadyFrameIndex = -1;
 		private boolean sealed;
 
@@ -1222,6 +1245,13 @@ public final class RendererBotClientVideoRecording {
 
 		private int currentFrameIndex() {
 			return this.nextFrameIndex;
+		}
+
+		private boolean prepareCaptureResolution(boolean terrainSettled) {
+			if (terrainSettled) this.captureResolutionFrameIndex = this.nextFrameIndex;
+			// Resizing invalidates visibility once. Never return to the small target
+			// while the full-size pass settles, or the two sizes oscillate forever.
+			return this.captureResolutionFrameIndex == this.nextFrameIndex;
 		}
 
 		private int completedFrameCount() {

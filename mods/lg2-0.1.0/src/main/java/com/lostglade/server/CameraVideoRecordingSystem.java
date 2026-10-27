@@ -207,7 +207,7 @@ public final class CameraVideoRecordingSystem {
 				// its camera must become usable immediately, not receive a fresh
 				// cooldown on every server tick while the short MP4 is closing.
 				if (!recording.truncationRequested()) {
-					applyRenderingCooldown(player, recording);
+					applyRenderingCooldown(player);
 				}
 				continue;
 			}
@@ -245,12 +245,12 @@ public final class CameraVideoRecordingSystem {
 			state.setIssuedVideoData(issued);
 			CameraAnimatedMapPlaybackSystem.registerPendingVideoMaps(issued);
 			state.markStopRequested();
-			state.beginRenderEstimate(Math.max(1, recovery.totalFrames()));
+			state.beginRenderProgress(Math.max(1, recovery.totalFrames()));
 			int restoredProgress = state.recordRenderedFrames(recovery.completedFrames());
 			RECORDINGS_BY_PLAYER.put(player.getUUID(), state);
 			attachCompletion(server, state, recovery.completionFuture());
 			updateIssuedVideoTitle(player, state, Math.max(0, restoredProgress));
-			applyRenderingCooldown(player, state);
+			applyRenderingCooldown(player);
 			Lg2.LOGGER.info("Resumed unfinished camera-video render {} for {} after server restart", recovery.requestId(), player.getScoreboardName());
 		}
 	}
@@ -306,9 +306,9 @@ public final class CameraVideoRecordingSystem {
 		ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
 		if (player != null) {
 			RendererBotCameraSystem.finishVideoCameraPath(recording.requestId(), player);
-			recording.beginRenderEstimate(RendererBotCameraSystem.videoFrameCount(recording.requestId()));
+			recording.beginRenderProgress(RendererBotCameraSystem.videoFrameCount(recording.requestId()));
 			updateIssuedVideoTitle(player, recording, 0);
-			applyRenderingCooldown(player, recording);
+			applyRenderingCooldown(player);
 		}
 		RendererBotCameraSystem.stopVideoRecording(server, recording.requestId());
 		if (notifyPlayer) {
@@ -318,16 +318,8 @@ public final class CameraVideoRecordingSystem {
 		}
 	}
 
-	private static void applyRenderingCooldown(ServerPlayer player, ActiveRecording recording) {
-		if (player == null) {
-			return;
-		}
-		ItemStack cameraStack = player.getMainHandItem().is(ModItems.CAMERA)
-				? player.getMainHandItem()
-				: player.getOffhandItem();
-		if (cameraStack.is(ModItems.CAMERA)) {
-			player.getCooldowns().addCooldown(cameraStack, recording == null ? 20 : recording.estimatedCooldownTicks());
-		}
+	private static void applyRenderingCooldown(ServerPlayer player) {
+		CameraCaptureSystem.updateRenderCooldown(player);
 	}
 
 	/** Called by the renderer after each encoded pose; the issued print keeps a real progress title. */
@@ -343,7 +335,7 @@ public final class CameraVideoRecordingSystem {
 			ServerPlayer player = server.getPlayerList().getPlayer(recording.playerId());
 			if (player != null && progress >= 0) {
 				updateIssuedVideoTitle(player, recording, progress);
-				applyRenderingCooldown(player, recording);
+				applyRenderingCooldown(player);
 			}
 			return;
 		}
@@ -715,7 +707,6 @@ public final class CameraVideoRecordingSystem {
 		private int consecutiveIssuedVideoMissingTicks;
 		private int renderFrameTotal;
 		private int renderedFrames;
-		private long renderStartedAtMs;
 		private int lastTitleProgress = -1;
 
 		private ActiveRecording(
@@ -745,7 +736,6 @@ public final class CameraVideoRecordingSystem {
 			this.consecutiveIssuedVideoMissingTicks = 0;
 			this.renderFrameTotal = 0;
 			this.renderedFrames = 0;
-			this.renderStartedAtMs = 0L;
 		}
 
 		private UUID playerId() {
@@ -808,10 +798,9 @@ public final class CameraVideoRecordingSystem {
 			return this.issuedVideoData;
 		}
 
-		private synchronized void beginRenderEstimate(int totalFrames) {
+		private synchronized void beginRenderProgress(int totalFrames) {
 			this.renderFrameTotal = Math.max(1, totalFrames);
 			this.renderedFrames = 0;
-			this.renderStartedAtMs = System.currentTimeMillis();
 			this.lastTitleProgress = -1;
 		}
 
@@ -827,18 +816,6 @@ public final class CameraVideoRecordingSystem {
 			}
 			this.lastTitleProgress = progress;
 			return progress;
-		}
-
-		private synchronized int estimatedCooldownTicks() {
-			if (this.renderFrameTotal <= 0) {
-				return 20;
-			}
-			int remaining = Math.max(0, this.renderFrameTotal - this.renderedFrames);
-			long perFrameMs = this.renderedFrames > 0 && this.renderStartedAtMs > 0L
-					? Math.max(100L, (System.currentTimeMillis() - this.renderStartedAtMs) / this.renderedFrames)
-					: 2_000L;
-			long estimatedMs = Math.min(30L * 60_000L, remaining * perFrameMs + 10_000L);
-			return Math.max(20, (int) Math.min(Integer.MAX_VALUE, (estimatedMs + 49L) / 50L));
 		}
 
 		private synchronized boolean markStartedFeedbackSent() {
