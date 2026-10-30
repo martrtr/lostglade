@@ -14,6 +14,15 @@ fi
 # Produce release-mode server/client jars and Loom's exact client launch
 # metadata.  The renderer export below copies only the compiled runtime files
 # referenced by that metadata, never the Gradle project or its sources.
+
+# Keep the renderer spawn redirect non-blocking. Calling ServerLevel.waitForEntities
+# from this mixin can stall the server thread on a cold world until the watchdog
+# kills the process. Fail the release build if a direct invocation is reintroduced.
+spawn_mixin="${repo_dir}/mods/lg2-0.1.0/src/main/java/com/lostglade/mixin/PrepareSpawnTaskAccountAuthMixin.java"
+if grep -Eq '[.]waitForEntities[[:space:]]*[(]' "${spawn_mixin}"; then
+  echo 'Unsafe synchronous waitForEntities invocation in renderer spawn mixin.' >&2
+  exit 1
+fi
 (
   cd "${repo_dir}/mods/lg2-0.1.0"
   ./gradlew --no-daemon --console=plain \
