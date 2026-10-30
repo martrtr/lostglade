@@ -89,8 +89,9 @@ public abstract class PrepareSpawnTaskAccountAuthMixin {
             Connection connection,
             CommonListenerCookie cookie
     ) {
-        if (RendererBotPresenceSystem.isRendererBotConnection(cookie.gameProfile().name(), connection)) {
-            level.waitForEntities(chunkPos, radius);
-        }
+        // The renderer bot deliberately skips vanilla's synchronous spawn-entity warmup.
+        // Calling waitForEntities here puts chunk/entity readiness back on the login path;
+        // on a cold world this can block the server thread until the watchdog kills it.
+        // The bot receives chunks normally after spawn, so do not wait synchronously.
     }
 }
