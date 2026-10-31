@@ -34,7 +34,9 @@ public final class MapRenderInventory {
 		Map<MapTileKey, MapTileSourceState> sourceTiles = index.baseTiles(dimensionId, profile, entityIndex);
 		List<TileStatus> statuses = new ArrayList<>(sourceTiles.size());
 		for (Map.Entry<MapTileKey, MapTileSourceState> entry : sourceTiles.entrySet()) {
-			MapTileSourceState effectiveSource = MapSnapshotManifest.create(index, entityIndex, entry.getKey(), profile).sourceState();
+			// sourceTiles is the complete grouping of this index. Rebuilding it in
+			// MapSnapshotManifest for every entry turns a discovery into O(tiles × chunks).
+			MapTileSourceState effectiveSource = MapSnapshotManifest.create(index, entityIndex, entry.getKey(), profile, entry.getValue()).sourceState();
 			Optional<MapTileMetadata> metadata;
 			try {
 				metadata = store.readMetadata(entry.getKey(), profileHash);
