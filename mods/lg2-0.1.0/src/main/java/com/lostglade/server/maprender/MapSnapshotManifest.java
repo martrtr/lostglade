@@ -33,10 +33,30 @@ public record MapSnapshotManifest(
 			MapTileKey key,
 			MapRenderProfile profile
 	) {
+		return create(terrainIndex, entityIndex, key, profile, null);
+	}
+
+	/**
+	 * Creates a per-tile render manifest. Callers which already grouped the
+	 * index into base tiles may pass that source state to avoid rebuilding the
+	 * complete index once for every tile during discovery.
+	 */
+	static MapSnapshotManifest create(
+			MapChunkExistenceIndex terrainIndex,
+			MapChunkExistenceIndex entityIndex,
+			MapTileKey key,
+			MapRenderProfile profile,
+			MapTileSourceState baseSourceState
+	) {
 		Objects.requireNonNull(terrainIndex, "terrainIndex");
 		Objects.requireNonNull(key, "key");
 		Objects.requireNonNull(profile, "profile");
-		MapTileSourceState sourceState = terrainIndex.baseTiles(key.dimensionId(), profile, entityIndex).get(key);
+		MapTileSourceState sourceState = baseSourceState == null
+				? terrainIndex.baseTiles(key.dimensionId(), profile, entityIndex).get(key)
+				: baseSourceState;
+		if (sourceState != null && !key.equals(sourceState.key())) {
+			throw new IllegalArgumentException("base source state belongs to a different map tile");
+		}
 		if (sourceState == null || sourceState.existingChunkCount() <= 0) {
 			throw new IllegalArgumentException("Map tile has no existing terrain chunks: " + key);
 		}

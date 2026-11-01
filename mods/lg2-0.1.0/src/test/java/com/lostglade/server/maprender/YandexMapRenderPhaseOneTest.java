@@ -27,6 +27,7 @@ public final class YandexMapRenderPhaseOneTest {
 		regionHeadersDiscoverOnlyExistingChunks();
 		sourceFingerprintChangesWithHeaderStamp();
 		targetedSourceRecheckMatchesSnapshotFingerprint();
+		groupedManifestMatchesIndependentManifest();
 		atomicTileStorePublishesWholeGenerations();
 		renderProfileVersionsUsePhysicalBaseNamespaces();
 		metadataOnlyRefreshPreservesCommittedPixels();
@@ -37,6 +38,39 @@ public final class YandexMapRenderPhaseOneTest {
 			realWorldReadOnlySmoke(Path.of(smokeRegion));
 		}
 		System.out.println("Yandex map renderer Phase 0/1 checks passed");
+	}
+
+	private static void groupedManifestMatchesIndependentManifest() throws Exception {
+		Path root = Files.createTempDirectory("lg2-map-grouped-manifest-");
+		try {
+			Path terrain = Files.createDirectories(root.resolve("region"));
+			Path entities = Files.createDirectories(root.resolve("entities"));
+			writeRegion(terrain.resolve("r.0.0.mca"), List.of(
+					new HeaderEntry(0, 0, 2, 1, 10), new HeaderEntry(1, 0, 3, 1, 11),
+					new HeaderEntry(7, 7, 4, 1, 12), new HeaderEntry(8, 0, 5, 1, 13)));
+			writeRegion(terrain.resolve("r.-1.-1.mca"), List.of(new HeaderEntry(31, 31, 2, 1, 14)));
+			writeRegion(entities.resolve("r.0.0.mca"), List.of(new HeaderEntry(0, 0, 2, 1, 20)));
+			MapChunkExistenceIndex index = MapChunkExistenceIndex.scan(terrain);
+			MapChunkExistenceIndex entityIndex = MapChunkExistenceIndex.scan(entities);
+			for (MapRenderProfile profile : List.of(MapRenderProfile.CURRENT, new MapRenderProfile(99, 128, 256, 1))) {
+				for (MapChunkExistenceIndex selectedEntities : new MapChunkExistenceIndex[]{null, entityIndex}) {
+					Map<MapTileKey, MapTileSourceState> tiles = index.baseTiles(OVERWORLD, profile, selectedEntities);
+					for (var entry : tiles.entrySet()) {
+						MapSnapshotManifest original = MapSnapshotManifest.create(index, selectedEntities, entry.getKey(), profile);
+						MapSnapshotManifest grouped = MapSnapshotManifest.create(index, selectedEntities, entry.getKey(), profile, entry.getValue());
+						require(original.equals(grouped), "grouped discovery must preserve mask, fingerprint, source chunks and halo: " + entry.getKey());
+					}
+					var entries = new ArrayList<>(tiles.entrySet());
+					boolean rejected = false;
+					try {
+						MapSnapshotManifest.create(index, selectedEntities, entries.get(0).getKey(), profile, entries.get(1).getValue());
+					} catch (IllegalArgumentException expected) { rejected = true; }
+					require(rejected, "a source state from a different tile must be rejected");
+				}
+			}
+		} finally {
+			deleteTree(root);
+		}
 	}
 
 	private static void negativeCoordinateTileMathUsesFloorDivision() {

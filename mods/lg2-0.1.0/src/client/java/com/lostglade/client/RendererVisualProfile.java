@@ -59,17 +59,22 @@ public final class RendererVisualProfile {
 	private static void tick(Minecraft client) {
 		if (client == null || client.options == null || changing || client.getOverlay() != null) return;
 		if (!recoveryChecked) {
-			recoveryChecked = true;
+			// A failed recovery must be retried after an explicit preference change,
+			// never bypassed or retried on every tick while the journal is invalid.
+			if (failure != null) return;
 			if (Files.exists(JOURNAL)) {
 				try {
-					backup = GSON.fromJson(Files.readString(JOURNAL), Snapshot.class);
-					if (backup == null || backup.selectedPacks() == null || backup.optionPacks() == null || backup.incompatiblePacks() == null) {
+					Snapshot recovered = GSON.fromJson(Files.readString(JOURNAL), Snapshot.class);
+					if (recovered == null || recovered.selectedPacks() == null || recovered.optionPacks() == null || recovered.incompatiblePacks() == null) {
 						throw new IllegalStateException("Invalid renderer visual backup");
 					}
+					backup = recovered;
+					recoveryChecked = true;
 					restore(client);
 				} catch (Exception exception) { fail("render-profile-backup-error", exception); }
 				return;
 			}
+			recoveryChecked = true;
 		}
 		if (++ticks % 20 != 0) return;
 		if (failure != null) {
