@@ -1,5 +1,6 @@
 package com.lostglade.block;
 
+import com.lostglade.Lg2;
 import com.lostglade.config.Lg2Config;
 import com.lostglade.item.ModItems;
 import com.lostglade.server.SeasonStartSystem;
@@ -23,8 +24,10 @@ import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraft.world.level.storage.loot.LootParams;
 import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
 import xyz.nucleoid.packettweaker.PacketContext;
@@ -121,17 +124,14 @@ public class BitcoinOreBlock extends SimplePolymerBlock implements PolymerTextur
 	private static BlockState requestTargetState(Identifier modelId, Block preferredPolymerBlock) {
 		PolymerBlockModel model = PolymerBlockModel.of(modelId);
 
-		// Prefer block states with matching vanilla sound groups (stone / deepslate).
+		// Vanilla placement always clears waterlogging on double slabs, so this state cannot flash on hand-built slabs.
 		BlockState targetState = requestStateWithPredicate(model, preferredPolymerBlock);
 		if (targetState != null) {
 			return targetState;
 		}
 
-		BlockState fallback = PolymerBlockResourceUtils.requestBlock(BlockModelType.FULL_BLOCK, model);
-		if (fallback == null) {
-			throw new IllegalStateException("Unable to allocate polymer block state for model " + modelId);
-		}
-		return fallback;
+		Lg2.LOGGER.warn("No matching double-slab Polymer state for {}; using raw gold fallback", modelId);
+		return Blocks.RAW_GOLD_BLOCK.defaultBlockState();
 	}
 
 	private static BlockState requestStateWithPredicate(PolymerBlockModel model, Block preferredPolymerBlock) {
@@ -142,7 +142,9 @@ public class BitcoinOreBlock extends SimplePolymerBlock implements PolymerTextur
 
 			return creator.requestBlock(
 					BlockModelType.FULL_BLOCK,
-					state -> state.is(preferredPolymerBlock),
+					state -> state.is(preferredPolymerBlock)
+							&& state.getValue(SlabBlock.TYPE) == SlabType.DOUBLE
+							&& state.getValue(SlabBlock.WATERLOGGED),
 					model
 			);
 		} catch (ReflectiveOperationException ignored) {
