@@ -347,7 +347,7 @@
       "enabled": true,
       "id": "mark_potroshitel",
       "displayName": "Марк Потрошитель",
-      "ownerNickname": "MePropertor",
+      "ownerNickname": "SirPropertor",
       "description": "Сражается в ближнем бою, восстанавливается от убийств и накапливает гнев.",
       "attack": {
         "enabled": true,
