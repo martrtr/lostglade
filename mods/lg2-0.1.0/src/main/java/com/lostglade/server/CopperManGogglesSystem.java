@@ -258,24 +258,6 @@ public final class CopperManGogglesSystem {
 		return cycleMode(player, stack);
 	}
 
-	public static boolean handleHeldModeToggle(ServerPlayer player, InteractionHand hand) {
-		if (player == null || hand == null || !player.isSecondaryUseActive()) {
-			return false;
-		}
-		ItemStack stack = player.getItemInHand(hand);
-		if (stack.isEmpty() || stack.getItem() != ModItems.COPPER_GOGGLES) {
-			return false;
-		}
-
-		ItemStack updated = stack.copy();
-		GogglesMode next = advanceMode(updated);
-		player.setItemInHand(hand, updated);
-		finishModeChange(player, next, false);
-		resyncHeldToggleState(player);
-		player.playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.55F, 1.15F);
-		return true;
-	}
-
 	public static boolean handleInventoryModeClick(
 			ServerPlayer player,
 			AbstractContainerMenu menu,
@@ -287,11 +269,11 @@ public final class CopperManGogglesSystem {
 			return false;
 		}
 		boolean isRightClick = clickType == ClickType.PICKUP && button == 1;
-		boolean isShiftClick = clickType == ClickType.QUICK_MOVE;
-		if (!isRightClick && !isShiftClick) {
+		if (!isRightClick) {
 			return false;
 		}
-		if (!menu.isValidSlotIndex(slotIndex)) {
+		// Vanilla treats -1 and -999 as valid click targets, but neither is a real slot.
+		if (slotIndex < 0 || slotIndex >= menu.slots.size()) {
 			return false;
 		}
 		Slot slot = menu.getSlot(slotIndex);
@@ -299,7 +281,11 @@ public final class CopperManGogglesSystem {
 			return false;
 		}
 		int containerSlot = slot.getContainerSlot();
-		if (containerSlot < 0 || containerSlot >= 36) {
+		boolean equippedHeadSlot = isRightClick
+				&& menu == player.inventoryMenu
+				&& containerSlot == EquipmentSlot.HEAD.getIndex(Inventory.INVENTORY_SIZE)
+				&& menu.getCarried().isEmpty();
+		if (!equippedHeadSlot && (containerSlot < 0 || containerSlot >= 36)) {
 			return false;
 		}
 		ItemStack stack = slot.getItem();
@@ -310,7 +296,10 @@ public final class CopperManGogglesSystem {
 		GogglesMode next = advanceMode(updated);
 		slot.set(updated);
 		slot.setChanged();
-		finishModeChange(player, next, false);
+		finishModeChange(player, next, equippedHeadSlot);
+		if (equippedHeadSlot) {
+			menu.broadcastFullState();
+		}
 		player.playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.55F, 1.15F);
 		return true;
 	}
@@ -344,24 +333,6 @@ public final class CopperManGogglesSystem {
 				modeMessage.withStyle(style -> style.withColor(ChatFormatting.GREEN).withItalic(false)),
 				true
 		);
-	}
-
-	private static void resyncHeldToggleState(ServerPlayer player) {
-		if (player == null) {
-			return;
-		}
-		player.getInventory().setChanged();
-		player.inventoryMenu.broadcastFullState();
-		player.inventoryMenu.sendAllDataToRemote();
-		if (player.containerMenu != player.inventoryMenu) {
-			player.containerMenu.broadcastFullState();
-			player.containerMenu.sendAllDataToRemote();
-		}
-		sendActualHands(player);
-		player.connection.send(new ClientboundSetEquipmentPacket(
-				player.getId(),
-				List.of(com.mojang.datafixers.util.Pair.of(EquipmentSlot.HEAD, player.getItemBySlot(EquipmentSlot.HEAD).copy()))
-		));
 	}
 
 	public static void syncPlayerRecipeBook(ServerPlayer player) {

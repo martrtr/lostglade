@@ -190,13 +190,6 @@ public final class CopperGogglesItem extends SimplePolymerItem {
 			return InteractionResult.PASS;
 		}
 
-		if (player.isShiftKeyDown()) {
-			if (hand == InteractionHand.MAIN_HAND && !level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-				CopperManGogglesSystem.handleHeldModeToggle(serverPlayer, hand);
-			}
-			return InteractionResult.CONSUME;
-		}
-
 		if (hand != InteractionHand.MAIN_HAND) {
 			return InteractionResult.PASS;
 		}
