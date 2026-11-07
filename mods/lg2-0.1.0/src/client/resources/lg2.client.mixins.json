@@ -15,6 +15,7 @@
 		"ClientPacketListenerCameraSceneMixin",
 		"LevelRendererCameraSceneMixin",
 		"BlockEntityCameraStateAccessor",
+		"DisplayCameraStateAccessor",
 		"LightTextureCameraSceneMixin",
 		"ClientInputAccessor",
 		"CameraDroneTiltMixin",

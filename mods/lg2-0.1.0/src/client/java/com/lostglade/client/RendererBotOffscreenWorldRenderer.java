@@ -216,6 +216,7 @@ public final class RendererBotOffscreenWorldRenderer {
 		// client's real partial tick leak into it made water, player interpolation
 		// and shader animations run at render speed rather than at recorded FPS.
 		boolean frozenTimeline = RendererBotShadowWorldManager.usesFrozenTime(renderLevel);
+		if (frozenTimeline) FrozenSceneDisplayState.prepare(renderLevel);
 		float partialTick = frozenTimeline ? 0.0F : client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
 		if (!sessionState.cameraPrimed) {
 			cameraState.camera().attributeProbe().reset();
