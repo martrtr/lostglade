@@ -419,7 +419,15 @@ tasks.register("runRendererModPolicyTest", JavaExec) {
 	dependsOn(tasks.named("testClasses"), tasks.named("clientClasses"))
 }
 
+tasks.register("runFrozenSceneDisplayStateTest", JavaExec) {
+	group = "verification"
+	classpath = sourceSets.test.runtimeClasspath + sourceSets.client.output
+	mainClass = "com.lostglade.server.FrozenSceneDisplayStateTest"
+	dependsOn(tasks.named("testClasses"), tasks.named("clientClasses"))
+}
+
 tasks.named("check") {
+	dependsOn(tasks.named("runFrozenSceneDisplayStateTest"))
 	dependsOn(tasks.named("runRendererModPolicyTest"))
 	dependsOn(tasks.named("runCameraVideoPipelineTest"))
 	dependsOn(tasks.named("runDailyMaintenanceTest"))

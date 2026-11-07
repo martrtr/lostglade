@@ -181,6 +181,7 @@ public final class YandexMapVanillaTopDownRenderer implements AutoCloseable {
 					this.camera.attributeProbe().tick(this.scene.level(), this.camera.position());
 					this.lightTexture.updateLightTexture(partialTick);
 					applyLevelRenderCameraState();
+					com.lostglade.client.FrozenSceneDisplayState.prepare(this.scene.level());
 
 					Matrix4f viewMatrix = new Matrix4f().rotation(new Quaternionf(this.camera.rotation()).conjugate());
 					Matrix4f cullingMatrix = new Matrix4f(this.projectionMatrix);
