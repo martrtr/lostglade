@@ -244,6 +244,7 @@ record CameraAppVisualSnapshot(
 		boolean deviceMenuOpen,
 		boolean chromeHidden,
 		boolean droneControlVisible,
+		float droneTiltStrength,
 		String statusText
 ) {
 	boolean dynamic() {

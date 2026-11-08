@@ -24,6 +24,7 @@ public final class DroneCameraTilt {
 	private static final float BANK_RESPONSE_PER_SECOND = 8.0F;
 	private static final float STOP_EPSILON = 0.0025F;
 	private static final Map<UUID, RollState> ROLL_STATES = new HashMap<>();
+	private static final ThreadLocal<Boolean> PLAYER_TILT_SUPPRESSED = ThreadLocal.withInitial(() -> false);
 
 	private DroneCameraTilt() {
 	}
@@ -59,14 +60,35 @@ public final class DroneCameraTilt {
 		ROLL_STATES.clear();
 	}
 
-	/** Applies a known drone bank to any camera, including a static off-screen camera. */
-	public static void applyBank(Camera camera, float bankRadians) {
-		if (camera == null || bankRadians == 0.0F || !LostgladeClientSettings.isDroneTiltEnabled()) {
+	/** Applies the local player's FPV preference to a directly controlled drone camera. */
+	public static void applyPlayerBank(Camera camera, float bankRadians) {
+		if (PLAYER_TILT_SUPPRESSED.get() || !LostgladeClientSettings.isDroneTiltEnabled()) {
 			return;
 		}
-		float scaledBank = bankRadians * LostgladeClientSettings.droneTiltStrength();
-		if (scaledBank == 0.0F) return;
-		camera.rotation().rotateZ(scaledBank);
+		applyBank(camera, bankRadians * LostgladeClientSettings.droneTiltStrength());
+	}
+
+	/** Runs off-screen stream camera setup without applying the renderer player's FPV setting. */
+	public static void withoutPlayerBank(Runnable action) {
+		boolean previous = PLAYER_TILT_SUPPRESSED.get();
+		PLAYER_TILT_SUPPRESSED.set(true);
+		try {
+			action.run();
+		} finally {
+			PLAYER_TILT_SUPPRESSED.set(previous);
+		}
+	}
+
+	/**
+	 * Applies the exact bank supplied by a stream. This deliberately bypasses local
+	 * preferences: a volunteer renderer must reproduce the monitor owner's chosen
+	 * stream setting rather than impose the renderer player's FPV preference.
+	 */
+	public static void applyBank(Camera camera, float bankRadians) {
+		if (camera == null || bankRadians == 0.0F) {
+			return;
+		}
+		camera.rotation().rotateZ(bankRadians);
 		CameraPositionInvoker vectors = (CameraPositionInvoker) camera;
 		new org.joml.Vector3f(0.0F, 0.0F, -1.0F).rotate(camera.rotation(), vectors.lg2$getForwards());
 		new org.joml.Vector3f(0.0F, 1.0F, 0.0F).rotate(camera.rotation(), vectors.lg2$getUp());

@@ -14,6 +14,6 @@ public abstract class CameraDroneTiltMixin {
 	private void lg2$applyDroneBank(float yaw, float pitch, CallbackInfo callbackInfo) {
 		Camera camera = (Camera) (Object) this;
 		float bankRadians = DroneCameraTilt.bankRadians(camera.entity());
-		DroneCameraTilt.applyBank(camera, bankRadians);
+		DroneCameraTilt.applyPlayerBank(camera, bankRadians);
 	}
 }

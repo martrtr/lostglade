@@ -107,6 +107,7 @@ final class MonitorCameraRuntime {
 		boolean shouldStopPreview;
 		boolean chromeHidden;
 		boolean droneControlVisible;
+		float droneTiltStrength;
 		synchronized (state) {
 			String previousCameraUrl = state.selectedCameraUrl;
 			normalizeSelectionLocked(state, cameras, microphones);
@@ -131,6 +132,7 @@ final class MonitorCameraRuntime {
 			microphoneScroll = state.microphoneScroll;
 			chromeHidden = state.chromeHidden;
 			droneControlVisible = controllableSelectedDroneLocked(state, cameras) != null;
+			droneTiltStrength = state.droneTiltStrength;
 			preview = copyBufferedImage(state.previewFrame);
 			version = state.version + (recording && !paused ? System.currentTimeMillis() / 250L : 0L);
 			shouldStopPreview = cameraSelectionChanged || selectedCameraIndex < 0;
@@ -139,7 +141,7 @@ final class MonitorCameraRuntime {
 			stopPreview(component.runtimeKey());
 		}
 		if (selectedCameraIndex >= 0 && selectedCameraIndex < cameras.size()) {
-			ensurePreviewStream(server, component, cameras.get(selectedCameraIndex), state);
+			ensurePreviewStream(server, component, cameras.get(selectedCameraIndex), state, droneTiltStrength);
 		}
 		return new CameraAppVisualSnapshot(
 				version,
@@ -159,6 +161,7 @@ final class MonitorCameraRuntime {
 				deviceMenuOpen,
 				chromeHidden,
 				droneControlVisible,
+				droneTiltStrength,
 				statusText == null ? "" : statusText
 		);
 	}
@@ -349,6 +352,16 @@ final class MonitorCameraRuntime {
 			scrollMicrophonePicker(server, component.runtimeKey(), state, layout, microphones != null ? microphones.size() : 0, 1);
 			return true;
 		}
+		if (devicePickerDroneTiltRect(layout).contains(touchPoint.x(), touchPoint.y())) {
+			float strength = droneTiltStrengthAt(layout, touchPoint);
+			synchronized (state) {
+				state.droneTiltStrength = strength;
+				state.statusText = "";
+				state.version++;
+			}
+			requestRuntimeRender(server, component.runtimeKey());
+			return true;
+		}
 		int cameraScroll;
 		int microphoneScroll;
 		synchronized (state) {
@@ -410,7 +423,7 @@ final class MonitorCameraRuntime {
 	}
 
 	private static CameraAppVisualSnapshot emptySnapshot() {
-		return new CameraAppVisualSnapshot(0L, null, List.of(), List.of(), 0, 0, -1, -1, 0, 0, CameraAppCaptureMode.PHOTO, false, false, 0L, false, false, false, "");
+		return new CameraAppVisualSnapshot(0L, null, List.of(), List.of(), 0, 0, -1, -1, 0, 0, CameraAppCaptureMode.PHOTO, false, false, 0L, false, false, false, 1.0F, "");
 	}
 
 	private static void setMode(MinecraftServer server, ScreenRuntimeKey key, CameraRuntimeState state, CameraAppCaptureMode mode) {
@@ -682,7 +695,7 @@ final class MonitorCameraRuntime {
 		scheduleGalleryItemLoad(server, key, media.title(), media.url(), localKey, media.kind(), false, index);
 	}
 
-	private static void ensurePreviewStream(MinecraftServer server, ScreenComponent component, LiveCameraReference cameraRef, CameraRuntimeState state) {
+	private static void ensurePreviewStream(MinecraftServer server, ScreenComponent component, LiveCameraReference cameraRef, CameraRuntimeState state, float droneTiltStrength) {
 		if (cameraRef == null) {
 			return;
 		}
@@ -716,7 +729,8 @@ final class MonitorCameraRuntime {
 					fullWidth,
 					fullHeight,
 					LIVE_CAMERA_FOV_DEGREES,
-					LIVE_CAMERA_TARGET_FPS,
+				LIVE_CAMERA_TARGET_FPS,
+				droneTiltStrength,
 					frame -> onPreviewFrame(server, component.runtimeKey(), sourceUrl, fullWidth, fullHeight, frame),
 					error -> setStatus(server, component.runtimeKey(), state, error)
 			);
@@ -1196,6 +1210,7 @@ final class MonitorCameraRuntime {
 		}
 
 		UiRect microphoneTitle = devicePickerMicrophoneTitleRect(layout);
+		drawDroneTiltSlider(graphics, devicePickerDroneTiltRect(layout), state.droneTiltStrength(), layout);
 		if (!ultra) {
 			drawVerticalText(graphics, "МИКРОФОНЫ " + (state.microphones() != null ? state.microphones().size() : 0), microphoneTitle, new Color(188, 204, 218, 224), Font.BOLD, clampInt(layout.unit() - 2, 7, 11));
 		}
@@ -1256,6 +1271,26 @@ final class MonitorCameraRuntime {
 		int titleHeight = Math.max(10, textRect.height() / 2);
 		drawWrappedText(graphics, microphone.title(), new UiRect(textRect.x(), textRect.y(), textRect.width(), titleHeight), new Color(248, 251, 255, 232), Font.BOLD, clampInt(layout.unit() - 1, 8, 13), 1);
 		drawWrappedText(graphics, microphone.subtitle(), new UiRect(textRect.x(), textRect.y() + titleHeight, textRect.width(), textRect.height() - titleHeight), new Color(178, 194, 210, 214), Font.PLAIN, clampInt(layout.unit() - 2, 7, 11), 1);
+	}
+
+	private static void drawDroneTiltSlider(Graphics2D graphics, UiRect rect, float strength, UiLayout layout) {
+		boolean ultra = ultraCompactScreenLayout(layout);
+		float value = Math.clamp(Float.isFinite(strength) ? strength : 1.0F, 0.0F, 1.0F);
+		UiRect track = droneTiltTrackRect(layout);
+		if (!ultra) {
+			int labelHeight = Math.max(8, rect.height() - track.height() - Math.max(4, layout.unit() / 2));
+			drawVerticalText(graphics, "НАКЛОН ДРОНА", new UiRect(rect.x(), rect.y(), rect.width() * 2 / 3, labelHeight), new Color(188, 204, 218, 224), Font.BOLD, clampInt(layout.unit() - 2, 7, 11));
+			drawRightAlignedText(graphics, Math.round(value * 100.0F) + "%", new UiRect(rect.x() + rect.width() * 2 / 3, rect.y(), rect.width() / 3, labelHeight), new Color(248, 251, 255, 238), Font.BOLD, clampInt(layout.unit() - 2, 7, 11));
+		}
+		int arc = Math.min(track.width(), track.height());
+		fillRoundedRect(graphics, track, arc, new Color(255, 255, 255, 40));
+		int progressWidth = Math.max(track.height(), Math.round(track.width() * value));
+		fillRoundedRect(graphics, new UiRect(track.x(), track.y(), Math.min(track.width(), progressWidth), track.height()), arc, new Color(248, 251, 255, 242));
+		int markerWidth = 2;
+		int markerHeight = clampInt(track.height() + Math.max(5, layout.unit()), 7, 16);
+		int markerCenterX = track.x() + Math.round(track.width() * value);
+		int markerX = clampInt(markerCenterX - markerWidth / 2, track.x(), Math.max(track.x(), track.right() - markerWidth));
+		fillRoundedRect(graphics, new UiRect(markerX, track.y() + (track.height() - markerHeight) / 2, markerWidth, markerHeight), markerWidth, new Color(248, 251, 255, 248));
 	}
 
 	private static void drawPickerScrollButton(Graphics2D graphics, UiRect rect, double rotationRadians, UiLayout layout, boolean enabled) {
@@ -1410,11 +1445,17 @@ final class MonitorCameraRuntime {
 	}
 
 	private static UiRect devicePickerMicrophoneTitleRect(UiLayout layout) {
+		UiRect tilt = devicePickerDroneTiltRect(layout);
+		int gap = devicePickerCameraGap(layout);
+		int height = ultraCompactScreenLayout(layout) ? clampInt(layout.unit() + 3, 7, 8) : clampInt(layout.unit() + 4, 14, 22);
+		return new UiRect(tilt.x(), tilt.bottom() + gap, tilt.width(), height);
+	}
+
+	private static UiRect devicePickerDroneTiltRect(UiLayout layout) {
 		UiRect cameraGrid = devicePickerCameraGridRect(layout);
 		UiRect content = devicePickerContentRect(layout);
 		int gap = devicePickerCameraGap(layout);
-		int height = ultraCompactScreenLayout(layout) ? clampInt(layout.unit() + 3, 7, 8) : clampInt(layout.unit() + 4, 14, 22);
-		return new UiRect(content.x(), cameraGrid.bottom() + gap, content.width(), height);
+		return new UiRect(content.x(), cameraGrid.bottom() + gap, content.width(), devicePickerDroneTiltHeight(layout));
 	}
 
 	private static UiRect devicePickerMicrophoneListRect(UiLayout layout) {
@@ -1455,14 +1496,32 @@ final class MonitorCameraRuntime {
 		UiRect content = devicePickerContentRect(layout);
 		UiRect title = devicePickerCameraTitleRect(layout);
 		int gap = devicePickerCameraGap(layout);
+		int microphoneTitleHeight = ultraCompactScreenLayout(layout) ? clampInt(layout.unit() + 3, 7, 8) : clampInt(layout.unit() + 4, 14, 22);
+		int remaining = content.height() - title.height() - devicePickerDroneTiltHeight(layout) - microphoneTitleHeight - gap * 4;
 		if (ultraCompactScreenLayout(layout)) {
-			int microphoneTitleHeight = clampInt(layout.unit() + 3, 7, 8);
-			int available = Math.max(36, content.height() - title.height() - microphoneTitleHeight - gap * 3);
+			int available = Math.max(28, remaining);
 			int preferred = (int) Math.round(available * 0.44D);
 			return clampInt(preferred, 28, Math.max(28, available - 18));
 		}
 		int preferred = Math.max(clampInt(layout.unit() * 7, 56, 112), (content.height() - title.height() - gap * 3) / 2);
-		return Math.min(preferred, Math.max(18, content.bottom() - title.bottom() - gap));
+		return Math.min(preferred, Math.max(18, remaining));
+	}
+
+	private static int devicePickerDroneTiltHeight(UiLayout layout) {
+		return ultraCompactScreenLayout(layout) ? clampInt(layout.unit() + 3, 7, 8) : clampInt(layout.unit() * 3, 26, 38);
+	}
+
+	private static UiRect droneTiltTrackRect(UiLayout layout) {
+		UiRect rect = devicePickerDroneTiltRect(layout);
+		int sideInset = ultraCompactScreenLayout(layout) ? 2 : clampInt(layout.unit() / 2, 4, 8);
+		int height = clampInt((int) Math.round(layout.unit() * 0.40D), 2, 5);
+		return new UiRect(rect.x() + sideInset, rect.bottom() - height - (ultraCompactScreenLayout(layout) ? 1 : Math.max(2, layout.unit() / 4)), Math.max(12, rect.width() - sideInset * 2), height);
+	}
+
+	private static float droneTiltStrengthAt(UiLayout layout, UiPoint point) {
+		UiRect track = droneTiltTrackRect(layout);
+		if (point == null || track.width() <= 1) return 1.0F;
+		return Math.clamp((point.x() - track.x()) / (float) Math.max(1, track.width() - 1), 0.0F, 1.0F);
 	}
 
 	private static int devicePickerCameraCell(UiLayout layout) {
@@ -1698,6 +1757,7 @@ final class MonitorCameraRuntime {
 		private RecordingSession recording;
 		private boolean deviceMenuOpen;
 		private boolean chromeHidden;
+		private float droneTiltStrength = 1.0F;
 		private String statusText = "";
 		private long version;
 
