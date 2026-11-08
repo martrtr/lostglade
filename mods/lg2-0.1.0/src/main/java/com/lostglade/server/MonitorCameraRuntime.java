@@ -107,6 +107,7 @@ final class MonitorCameraRuntime {
 		boolean shouldStopPreview;
 		boolean chromeHidden;
 		boolean droneControlVisible;
+		boolean droneTiltVisible;
 		float droneTiltStrength;
 		synchronized (state) {
 			String previousCameraUrl = state.selectedCameraUrl;
@@ -132,6 +133,7 @@ final class MonitorCameraRuntime {
 			microphoneScroll = state.microphoneScroll;
 			chromeHidden = state.chromeHidden;
 			droneControlVisible = controllableSelectedDroneLocked(state, cameras) != null;
+			droneTiltVisible = selectedCameraIsDroneLocked(state, cameras);
 			droneTiltStrength = state.droneTiltStrength;
 			preview = copyBufferedImage(state.previewFrame);
 			version = state.version + (recording && !paused ? System.currentTimeMillis() / 250L : 0L);
@@ -161,6 +163,7 @@ final class MonitorCameraRuntime {
 				deviceMenuOpen,
 				chromeHidden,
 				droneControlVisible,
+				droneTiltVisible,
 				droneTiltStrength,
 				statusText == null ? "" : statusText
 		);
@@ -352,7 +355,11 @@ final class MonitorCameraRuntime {
 			scrollMicrophonePicker(server, component.runtimeKey(), state, layout, microphones != null ? microphones.size() : 0, 1);
 			return true;
 		}
-		if (devicePickerDroneTiltRect(layout).contains(touchPoint.x(), touchPoint.y())) {
+		boolean droneTiltVisible;
+		synchronized (state) {
+			droneTiltVisible = selectedCameraIsDroneLocked(state, cameras);
+		}
+		if (droneTiltVisible && devicePickerDroneTiltRect(layout).contains(touchPoint.x(), touchPoint.y())) {
 			float strength = droneTiltStrengthAt(layout, touchPoint);
 			synchronized (state) {
 				state.droneTiltStrength = strength;
@@ -423,7 +430,7 @@ final class MonitorCameraRuntime {
 	}
 
 	private static CameraAppVisualSnapshot emptySnapshot() {
-		return new CameraAppVisualSnapshot(0L, null, List.of(), List.of(), 0, 0, -1, -1, 0, 0, CameraAppCaptureMode.PHOTO, false, false, 0L, false, false, false, 1.0F, "");
+		return new CameraAppVisualSnapshot(0L, null, List.of(), List.of(), 0, 0, -1, -1, 0, 0, CameraAppCaptureMode.PHOTO, false, false, 0L, false, false, false, false, 1.0F, "");
 	}
 
 	private static void setMode(MinecraftServer server, ScreenRuntimeKey key, CameraRuntimeState state, CameraAppCaptureMode mode) {
@@ -995,6 +1002,11 @@ final class MonitorCameraRuntime {
 		return selectedIndex >= 0 && cameras != null && selectedIndex < cameras.size() ? cameras.get(selectedIndex) : null;
 	}
 
+	private static boolean selectedCameraIsDroneLocked(CameraRuntimeState state, List<LiveCameraReference> cameras) {
+		LiveCameraReference selected = selectedCameraReferenceLocked(state, cameras);
+		return selected != null && selected.sourceType() == LiveCameraSourceType.DRONE;
+	}
+
 	private static LiveCameraReference controllableSelectedDroneLocked(CameraRuntimeState state, List<LiveCameraReference> cameras) {
 		LiveCameraReference selected = selectedCameraReferenceLocked(state, cameras);
 		if (selected == null
@@ -1210,7 +1222,9 @@ final class MonitorCameraRuntime {
 		}
 
 		UiRect microphoneTitle = devicePickerMicrophoneTitleRect(layout);
-		drawDroneTiltSlider(graphics, devicePickerDroneTiltRect(layout), state.droneTiltStrength(), layout);
+		if (state.droneTiltVisible()) {
+			drawDroneTiltSlider(graphics, devicePickerDroneTiltRect(layout), state.droneTiltStrength(), layout);
+		}
 		if (!ultra) {
 			drawVerticalText(graphics, "МИКРОФОНЫ " + (state.microphones() != null ? state.microphones().size() : 0), microphoneTitle, new Color(188, 204, 218, 224), Font.BOLD, clampInt(layout.unit() - 2, 7, 11));
 		}
