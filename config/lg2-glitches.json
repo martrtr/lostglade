@@ -141,9 +141,18 @@
         "minTargetDistanceChunks": 1,
         "maxTargetDistanceChunks": 6,
         "replacementChunkWeight": 0.75,
-        "intangibleChunkWeight": 0.25,
-        "backroomsTeleportChance": 0.15
+        "intangibleChunkWeight": 0.25
       }
+    },
+    "backrooms_entry": {
+      "enabled": true,
+      "minStabilityPercent": 0.0,
+      "maxStabilityPercent": 50.0,
+      "chancePerCheck": 0.5,
+      "stabilityInfluence": 1.0,
+      "minCooldownTicks": 0,
+      "maxCooldownTicks": 0,
+      "settings": {}
     },
     "phantom_mobs": {
       "enabled": true,

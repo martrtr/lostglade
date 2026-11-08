@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.lostglade.Lg2;
 import com.lostglade.config.GlitchConfig;
 import com.lostglade.server.glitch.BlockUseGlitchHandler;
+import com.lostglade.server.glitch.BackroomsEntryGlitch;
 import com.lostglade.server.glitch.BitcoinOvercookGlitch;
 import com.lostglade.server.glitch.ChatInterferenceGlitch;
 import com.lostglade.server.glitch.ChatMessageGlitchHandler;
@@ -22,6 +23,7 @@ import com.lostglade.server.glitch.ServerGlitchHandler;
 import com.lostglade.server.glitch.TimeOfDayJumpGlitch;
 import com.lostglade.server.glitch.UpsideDownMobGlitch;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -30,6 +32,7 @@ import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -94,6 +97,7 @@ public final class ServerGlitchSystem {
 		registerHandler(new BlackoutGlitch());
 		registerHandler(new GravitySurgeGlitch());
 		registerHandler(new PhantomChunkGlitch());
+		registerHandler(new BackroomsEntryGlitch());
 		registerHandler(new PhantomMobGlitch());
 		registerHandler(new UpsideDownMobGlitch());
 		registerHandler(new PlayerShuffleGlitch());
@@ -104,7 +108,8 @@ public final class ServerGlitchSystem {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			checkTicker = 0L;
 			NEXT_ALLOWED_TICKS.clear();
-			ChestDesyncGlitch.resetTracking();
+			ChestDesyncGlitch.resetTracking(server);
+			BackroomsEntryGlitch.resetRuntimeState();
 			BitcoinOvercookGlitch.resetRuntimeState();
 			GravitySurgeGlitch.resetRuntimeState();
 			PhantomChunkGlitch.resetRuntimeState();
@@ -116,6 +121,7 @@ public final class ServerGlitchSystem {
 			PlayerShuffleGlitch.restoreAll(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(PhantomChunkGlitch::restoreAll);
+		ServerLifecycleEvents.SERVER_STOPPING.register(ChestDesyncGlitch::stopTracking);
 		ServerLifecycleEvents.SERVER_STOPPING.register(UpsideDownMobGlitch::restoreAll);
 		ServerLifecycleEvents.SERVER_STOPPING.register(PlayerShuffleGlitch::restoreAll);
 
@@ -136,17 +142,24 @@ public final class ServerGlitchSystem {
 		);
 
 		ServerTickEvents.END_SERVER_TICK.register(ServerGlitchSystem::tick);
+		ServerLivingEntityEvents.ALLOW_DAMAGE.register(BackroomsEntryGlitch::onAllowDamage);
 		ServerMessageEvents.ALLOW_CHAT_MESSAGE.register(ServerGlitchSystem::onAllowChatMessage);
 		ServerMessageEvents.ALLOW_COMMAND_MESSAGE.register(ServerGlitchSystem::onAllowCommandMessage);
 		ServerPlayerEvents.COPY_FROM.register(ServerGlitchSystem::onCopyFrom);
 		ServerPlayerEvents.AFTER_RESPAWN.register(ServerGlitchSystem::onAfterRespawn);
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+				ChestDesyncGlitch.onPlayerJoin(handler.player));
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
+				ChestDesyncGlitch.onPlayerDisconnect(handler.player));
 		UseBlockCallback.EVENT.register(ServerGlitchSystem::onUseBlock);
 		UseEntityCallback.EVENT.register(ServerGlitchSystem::onUseEntity);
 		AttackEntityCallback.EVENT.register(ServerGlitchSystem::onAttackEntity);
 		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+			ChestDesyncGlitch.noteEntityLoad(entity);
 			PhantomMobGlitch.handleEntityLoad(entity);
 			UpsideDownMobGlitch.handleEntityLoad(entity);
 		});
+		ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> ChestDesyncGlitch.noteEntityUnload(entity));
 	}
 
 	private static void registerHandler(ServerGlitchHandler handler) {
@@ -199,6 +212,7 @@ public final class ServerGlitchSystem {
 
 	private static void tick(MinecraftServer server) {
 		ChestDesyncGlitch.tickPlacementTracking(server);
+		BackroomsEntryGlitch.tickActiveStates(server);
 		InventoryTextureShuffleGlitch.tickActiveStates(server);
 		BlackoutGlitch.tickActiveStates(server);
 		GravitySurgeGlitch.tickActiveStates(server);
@@ -827,6 +841,9 @@ public final class ServerGlitchSystem {
 
 			if (handler == null) {
 				logUnknownGlitchId(id);
+				continue;
+			}
+			if (!handler.isPeriodic()) {
 				continue;
 			}
 

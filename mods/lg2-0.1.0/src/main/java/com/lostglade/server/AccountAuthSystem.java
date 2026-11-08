@@ -44,6 +44,7 @@ import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
 import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
@@ -74,7 +75,6 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.GameType;
-import net.minecraft.world.level.portal.TeleportTransition;
 
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
@@ -889,6 +889,8 @@ public final class AccountAuthSystem {
 		// Keep gameplay systems blind to this player until the cross-dimension hop has really finished.
 		// Only the network/chunk quarantine is relaxed during this short synchronous transition.
 		if (!AUTH_TRANSITIONING.add(playerId)) return;
+		LimboState limboState = LIMBO.get(player);
+		boolean diedBeforeLogin = limboState != null && limboState.recoveredDeadState;
 		boolean leftLimbo;
 		try {
 			// A RemotePlayer needs its player-list entry before ChunkMap emits the spawn packet.
@@ -921,6 +923,12 @@ public final class AccountAuthSystem {
 		runAfterAuthActions(player);
 		if (messageKey != null) authTitle(player, messageKey);
 		broadcastAuthenticatedJoin(player);
+		if (diedBeforeLogin) {
+			player.connection.send(new ClientboundPlayerCombatKillPacket(
+					player.getId(), Component.translatable("death.attack.generic", player.getDisplayName())
+			));
+			player.connection.markClientUnloadedAfterDeath();
+		}
 	}
 
 	private static void clearSession(ServerPlayer player, MinecraftServer server) {
@@ -1152,7 +1160,8 @@ public final class AccountAuthSystem {
 		INITIAL_JOIN_LABELS.put(playerId, playerPresenceLabels(player));
 		LimboState state = captureReturnState(player, target);
 		if (player.isDeadOrDying() || player.deathTime > 0) {
-			state = recoverPersistedDeathState(player, state);
+			state = state.withDeadState();
+			normalizeRecoveredDeathState(player);
 		}
 		LIMBO.put(player, state);
 		CONNECTED_HUMAN_SESSIONS.add(playerId);
@@ -1188,22 +1197,6 @@ public final class AccountAuthSystem {
 				target.angle().x, target.angle().y, player.tickCount,
 				player.getDeltaMovement(), player.fallDistance, false
 		);
-	}
-
-	/**
-	 * A crash can leave playerdata at zero health. Because auth freezes normal ticks, vanilla would otherwise
-	 * leave that ServerPlayer permanently in its death animation. Recover the technical login object before
-	 * any play packets are sent, while remembering that the post-auth destination must be a respawn target.
-	 */
-	private static LimboState recoverPersistedDeathState(ServerPlayer player, LimboState state) {
-		TeleportTransition respawn = player.findRespawnPositionAndUseSpawnBlock(false, TeleportTransition.DO_NOTHING);
-		LimboState recovered = state.withTarget(
-				respawn.newLevel(), respawn.position(), respawn.yRot(), respawn.xRot(), true
-		);
-		normalizeRecoveredDeathState(player);
-		Lg2.LOGGER.warn("Recovered persisted dead player state for {}; authentication will return to the respawn target",
-				player.getScoreboardName());
-		return recovered;
 	}
 
 	private static void normalizeRecoveredDeathState(ServerPlayer player) {
@@ -1258,24 +1251,16 @@ public final class AccountAuthSystem {
 		}
 		if (player.isRemoved()) return false;
 
-		LimboState transitionState = state;
-		if (state.recoveredDeadState) {
-			// Consume a respawn-anchor charge only now, when authentication has actually succeeded.
-			TeleportTransition respawn = player.findRespawnPositionAndUseSpawnBlock(true, TeleportTransition.DO_NOTHING);
-			transitionState = state.withTarget(respawn.newLevel(), respawn.position(), respawn.yRot(), respawn.xRot(), true);
-			normalizeRecoveredDeathState(player);
-		}
-
 		// Remove the limbo marker while teleportTo updates chunk tracking. Keeping it set would make
 		// ChunkMapVirtualCameraTrackingMixin force the destination back to the single auth chunk.
 		LIMBO.remove(player, state);
-		transitionState.level.getChunkAt(BlockPos.containing(transitionState.x, transitionState.y, transitionState.z));
+		state.level.getChunkAt(BlockPos.containing(state.x, state.y, state.z));
 		boolean teleported = player.teleportTo(
-				transitionState.level, transitionState.x, transitionState.y, transitionState.z,
-				ABSOLUTE_TELEPORT, transitionState.yaw, transitionState.pitch, false
+				state.level, state.x, state.y, state.z,
+				ABSOLUTE_TELEPORT, state.yaw, state.pitch, false
 		);
 		boolean arrivedInRealWorld = teleported
-				&& player.level() == transitionState.level
+				&& player.level() == state.level
 				&& !player.isRemoved()
 				&& !AUTH_LIMBO_LEVEL.equals(player.level().dimension());
 		if (!arrivedInRealWorld) {
@@ -1295,7 +1280,10 @@ public final class AccountAuthSystem {
 		player.tickCount = state.tickCount;
 		AbilityState.recoveredFor(GameType.SURVIVAL).restore(player.getAbilities());
 		if (state.recoveredDeadState) {
-			normalizeRecoveredDeathState(player);
+			player.deathTime = 0;
+			player.setHealth(0.0F);
+			player.setDeltaMovement(Vec3.ZERO);
+			player.resetFallDistance();
 		} else {
 			player.setDeltaMovement(state.deltaMovement);
 			player.fallDistance = state.fallDistance;
@@ -1320,6 +1308,11 @@ public final class AccountAuthSystem {
 		output.store("abilities", Abilities.Packed.CODEC, AbilityState.recoveredFor(GameType.SURVIVAL).pack());
 		output.store("Motion", Vec3.CODEC, state.deltaMovement);
 		output.putDouble("fall_distance", state.fallDistance);
+		if (state.recoveredDeadState) {
+			// Quarantine uses a healthy stand-in; logging out here must still save the real death.
+			output.putFloat("Health", 0.0F);
+			output.putShort("DeathTime", (short) 0);
+		}
 	}
 
 
@@ -1573,10 +1566,8 @@ public final class AccountAuthSystem {
 			ServerLevel level, double x, double y, double z, float yaw, float pitch,
 			int tickCount, Vec3 deltaMovement, double fallDistance, boolean recoveredDeadState
 	) {
-		private LimboState withTarget(ServerLevel targetLevel, Vec3 position, float targetYaw, float targetPitch, boolean deadRecovery) {
-			return new LimboState(targetLevel, position.x, position.y, position.z, targetYaw, targetPitch,
-					tickCount, deadRecovery ? Vec3.ZERO : deltaMovement,
-					deadRecovery ? 0.0D : fallDistance, deadRecovery || recoveredDeadState);
+		private LimboState withDeadState() {
+			return new LimboState(level, x, y, z, yaw, pitch, tickCount, Vec3.ZERO, 0.0D, true);
 		}
 	}
 }

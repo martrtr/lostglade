@@ -3,7 +3,6 @@ package com.lostglade.server.glitch;
 import com.google.gson.JsonObject;
 import com.lostglade.Lg2;
 import com.lostglade.config.GlitchConfig;
-import com.lostglade.server.RendererBotPresenceSystem;
 import com.lostglade.server.ServerBackroomsSystem;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -56,19 +55,15 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 	private static final String MAX_TARGET_DISTANCE_CHUNKS = "maxTargetDistanceChunks";
 	private static final String REPLACEMENT_CHUNK_WEIGHT = "replacementChunkWeight";
 	private static final String INTANGIBLE_CHUNK_WEIGHT = "intangibleChunkWeight";
-	private static final String BACKROOMS_TELEPORT_CHANCE = "backroomsTeleportChance";
 	private static final double TARGET_COUNT_PRIORITY = 2.4D;
 	private static final int APPLY_FLAGS = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
-	private static final int BACKROOMS_TELEPORT_DELAY_TICKS = 20;
 	private static final Map<ChunkKey, ActivePhantomChunkState> ACTIVE_STATES = new LinkedHashMap<>();
-	private static final Map<java.util.UUID, Long> PENDING_BACKROOMS_TELEPORTS = new HashMap<>();
 
 	public static void tickActiveStates(MinecraftServer server) {
 		if (server == null) {
 			return;
 		}
 
-		tickPendingBackroomsTeleports(server);
 		if (ACTIVE_STATES.isEmpty()) {
 			return;
 		}
@@ -89,7 +84,6 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 
 	public static void resetRuntimeState() {
 		ACTIVE_STATES.clear();
-		PENDING_BACKROOMS_TELEPORTS.clear();
 	}
 
 	public static void restoreAll(MinecraftServer server) {
@@ -99,7 +93,6 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 			}
 		}
 		ACTIVE_STATES.clear();
-		PENDING_BACKROOMS_TELEPORTS.clear();
 	}
 
 	@Override
@@ -127,7 +120,6 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 		settings.addProperty(MAX_TARGET_DISTANCE_CHUNKS, 1);
 		settings.addProperty(REPLACEMENT_CHUNK_WEIGHT, 1.0D);
 		settings.addProperty(INTANGIBLE_CHUNK_WEIGHT, 1.0D);
-		settings.addProperty(BACKROOMS_TELEPORT_CHANCE, 0.35D);
 		entry.settings = settings;
 		return entry;
 	}
@@ -150,7 +142,7 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 		changed |= GlitchSettingsHelper.sanitizeInt(entry.settings, MAX_TARGET_DISTANCE_CHUNKS, hasMaxDistance ? 1 : legacyRadius, 0, 8);
 		changed |= GlitchSettingsHelper.sanitizeDouble(entry.settings, REPLACEMENT_CHUNK_WEIGHT, 1.0D, 0.0D, 1000.0D);
 		changed |= GlitchSettingsHelper.sanitizeDouble(entry.settings, INTANGIBLE_CHUNK_WEIGHT, 1.0D, 0.0D, 1000.0D);
-		changed |= GlitchSettingsHelper.sanitizeDouble(entry.settings, BACKROOMS_TELEPORT_CHANCE, 0.35D, 0.0D, 1.0D);
+		changed |= entry.settings.remove("backroomsTeleportChance") != null;
 		changed |= entry.settings.remove("targetChunkRadius") != null;
 		changed |= entry.settings.remove("worldChunkWeight") != null;
 		changed |= entry.settings.remove("generatedChunkWeight") != null;
@@ -206,8 +198,6 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 		int maxTargetDistanceChunks = GlitchSettingsHelper.getInt(settings, MAX_TARGET_DISTANCE_CHUNKS, 1);
 		double replacementWeight = GlitchSettingsHelper.getDouble(settings, REPLACEMENT_CHUNK_WEIGHT, 1.0D);
 		double intangibleWeight = GlitchSettingsHelper.getDouble(settings, INTANGIBLE_CHUNK_WEIGHT, 1.0D);
-		double backroomsTeleportChance = GlitchSettingsHelper.getDouble(settings, BACKROOMS_TELEPORT_CHANCE, 0.35D);
-
 		Set<ChunkKey> occupiedChunks = new HashSet<>(ACTIVE_STATES.keySet());
 		Map<net.minecraft.resources.ResourceKey<Level>, Map<Long, LevelChunk>> loadedChunkSourcesByDimension = new HashMap<>();
 		Map<net.minecraft.resources.ResourceKey<Level>, List<ChunkPos>> diskChunkSourcesByDimension = new HashMap<>();
@@ -250,9 +240,8 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 				}
 
 				applySnapshot(level, targetChunk.getPos(), appliedSnapshot);
-				tryTeleportPlayersStuckInChangedChunk(level, targetChunk.getPos(), backroomsTeleportChance);
 				ChunkKey chunkKey = new ChunkKey(level.dimension(), targetChunk.getPos());
-				ACTIVE_STATES.put(chunkKey, new ActivePhantomChunkState(level.dimension(), targetChunk.getPos(), nowTick + durationTicks, backroomsTeleportChance, snapshot));
+				ACTIVE_STATES.put(chunkKey, new ActivePhantomChunkState(level.dimension(), targetChunk.getPos(), nowTick + durationTicks, snapshot));
 				occupiedChunks.add(chunkKey);
 				appliedCount++;
 				appliedAny = true;
@@ -271,68 +260,6 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 		}
 
 		applySnapshot(level, state.chunkPos, state.originalSnapshot);
-		tryTeleportPlayersStuckInChangedChunk(level, state.chunkPos, state.backroomsTeleportChance);
-	}
-
-	private static void tryTeleportPlayersStuckInChangedChunk(ServerLevel level, ChunkPos chunkPos, double backroomsTeleportChance) {
-		double safeChance = Math.max(0.0D, Math.min(1.0D, backroomsTeleportChance));
-		if (safeChance <= 0.0D) {
-			return;
-		}
-
-		for (ServerPlayer player : new ArrayList<>(level.players())) {
-			if (player == null || !player.isAlive() || player.isSpectator()
-					|| RendererBotPresenceSystem.isRendererBot(player)) {
-				continue;
-			}
-			if (!player.chunkPosition().equals(chunkPos)) {
-				continue;
-			}
-			if (!player.isInWall()) {
-				continue;
-			}
-			if (level.random.nextDouble() >= safeChance) {
-				continue;
-			}
-
-			scheduleBackroomsTeleport(level.getServer(), player);
-		}
-	}
-
-	private static void scheduleBackroomsTeleport(MinecraftServer server, ServerPlayer player) {
-		if (server == null || player == null) {
-			return;
-		}
-
-		long nowTick = server.overworld().getGameTime();
-		PENDING_BACKROOMS_TELEPORTS.merge(
-				player.getUUID(),
-				nowTick + BACKROOMS_TELEPORT_DELAY_TICKS,
-				Math::min
-		);
-	}
-
-	private static void tickPendingBackroomsTeleports(MinecraftServer server) {
-		if (PENDING_BACKROOMS_TELEPORTS.isEmpty()) {
-			return;
-		}
-
-		long nowTick = server.overworld().getGameTime();
-		Iterator<Map.Entry<java.util.UUID, Long>> iterator = PENDING_BACKROOMS_TELEPORTS.entrySet().iterator();
-		while (iterator.hasNext()) {
-			Map.Entry<java.util.UUID, Long> entry = iterator.next();
-			if (nowTick < entry.getValue()) {
-				continue;
-			}
-
-			iterator.remove();
-			ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
-			if (player == null || !player.isAlive() || player.isSpectator() || ServerBackroomsSystem.isInBackrooms(player)) {
-				continue;
-			}
-
-			ServerBackroomsSystem.teleportPlayerToBackrooms(player);
-		}
 	}
 
 	private static List<ServerPlayer> collectEligiblePlayers(MinecraftServer server) {
@@ -912,7 +839,6 @@ public final class PhantomChunkGlitch implements ServerGlitchHandler {
 			net.minecraft.resources.ResourceKey<Level> dimension,
 			ChunkPos chunkPos,
 			long endTick,
-			double backroomsTeleportChance,
 			ChunkSnapshot originalSnapshot
 	) {
 	}

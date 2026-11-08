@@ -18,19 +18,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(ServerPlayerGameMode.class)
 public abstract class ServerPlayerGameModeCopperManRepulsorMixin {
-	@Inject(method = "useItem", at = @At("HEAD"), cancellable = true)
-	private void lg2$toggleCopperGogglesModeInHand(
-			ServerPlayer player,
-			Level level,
-			ItemStack stack,
-			InteractionHand hand,
-			CallbackInfoReturnable<InteractionResult> cir
-	) {
-		if (CopperManGogglesSystem.handleHeldModeToggle(player, hand)) {
-			cir.setReturnValue(InteractionResult.SUCCESS);
-		}
-	}
-
 	@Inject(method = "useItem", at = @At("RETURN"), cancellable = true)
 	private void lg2$fireGennadiyDonkeyAfterVanillaItemPass(
 			ServerPlayer player,
@@ -70,10 +57,6 @@ public abstract class ServerPlayerGameModeCopperManRepulsorMixin {
 			return;
 		}
 		if (DroneSystem.handleControlledUseItemOn(player, hand, hitResult)) {
-			cir.setReturnValue(InteractionResult.SUCCESS);
-			return;
-		}
-		if (CopperManGogglesSystem.handleHeldModeToggle(player, hand)) {
 			cir.setReturnValue(InteractionResult.SUCCESS);
 			return;
 		}

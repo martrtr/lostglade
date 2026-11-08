@@ -295,7 +295,7 @@ public final class RendererBotOffscreenWorldRenderer {
 				return null;
 			}
 			Camera camera = sessionState.followCamera;
-			camera.setup(renderLevel, followTarget, false, false, partialTick);
+			DroneCameraTilt.withoutPlayerBank(() -> camera.setup(renderLevel, followTarget, false, false, partialTick));
 			((CameraPositionInvoker) camera).lg2$setPosition(followTarget.getEyePosition(partialTick));
 			DroneCameraTilt.applyBank(camera, request.cameraBankRadians());
 			return new CameraState(camera);

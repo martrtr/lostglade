@@ -3,16 +3,33 @@ package com.lostglade.server.glitch;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
+import com.lostglade.Lg2;
 import com.lostglade.config.GlitchConfig;
 import com.lostglade.server.ServerBackroomsSystem;
 import com.lostglade.server.ServerMechanicsGateSystem;
 import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtAccounter;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.NbtUtils;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.TicketType;
 import net.minecraft.util.RandomSource;
+import net.minecraft.util.ProblemReporter;
+import net.minecraft.util.Util;
+import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.Container;
+import net.minecraft.world.ItemStackWithSlot;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.Nameable;
 import net.minecraft.world.SimpleMenuProvider;
@@ -23,6 +40,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.vehicle.ContainerEntity;
 import net.minecraft.world.entity.vehicle.minecart.MinecartHopper;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.PlayerEnderChestContainer;
 import net.minecraft.world.inventory.BlastFurnaceMenu;
 import net.minecraft.world.inventory.BrewingStandMenu;
 import net.minecraft.world.inventory.ChestMenu;
@@ -54,21 +72,46 @@ import net.minecraft.world.level.block.entity.ShulkerBoxBlockEntity;
 import net.minecraft.world.level.block.entity.SmokerBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
+import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.world.level.storage.TagValueInput;
+import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUseGlitchHandler {
 	private static final String INCLUDE_GENERATED_STORAGES = "includeGeneratedStorages";
 	private static final int PENDING_PLACEMENT_LIFETIME_TICKS = 3;
-	private static final Set<String> PLAYER_TOUCHED_BLOCK_STORAGES = new HashSet<>();
-	private static final Set<UUID> PLAYER_TOUCHED_ENTITY_STORAGES = new HashSet<>();
+	private static final int REMOTE_OPEN_TIMEOUT_TICKS = 200;
+	private static final TicketType REMOTE_STORAGE_TICKET = Registry.register(
+			BuiltInRegistries.TICKET_TYPE,
+			Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "remote_storage_menu"),
+			new TicketType(TicketType.NO_TIMEOUT, TicketType.FLAG_LOADING | TicketType.FLAG_KEEP_DIMENSION_ACTIVE)
+	);
 	private static final List<PendingPlacementCheck> PENDING_PLACEMENT_CHECKS = new ArrayList<>();
+	private static final Set<PendingStorageOpen> PENDING_STORAGE_OPENS = new HashSet<>();
+	private static final Set<PendingEntityOpen> PENDING_ENTITY_OPENS = new HashSet<>();
+	private static final Map<UUID, ActiveStorageMenu> ACTIVE_STORAGE_MENUS = new HashMap<>();
+	private static final Map<UUID, Map<UUID, ActiveEnderMenu>> ACTIVE_ENDER_MENUS = new HashMap<>();
+	private static final Map<UUID, OfflineEnderChest> OFFLINE_ENDER_CHESTS = new HashMap<>();
+	private static final Map<ServerLevel, Map<Long, Integer>> CHUNK_TICKET_REFS = new IdentityHashMap<>();
+	private static TouchedStorageData touchedStorages;
 
 	@Override
 	public String id() {
@@ -110,13 +153,65 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 		return false;
 	}
 
-	public static void resetTracking() {
-		PLAYER_TOUCHED_BLOCK_STORAGES.clear();
-		PLAYER_TOUCHED_ENTITY_STORAGES.clear();
+	public static void resetTracking(MinecraftServer server) {
+		stopTracking();
+		touchedStorages = server.overworld().getDataStorage().computeIfAbsent(TouchedStorageData.TYPE);
+	}
+
+	public static void stopTracking() {
+		clearActiveMenus();
+		for (PendingStorageOpen pending : List.copyOf(PENDING_STORAGE_OPENS)) {
+			pending.cancel();
+		}
+		for (PendingEntityOpen pending : List.copyOf(PENDING_ENTITY_OPENS)) {
+			pending.cancel(false);
+		}
+		PENDING_STORAGE_OPENS.clear();
+		PENDING_ENTITY_OPENS.clear();
+		CHUNK_TICKET_REFS.forEach((level, refs) -> refs.keySet().forEach(key ->
+				level.getChunkSource().removeTicketWithRadius(REMOTE_STORAGE_TICKET, new ChunkPos(key), 0)));
+		CHUNK_TICKET_REFS.clear();
 		PENDING_PLACEMENT_CHECKS.clear();
+		ACTIVE_ENDER_MENUS.clear();
+		OFFLINE_ENDER_CHESTS.clear();
+		touchedStorages = null;
+	}
+
+	public static void onPlayerJoin(ServerPlayer player) {
+		OfflineEnderChest chest = OFFLINE_ENDER_CHESTS.remove(player.getUUID());
+		if (chest != null) {
+			chest.invalidate();
+			for (ServerPlayer viewer : List.copyOf(chest.viewers)) {
+				viewer.closeContainer();
+			}
+		}
+	}
+
+	public static void onPlayerDisconnect(ServerPlayer player) {
+		Map<UUID, ActiveEnderMenu> menus = ACTIVE_ENDER_MENUS.remove(player.getUUID());
+		if (menus != null) {
+			for (ActiveEnderMenu active : menus.values()) {
+				if (active.viewer.containerMenu == active.menu) {
+					active.viewer.closeContainer();
+				}
+			}
+		}
+		for (Map<UUID, ActiveEnderMenu> targetMenus : ACTIVE_ENDER_MENUS.values()) {
+			targetMenus.remove(player.getUUID());
+		}
+	}
+
+	public static void stopTracking(MinecraftServer server) {
+		for (ServerLevel level : server.getAllLevels()) {
+			for (Entity entity : level.getAllEntities()) {
+				rememberEntityLocation(entity);
+			}
+		}
+		stopTracking();
 	}
 
 	public static void tickPlacementTracking(MinecraftServer server) {
+		tickRemoteMenus(server);
 		for (int i = PENDING_PLACEMENT_CHECKS.size() - 1; i >= 0; i--) {
 			PendingPlacementCheck check = PENDING_PLACEMENT_CHECKS.get(i);
 			if (check.level.getServer() != server) {
@@ -179,7 +274,30 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			return;
 		}
 
-		PLAYER_TOUCHED_ENTITY_STORAGES.add(entity.getUUID());
+		if (touchedStorages != null && touchedStorages.entities.add(entity.getUUID().toString())) {
+			touchedStorages.setDirty();
+		}
+		rememberEntityLocation(entity);
+	}
+
+	public static void noteEntityLoad(Entity entity) {
+		rememberEntityLocation(entity);
+	}
+
+	public static void noteEntityUnload(Entity entity) {
+		if (!(entity instanceof ContainerEntity) || touchedStorages == null) {
+			return;
+		}
+		String uuid = entity.getUUID().toString();
+		if (entity.getRemovalReason() != null && entity.getRemovalReason().shouldDestroy()) {
+			boolean removed = touchedStorages.entities.remove(uuid);
+			removed |= touchedStorages.locations.remove(uuid) != null;
+			if (removed) {
+				touchedStorages.setDirty();
+			}
+		} else {
+			rememberEntityLocation(entity);
+		}
 	}
 
 	@Override
@@ -224,7 +342,7 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			return false;
 		}
 
-		TriggerSource source = TriggerSource.forEntity(entity.getId());
+		TriggerSource source = TriggerSource.forEntity(entity);
 		return triggerFromStorageUse(server, random, entry, player, source);
 	}
 
@@ -235,11 +353,22 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			ServerPlayer opener,
 			TriggerSource source
 	) {
+		for (PendingStorageOpen pending : PENDING_STORAGE_OPENS) {
+			if (pending.opener == opener) {
+				return false;
+			}
+		}
+		for (PendingEntityOpen pending : PENDING_ENTITY_OPENS) {
+			if (pending.opener == opener) {
+				return false;
+			}
+		}
+
 		JsonObject settings = entry.settings == null ? new JsonObject() : entry.settings;
 		boolean includeGeneratedStorages = getBoolean(settings, INCLUDE_GENERATED_STORAGES, false);
 
 		List<PhysicalStorageTarget> physicalTargets = collectPhysicalStorageTargets(server, includeGeneratedStorages);
-		List<ServerPlayer> enderTargets = collectEnderChestTargets(server);
+		List<EnderChestTarget> enderTargets = collectEnderChestTargets(server);
 		if (physicalTargets.isEmpty() && enderTargets.isEmpty()) {
 			return false;
 		}
@@ -305,6 +434,7 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 				if (!canCreateMenuForContainer(resolveMenuKind(entity, container), container)) {
 					continue;
 				}
+				rememberEntityLocation(entity);
 
 				String key = "entity:" + entity.getUUID();
 				if (!visited.add(key)) {
@@ -315,16 +445,47 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			}
 		}
 
+		if (touchedStorages != null) {
+			for (String key : touchedStorages.blocks) {
+				if (!visited.add(key)) {
+					continue;
+				}
+				BlockStorageTarget target = parseBlockStorageKey(server, key);
+				if (target != null && !ServerBackroomsSystem.isBackrooms(target.level)) {
+					targets.add(target);
+				}
+			}
+			for (EntityLocation location : touchedStorages.locations.values()) {
+				if (!touchedStorages.entities.contains(location.uuid) || !visited.add("entity:" + location.uuid)) {
+					continue;
+				}
+				Identifier dimensionId = Identifier.tryParse(location.dimension);
+				ServerLevel level = dimensionId == null ? null
+						: server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
+				if (level != null && !ServerBackroomsSystem.isBackrooms(level)) {
+					targets.add(new UnloadedEntityStorageTarget(level, location));
+				}
+			}
+		}
+
 		return targets;
 	}
 
-	private static List<ServerPlayer> collectEnderChestTargets(MinecraftServer server) {
-		List<ServerPlayer> targets = new ArrayList<>();
+	private static List<EnderChestTarget> collectEnderChestTargets(MinecraftServer server) {
+		List<EnderChestTarget> targets = new ArrayList<>();
+		Set<UUID> online = new HashSet<>();
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			online.add(player.getUUID());
+		}
 		for (ServerPlayer target : GlitchPlayers.eligiblePlayers(server)) {
-			if (target.isSpectator() || !target.isAlive() || ServerBackroomsSystem.isInBackrooms(target)) {
-				continue;
+			targets.add(new EnderChestTarget(target.getUUID(), target));
+		}
+		try {
+			for (UUID owner : OfflineEnderChestOwners.list(server.getWorldPath(LevelResource.PLAYER_DATA_DIR), online)) {
+				targets.add(new EnderChestTarget(owner, null));
 			}
-			targets.add(target);
+		} catch (IOException exception) {
+			Lg2.LOGGER.warn("Failed to enumerate offline ender chests", exception);
 		}
 		return targets;
 	}
@@ -333,7 +494,7 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			ServerPlayer opener,
 			RandomSource random,
 			List<PhysicalStorageTarget> physicalTargets,
-			List<ServerPlayer> enderTargets,
+			List<EnderChestTarget> enderTargets,
 			TriggerSource source,
 			boolean includeGeneratedStorages
 	) {
@@ -341,7 +502,7 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 		for (PhysicalStorageTarget physicalTarget : physicalTargets) {
 			combinedTargets.add(new PhysicalCandidate(physicalTarget));
 		}
-		for (ServerPlayer enderTarget : enderTargets) {
+		for (EnderChestTarget enderTarget : enderTargets) {
 			combinedTargets.add(new EnderCandidate(enderTarget));
 		}
 
@@ -352,14 +513,14 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 				if (isSameStorageAsSource(physicalCandidate.target, source)) {
 					continue;
 				}
-				if (openPhysicalStorage(opener, physicalCandidate.target, includeGeneratedStorages)) {
+				if (openPhysicalTarget(opener, physicalCandidate.target, source, includeGeneratedStorages)) {
 					return true;
 				}
 				continue;
 			}
 
 			if (target instanceof EnderCandidate enderCandidate) {
-				if (source.fromEnderChest && enderCandidate.target.getUUID().equals(opener.getUUID())) {
+				if (source.fromEnderChest && enderCandidate.target.owner().equals(opener.getUUID())) {
 					continue;
 				}
 				if (openEnderChest(opener, enderCandidate.target)) {
@@ -389,7 +550,7 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			if (isSameStorageAsSource(target, source)) {
 				continue;
 			}
-			if (openPhysicalStorage(opener, target, includeGeneratedStorages)) {
+			if (openPhysicalTarget(opener, target, source, includeGeneratedStorages)) {
 				return true;
 			}
 		}
@@ -402,7 +563,10 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 	private record PhysicalCandidate(PhysicalStorageTarget target) implements StorageTarget {
 	}
 
-	private record EnderCandidate(ServerPlayer target) implements StorageTarget {
+	private record EnderChestTarget(UUID owner, ServerPlayer onlinePlayer) {
+	}
+
+	private record EnderCandidate(EnderChestTarget target) implements StorageTarget {
 	}
 
 	private static boolean openRandomEnderChest(
@@ -447,22 +611,155 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 			}
 			return source.sourceEntityId >= 0 && source.sourceEntityId == entity.getId();
 		}
+		if (target instanceof UnloadedEntityStorageTarget entityTarget) {
+			return source.sourceEntityUuid != null && source.sourceEntityUuid.equals(entityTarget.location.uuid);
+		}
 
 		return false;
 	}
 
-	private static boolean openPhysicalStorage(
+	private static boolean openPhysicalTarget(
 			ServerPlayer opener,
 			PhysicalStorageTarget target,
+			TriggerSource source,
 			boolean includeGeneratedStorages
 	) {
 		if (target instanceof BlockStorageTarget blockTarget) {
-			return openBlockStorage(opener, blockTarget, includeGeneratedStorages);
+			return queueBlockStorage(opener, blockTarget, source, includeGeneratedStorages);
 		}
 		if (target instanceof EntityStorageTarget entityTarget) {
-			return openEntityStorage(opener, entityTarget, includeGeneratedStorages);
+			if (!(entityTarget.entity instanceof Entity entity) || !(entity.level() instanceof ServerLevel level)) {
+				return false;
+			}
+			EntityLocation location = new EntityLocation(entity.getUUID().toString(),
+					level.dimension().identifier().toString(), entity.chunkPosition().toLong());
+			return queueEntityStorage(opener, new UnloadedEntityStorageTarget(level, location), source, includeGeneratedStorages);
+		}
+		if (target instanceof UnloadedEntityStorageTarget entityTarget) {
+			return queueEntityStorage(opener, entityTarget, source, includeGeneratedStorages);
 		}
 		return false;
+	}
+
+	private static boolean queueBlockStorage(
+			ServerPlayer opener,
+			BlockStorageTarget target,
+			TriggerSource source,
+			boolean includeGeneratedStorages
+	) {
+		BlockPos pos = target.pos;
+		ChunkPos chunkPos = new ChunkPos(pos);
+		if (target.level.getChunkSource().hasChunk(chunkPos.x, chunkPos.z)
+				&& !(target.level.getBlockEntity(pos) instanceof Container)) {
+			forgetStaleBlockStorage(target);
+			return false;
+		}
+
+		PendingStorageOpen pending = new PendingStorageOpen(opener, target, source, includeGeneratedStorages);
+		PENDING_STORAGE_OPENS.add(pending);
+		pending.load(chunkPos, true);
+		return true;
+	}
+
+	private static void forgetStaleBlockStorage(BlockStorageTarget target) {
+		if (touchedStorages != null && touchedStorages.blocks.remove(buildBlockStorageKey(target.level, target.pos))) {
+			touchedStorages.setDirty();
+		}
+	}
+
+	private static boolean queueEntityStorage(ServerPlayer opener, UnloadedEntityStorageTarget target,
+			TriggerSource source, boolean includeGeneratedStorages) {
+		UUID uuid;
+		try {
+			uuid = UUID.fromString(target.location.uuid);
+		} catch (IllegalArgumentException exception) {
+			forgetStaleEntityLocation(target.location);
+			return false;
+		}
+		PendingEntityOpen pending = new PendingEntityOpen(opener, target, source, uuid, includeGeneratedStorages);
+		PENDING_ENTITY_OPENS.add(pending);
+		pending.load();
+		return true;
+	}
+
+	private static void forgetStaleEntityLocation(EntityLocation location) {
+		if (touchedStorages != null && location.equals(touchedStorages.locations.get(location.uuid))) {
+			touchedStorages.locations.remove(location.uuid);
+			touchedStorages.setDirty();
+		}
+	}
+
+	private static void tickRemoteMenus(MinecraftServer server) {
+		long now = server.overworld().getGameTime();
+		ACTIVE_ENDER_MENUS.entrySet().removeIf(entry -> {
+			entry.getValue().entrySet().removeIf(viewerEntry -> {
+				ActiveEnderMenu active = viewerEntry.getValue();
+				return active.viewer.containerMenu != active.menu;
+			});
+			return entry.getValue().isEmpty();
+		});
+		for (OfflineEnderChest chest : List.copyOf(OFFLINE_ENDER_CHESTS.values())) {
+			if (server.getPlayerList().getPlayer(chest.owner) != null) {
+				onPlayerJoin(server.getPlayerList().getPlayer(chest.owner));
+			} else if (!chest.valid) {
+				for (ServerPlayer viewer : List.copyOf(chest.viewers)) {
+					viewer.closeContainer();
+				}
+			}
+		}
+		for (PendingStorageOpen pending : List.copyOf(PENDING_STORAGE_OPENS)) {
+			if (now >= pending.expireTick) {
+				pending.cancel(true);
+			}
+		}
+		for (PendingEntityOpen pending : List.copyOf(PENDING_ENTITY_OPENS)) {
+			pending.tick(now);
+		}
+		ACTIVE_STORAGE_MENUS.entrySet().removeIf(entry -> {
+			ActiveStorageMenu active = entry.getValue();
+			if (server.getPlayerList().getPlayer(entry.getKey()) == active.player
+					&& active.player.containerMenu == active.menu) {
+				if (active.entity != null) {
+					if (active.entity.isRemoved() || !active.entity.isAlive()
+							|| active.entity.level() != active.lease.level) {
+						active.player.closeContainer();
+					} else {
+						try {
+							active.lease.retain(active.entity.chunkPosition());
+							rememberEntityLocation(active.entity);
+							return false;
+						} catch (RuntimeException exception) {
+							Lg2.LOGGER.warn("Failed to keep remote entity storage loaded", exception);
+							active.player.closeContainer();
+						}
+					}
+				} else {
+					return false;
+				}
+			}
+			active.lease.release();
+			return true;
+		});
+	}
+
+	private static void clearActiveMenus() {
+		for (ActiveStorageMenu active : ACTIVE_STORAGE_MENUS.values()) {
+			active.lease.release();
+		}
+		ACTIVE_STORAGE_MENUS.clear();
+	}
+
+	private static void openOriginalStorage(ServerPlayer opener, TriggerSource source) {
+		if (source.fromEnderChest) {
+			openEnderChest(opener, opener);
+		} else if (source.sourceLevel != null && source.sourcePos != null) {
+			openBlockStorage(opener, new BlockStorageTarget(source.sourceLevel, source.sourcePos), true);
+		} else if (opener.level() instanceof ServerLevel level) {
+			Entity entity = level.getEntity(source.sourceEntityId);
+			if (entity instanceof ContainerEntity containerEntity) {
+				openEntityStorage(opener, new EntityStorageTarget(containerEntity), true);
+			}
+		}
 	}
 
 	private static boolean openBlockStorage(
@@ -560,21 +857,159 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 	}
 
 	private static boolean openEnderChest(ServerPlayer opener, ServerPlayer target) {
-		if (target == null || !target.isAlive() || target.isRemoved()) {
+		if (target == null || target.isRemoved()) {
 			return false;
 		}
 
 		Container proxied = new ConditionalValidContainer(
 				target.getEnderChestInventory(),
-				player -> target.isAlive() && !target.isRemoved() && !target.isSpectator()
+				player -> !target.isRemoved() && target.level().getServer().getPlayerList().getPlayer(target.getUUID()) == target
 		);
-		return openContainerWithMenuKind(
+		boolean opened = openContainerWithMenuKind(
 				opener,
 				Component.translatable("container.enderchest"),
 				proxied,
 				StorageMenuKind.CHEST_DYNAMIC,
 				null
 		);
+		if (opened && opener != target) {
+			ACTIVE_ENDER_MENUS.computeIfAbsent(target.getUUID(), ignored -> new HashMap<>())
+					.put(opener.getUUID(), new ActiveEnderMenu(opener, opener.containerMenu));
+		}
+		return opened;
+	}
+
+	private static boolean openEnderChest(ServerPlayer opener, EnderChestTarget target) {
+		if (target.onlinePlayer() != null) {
+			return openEnderChest(opener, target.onlinePlayer());
+		}
+		MinecraftServer server = opener.level().getServer();
+		if (server.getPlayerList().getPlayer(target.owner()) != null) {
+			return false;
+		}
+		OfflineEnderChest chest = OFFLINE_ENDER_CHESTS.get(target.owner());
+		if (chest == null) {
+			chest = OfflineEnderChest.load(server, target.owner());
+			if (chest == null) {
+				return false;
+			}
+			OFFLINE_ENDER_CHESTS.put(target.owner(), chest);
+		}
+		OfflineEnderChest selected = chest;
+		Container proxied = new ConditionalValidContainer(chest,
+				player -> selected.valid && server.getPlayerList().getPlayer(target.owner()) == null);
+		boolean opened = openContainerWithMenuKind(opener, Component.translatable("container.enderchest"),
+				proxied, StorageMenuKind.CHEST_DYNAMIC, null);
+		if (!opened && chest.viewers.isEmpty()) {
+			OFFLINE_ENDER_CHESTS.remove(target.owner(), chest);
+		}
+		return opened;
+	}
+
+	private static final class OfflineEnderChest extends PlayerEnderChestContainer {
+		private final MinecraftServer server;
+		private final UUID owner;
+		private final Path file;
+		private final CompoundTag playerData;
+		private final Set<ServerPlayer> viewers = new HashSet<>();
+		private boolean initialized;
+		private boolean valid = true;
+
+		private OfflineEnderChest(MinecraftServer server, UUID owner, Path file, CompoundTag playerData) {
+			this.server = server;
+			this.owner = owner;
+			this.file = file;
+			this.playerData = playerData;
+		}
+
+		private static OfflineEnderChest load(MinecraftServer server, UUID owner) {
+			Path file = server.getWorldPath(LevelResource.PLAYER_DATA_DIR).resolve(owner + ".dat");
+			if (!Files.isRegularFile(file)) {
+				return null;
+			}
+			try {
+				CompoundTag raw = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+				CompoundTag data = DataFixTypes.PLAYER.updateToCurrentVersion(server.getFixerUpper(), raw,
+						NbtUtils.getDataVersion(raw));
+				ProblemReporter.Collector errors = new ProblemReporter.Collector();
+				var input = TagValueInput.create(errors, server.registryAccess(), data);
+				var items = input.list("EnderItems", ItemStackWithSlot.CODEC);
+				if (data.get("EnderItems") != null && items.isEmpty()) {
+					return null;
+				}
+				OfflineEnderChest chest = new OfflineEnderChest(server, owner, file, data);
+				chest.fromSlots(input.listOrEmpty("EnderItems", ItemStackWithSlot.CODEC));
+				if (!errors.isEmpty()) {
+					Lg2.LOGGER.warn("Refusing to edit malformed offline ender chest for {}: {}", owner, errors.getTreeReport());
+					return null;
+				}
+				chest.initialized = true;
+				return chest;
+			} catch (Exception exception) {
+				Lg2.LOGGER.warn("Failed to load offline ender chest for {}", owner, exception);
+				return null;
+			}
+		}
+
+		private void invalidate() {
+			this.valid = false;
+		}
+
+		@Override
+		public void setChanged() {
+			super.setChanged();
+			if (this.initialized && this.valid) {
+				try {
+					this.persist();
+				} catch (Exception exception) {
+					this.invalidate();
+					Lg2.LOGGER.error("Failed to save offline ender chest for {}; closing its menus", this.owner, exception);
+				}
+			}
+		}
+
+		private void persist() throws IOException {
+			if (this.server.getPlayerList().getPlayer(this.owner) != null) {
+				throw new IOException("Ender chest owner joined while offline menu was open");
+			}
+			ProblemReporter.Collector errors = new ProblemReporter.Collector();
+			TagValueOutput output = TagValueOutput.createWithContext(errors, this.server.registryAccess());
+			this.storeAsSlots(output.list("EnderItems", ItemStackWithSlot.CODEC));
+			if (!errors.isEmpty()) {
+				throw new IOException("Could not encode offline ender chest: " + errors.getTreeReport());
+			}
+			this.playerData.put("EnderItems", output.buildResult().get("EnderItems"));
+			NbtUtils.addCurrentDataVersion(this.playerData);
+			Path temp = Files.createTempFile(this.file.getParent(), this.owner + "-", ".dat");
+			try {
+				NbtIo.writeCompressed(this.playerData, temp);
+				if (!Util.safeReplaceOrMoveFile(this.file, temp,
+						this.file.resolveSibling(this.owner + ".dat_old"), false)) {
+					throw new IOException("Could not atomically replace player data");
+				}
+			} finally {
+				Files.deleteIfExists(temp);
+			}
+		}
+
+		@Override
+		public void startOpen(ContainerUser user) {
+			super.startOpen(user);
+			if (user instanceof ServerPlayer player) {
+				this.viewers.add(player);
+			}
+		}
+
+		@Override
+		public void stopOpen(ContainerUser user) {
+			super.stopOpen(user);
+			if (user instanceof ServerPlayer player) {
+				this.viewers.remove(player);
+			}
+			if (this.viewers.isEmpty()) {
+				OFFLINE_ENDER_CHESTS.remove(this.owner, this);
+			}
+		}
 	}
 
 	private static boolean openContainerWithMenuKind(
@@ -847,16 +1282,52 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 
 	private static void markBlockStorageTouched(ServerLevel level, BlockPos pos, BlockState state) {
 		BlockPos keyPos = getUniqueBlockPosForStorage(state, pos);
-		PLAYER_TOUCHED_BLOCK_STORAGES.add(buildBlockStorageKey(level, keyPos));
+		if (touchedStorages != null && touchedStorages.blocks.add(buildBlockStorageKey(level, keyPos))) {
+			touchedStorages.setDirty();
+		}
 	}
 
 	private static boolean wasBlockStorageTouched(ServerLevel level, BlockPos pos, BlockState state) {
 		BlockPos keyPos = getUniqueBlockPosForStorage(state, pos);
-		return PLAYER_TOUCHED_BLOCK_STORAGES.contains(buildBlockStorageKey(level, keyPos));
+		return touchedStorages != null && touchedStorages.blocks.contains(buildBlockStorageKey(level, keyPos));
 	}
 
 	private static boolean wasEntityStorageTouched(Entity entity) {
-		return PLAYER_TOUCHED_ENTITY_STORAGES.contains(entity.getUUID());
+		return touchedStorages != null && touchedStorages.entities.contains(entity.getUUID().toString());
+	}
+
+	private static void rememberEntityLocation(Entity entity) {
+		if (!(entity instanceof ContainerEntity) || !(entity.level() instanceof ServerLevel level) || touchedStorages == null) {
+			return;
+		}
+		String uuid = entity.getUUID().toString();
+		if (!touchedStorages.entities.contains(uuid)) {
+			return;
+		}
+		EntityLocation location = new EntityLocation(uuid, level.dimension().identifier().toString(), entity.chunkPosition().toLong());
+		if (!location.equals(touchedStorages.locations.put(uuid, location))) {
+			touchedStorages.setDirty();
+		}
+	}
+
+	private static BlockStorageTarget parseBlockStorageKey(MinecraftServer server, String key) {
+		if (!key.startsWith("block:")) {
+			return null;
+		}
+		int separator = key.lastIndexOf(':');
+		if (separator <= "block:".length()) {
+			return null;
+		}
+		Identifier dimensionId = Identifier.tryParse(key.substring("block:".length(), separator));
+		if (dimensionId == null) {
+			return null;
+		}
+		try {
+			ServerLevel level = server.getLevel(ResourceKey.create(Registries.DIMENSION, dimensionId));
+			return level == null ? null : new BlockStorageTarget(level, BlockPos.of(Long.parseLong(key.substring(separator + 1))));
+		} catch (NumberFormatException exception) {
+			return null;
+		}
 	}
 
 	private static void enqueuePendingPlacement(ServerLevel level, BlockPos pos) {
@@ -975,6 +1446,9 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 		}
 	}
 
+	private record UnloadedEntityStorageTarget(ServerLevel level, EntityLocation location) implements PhysicalStorageTarget {
+	}
+
 	private static final class PendingPlacementCheck {
 		private final ServerLevel level;
 		private final BlockPos pos;
@@ -987,26 +1461,365 @@ public final class ChestDesyncGlitch implements BlockUseGlitchHandler, EntityUse
 		}
 	}
 
+	record EntityLocation(String uuid, String dimension, long chunkPos) {
+		private static final Codec<EntityLocation> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+				Codec.STRING.fieldOf("uuid").forGetter(EntityLocation::uuid),
+				Codec.STRING.fieldOf("dimension").forGetter(EntityLocation::dimension),
+				Codec.LONG.fieldOf("chunk").forGetter(EntityLocation::chunkPos)
+		).apply(instance, EntityLocation::new));
+	}
+
+	static final class TouchedStorageData extends SavedData {
+		static final Codec<TouchedStorageData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+				Codec.STRING.listOf().optionalFieldOf("blocks", List.of()).forGetter(data -> List.copyOf(data.blocks)),
+				Codec.STRING.listOf().optionalFieldOf("entities", List.of()).forGetter(data -> List.copyOf(data.entities)),
+				EntityLocation.CODEC.listOf().optionalFieldOf("locations", List.of())
+						.forGetter(data -> List.copyOf(data.locations.values()))
+		).apply(instance, TouchedStorageData::new));
+		private static final SavedDataType<TouchedStorageData> TYPE = new SavedDataType<>(
+				"lg2_chest_desync", TouchedStorageData::new, CODEC, DataFixTypes.SAVED_DATA_COMMAND_STORAGE
+		);
+		private final Set<String> blocks;
+		private final Set<String> entities;
+		private final Map<String, EntityLocation> locations;
+
+		private TouchedStorageData() {
+			this(List.of(), List.of(), List.of());
+		}
+
+		TouchedStorageData(List<String> blocks, List<String> entities, List<EntityLocation> locations) {
+			this.blocks = new HashSet<>(blocks);
+			this.entities = new HashSet<>(entities);
+			this.locations = new HashMap<>();
+			for (EntityLocation location : locations) {
+				this.locations.put(location.uuid, location);
+			}
+		}
+	}
+
+	private record ActiveStorageMenu(ServerPlayer player, AbstractContainerMenu menu, ChunkLease lease, Entity entity) {
+	}
+
+	private record ActiveEnderMenu(ServerPlayer viewer, AbstractContainerMenu menu) {
+	}
+
+	private static final class ChunkLease {
+		private final ServerLevel level;
+		private final Set<Long> chunks = new HashSet<>();
+
+		private ChunkLease(ServerLevel level) {
+			this.level = level;
+		}
+
+		private CompletableFuture<?> load(ChunkPos pos) {
+			long key = pos.toLong();
+			if (!this.chunks.add(key)) {
+				return CompletableFuture.completedFuture(null);
+			}
+			CHUNK_TICKET_REFS.computeIfAbsent(this.level, ignored -> new HashMap<>()).merge(key, 1, Integer::sum);
+			try {
+				return this.level.getChunkSource().addTicketAndLoadWithRadius(REMOTE_STORAGE_TICKET, pos, 0);
+			} catch (RuntimeException exception) {
+				this.releaseOne(key);
+				throw exception;
+			}
+		}
+
+		private void retain(ChunkPos pos) {
+			long keep = pos.toLong();
+			if (!this.chunks.contains(keep)) {
+				this.load(pos);
+			}
+			for (long key : Set.copyOf(this.chunks)) {
+				if (key != keep) {
+					this.releaseOne(key);
+				}
+			}
+		}
+
+		private void release() {
+			for (long key : Set.copyOf(this.chunks)) {
+				this.releaseOne(key);
+			}
+		}
+
+		private void releaseOne(long key) {
+			if (!this.chunks.remove(key)) {
+				return;
+			}
+			Map<Long, Integer> refs = CHUNK_TICKET_REFS.get(this.level);
+			if (refs == null) {
+				return;
+			}
+			int remaining = refs.getOrDefault(key, 1) - 1;
+			if (remaining == 0) {
+				refs.remove(key);
+				this.level.getChunkSource().removeTicketWithRadius(REMOTE_STORAGE_TICKET, new ChunkPos(key), 0);
+				if (refs.isEmpty()) {
+					CHUNK_TICKET_REFS.remove(this.level);
+				}
+			} else {
+				refs.put(key, remaining);
+			}
+		}
+	}
+
+	private static final class PendingStorageOpen {
+		private final ServerPlayer opener;
+		private final BlockStorageTarget target;
+		private final TriggerSource source;
+		private final boolean includeGeneratedStorages;
+		private final AbstractContainerMenu menuAtStart;
+		private final Level levelAtStart;
+		private final ChunkLease lease;
+		private final long expireTick;
+		private boolean finished;
+
+		private PendingStorageOpen(ServerPlayer opener, BlockStorageTarget target, TriggerSource source, boolean includeGeneratedStorages) {
+			this.opener = opener;
+			this.target = target;
+			this.source = source;
+			this.includeGeneratedStorages = includeGeneratedStorages;
+			this.menuAtStart = opener.containerMenu;
+			this.levelAtStart = opener.level();
+			this.lease = new ChunkLease(target.level);
+			this.expireTick = target.level.getServer().overworld().getGameTime() + REMOTE_OPEN_TIMEOUT_TICKS;
+		}
+
+		private void load(ChunkPos pos, boolean primary) {
+			CompletableFuture<?> future;
+			try {
+				future = this.lease.load(pos);
+			} catch (RuntimeException exception) {
+				Lg2.LOGGER.warn("Failed to schedule remote storage chunk load at {}", pos, exception);
+				this.cancel(true);
+				return;
+			}
+			future.whenComplete((ignored, exception) -> this.target.level.getServer().execute(() -> {
+				if (this.finished) {
+					return;
+				}
+				if (exception != null || !this.target.level.getChunkSource().hasChunk(pos.x, pos.z)) {
+					this.cancel(true);
+					return;
+				}
+				if (primary) {
+					this.onPrimaryLoaded();
+				} else {
+					this.openLoaded();
+				}
+			}));
+		}
+
+		private void onPrimaryLoaded() {
+			BlockState state = this.target.level.getBlockState(this.target.pos);
+			if (!(this.target.level.getBlockEntity(this.target.pos) instanceof Container)) {
+				forgetStaleBlockStorage(this.target);
+				this.cancel(true);
+				return;
+			}
+			if (state.getBlock() instanceof ChestBlock && state.getValue(ChestBlock.TYPE) != ChestType.SINGLE) {
+				BlockPos connected = ChestBlock.getConnectedBlockPos(this.target.pos, state);
+				if (connected != null) {
+					ChunkPos adjacent = new ChunkPos(connected);
+					if (adjacent.toLong() != new ChunkPos(this.target.pos).toLong()) {
+						this.load(adjacent, false);
+						return;
+					}
+				}
+			}
+			this.openLoaded();
+		}
+
+		private void openLoaded() {
+			if (!this.canOpen()) {
+				this.cancel(false);
+				return;
+			}
+			try {
+				if (openBlockStorage(this.opener, this.target, this.includeGeneratedStorages)) {
+					this.finished = true;
+					PENDING_STORAGE_OPENS.remove(this);
+					ActiveStorageMenu previous = ACTIVE_STORAGE_MENUS.put(this.opener.getUUID(),
+							new ActiveStorageMenu(this.opener, this.opener.containerMenu, this.lease, null));
+					if (previous != null) {
+						previous.lease.release();
+					}
+					return;
+				}
+			} catch (RuntimeException exception) {
+				Lg2.LOGGER.warn("Failed to open remote storage at {}", this.target.pos, exception);
+			}
+			this.cancel(true);
+		}
+
+		private boolean canOpen() {
+			return this.target.level.getServer().getPlayerList().getPlayer(this.opener.getUUID()) == this.opener
+					&& this.opener.isAlive() && !this.opener.isRemoved()
+					&& this.opener.level() == this.levelAtStart && this.opener.containerMenu == this.menuAtStart;
+		}
+
+		private void cancel() {
+			this.cancel(false);
+		}
+
+		private void cancel(boolean openOriginal) {
+			if (this.finished) {
+				return;
+			}
+			this.finished = true;
+			PENDING_STORAGE_OPENS.remove(this);
+			this.lease.release();
+			if (openOriginal && this.canOpen()) {
+				openOriginalStorage(this.opener, this.source);
+			}
+		}
+	}
+
+	private static final class PendingEntityOpen {
+		private final ServerPlayer opener;
+		private final UnloadedEntityStorageTarget target;
+		private final TriggerSource source;
+		private final UUID uuid;
+		private final boolean includeGeneratedStorages;
+		private final AbstractContainerMenu menuAtStart;
+		private final Level levelAtStart;
+		private final ChunkLease lease;
+		private final long expireTick;
+		private boolean chunkReady;
+		private boolean finished;
+
+		private PendingEntityOpen(ServerPlayer opener, UnloadedEntityStorageTarget target, TriggerSource source,
+				UUID uuid, boolean includeGeneratedStorages) {
+			this.opener = opener;
+			this.target = target;
+			this.source = source;
+			this.uuid = uuid;
+			this.includeGeneratedStorages = includeGeneratedStorages;
+			this.menuAtStart = opener.containerMenu;
+			this.levelAtStart = opener.level();
+			this.lease = new ChunkLease(target.level);
+			this.expireTick = target.level.getServer().overworld().getGameTime() + REMOTE_OPEN_TIMEOUT_TICKS;
+		}
+
+		private void load() {
+			ChunkPos chunk = new ChunkPos(this.target.location.chunkPos);
+			CompletableFuture<?> future;
+			try {
+				future = this.lease.load(chunk);
+			} catch (RuntimeException exception) {
+				Lg2.LOGGER.warn("Failed to schedule remote entity storage chunk load at {}", chunk, exception);
+				this.cancel(true);
+				return;
+			}
+			future.whenComplete((ignored, exception) -> this.target.level.getServer().execute(() -> {
+				if (this.finished) {
+					return;
+				}
+				if (exception != null || !this.target.level.getChunkSource().hasChunk(chunk.x, chunk.z)) {
+					this.cancel(true);
+					return;
+				}
+				this.chunkReady = true;
+			}));
+		}
+
+		private void tick(long now) {
+			if (this.finished) {
+				return;
+			}
+			if (!this.canOpen()) {
+				this.cancel(false);
+				return;
+			}
+			if (now >= this.expireTick) {
+				if (this.chunkReady) {
+					forgetStaleEntityLocation(this.target.location);
+				}
+				this.cancel(true);
+				return;
+			}
+			if (!this.chunkReady) {
+				return;
+			}
+			Entity entity = this.target.level.getEntity(this.uuid);
+			if (entity == null) {
+				return;
+			}
+			if (!(entity instanceof ContainerEntity containerEntity) || !(entity instanceof Container container)
+					|| entity.isRemoved() || !entity.isAlive()) {
+				forgetStaleEntityLocation(this.target.location);
+				this.cancel(true);
+				return;
+			}
+			ChunkPos actual = entity.chunkPosition();
+			ChunkPos indexed = new ChunkPos(this.target.location.chunkPos);
+			rememberEntityLocation(entity);
+			if (Math.abs(actual.x - indexed.x) > 1 || Math.abs(actual.z - indexed.z) > 1
+					|| !canCreateMenuForContainer(resolveMenuKind(entity, container), container)) {
+				this.cancel(true);
+				return;
+			}
+			try {
+				this.lease.retain(actual);
+				if (openEntityStorage(this.opener, new EntityStorageTarget(containerEntity), this.includeGeneratedStorages)) {
+					this.finished = true;
+					PENDING_ENTITY_OPENS.remove(this);
+					ActiveStorageMenu previous = ACTIVE_STORAGE_MENUS.put(this.opener.getUUID(),
+							new ActiveStorageMenu(this.opener, this.opener.containerMenu, this.lease, entity));
+					if (previous != null) {
+						previous.lease.release();
+					}
+					return;
+				}
+			} catch (RuntimeException exception) {
+				Lg2.LOGGER.warn("Failed to open remote entity storage {}", this.uuid, exception);
+			}
+			this.cancel(true);
+		}
+
+		private boolean canOpen() {
+			return this.target.level.getServer().getPlayerList().getPlayer(this.opener.getUUID()) == this.opener
+					&& this.opener.isAlive() && !this.opener.isRemoved()
+					&& this.opener.level() == this.levelAtStart && this.opener.containerMenu == this.menuAtStart;
+		}
+
+		private void cancel(boolean openOriginal) {
+			if (this.finished) {
+				return;
+			}
+			this.finished = true;
+			PENDING_ENTITY_OPENS.remove(this);
+			this.lease.release();
+			if (openOriginal && this.canOpen()) {
+				openOriginalStorage(this.opener, this.source);
+			}
+		}
+	}
+
 	private static final class TriggerSource {
 		private final ServerLevel sourceLevel;
 		private final BlockPos sourcePos;
 		private final int sourceEntityId;
+		private final String sourceEntityUuid;
 		private final boolean fromEnderChest;
 
-		private TriggerSource(ServerLevel sourceLevel, BlockPos sourcePos, int sourceEntityId, boolean fromEnderChest) {
+		private TriggerSource(ServerLevel sourceLevel, BlockPos sourcePos, int sourceEntityId, String sourceEntityUuid,
+				boolean fromEnderChest) {
 			this.sourceLevel = sourceLevel;
 			this.sourcePos = sourcePos;
 			this.sourceEntityId = sourceEntityId;
+			this.sourceEntityUuid = sourceEntityUuid;
 			this.fromEnderChest = fromEnderChest;
 		}
 
 		private static TriggerSource forBlock(ServerLevel level, BlockPos pos, BlockState state, boolean fromEnderChest) {
 			BlockPos keyPos = getUniqueBlockPosForStorage(state, pos);
-			return new TriggerSource(level, keyPos, -1, fromEnderChest);
+			return new TriggerSource(level, keyPos, -1, null, fromEnderChest);
 		}
 
-		private static TriggerSource forEntity(int sourceEntityId) {
-			return new TriggerSource(null, null, sourceEntityId, false);
+		private static TriggerSource forEntity(Entity entity) {
+			return new TriggerSource(null, null, entity.getId(), entity.getUUID().toString(), false);
 		}
 	}
 

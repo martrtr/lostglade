@@ -86,7 +86,7 @@ public final class ModBlocks {
 			new BitcoinOreBlock(
 					createNormalOreProperties(),
 					Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "block/bitcoin_ore"),
-					net.minecraft.world.level.block.Blocks.INFESTED_STONE
+					net.minecraft.world.level.block.Blocks.STONE_SLAB
 			)
 	);
 
@@ -96,7 +96,7 @@ public final class ModBlocks {
 			new BitcoinOreBlock(
 					createDeepslateOreProperties(),
 					Identifier.fromNamespaceAndPath(Lg2.MOD_ID, "block/deepslate_bitcoin_ore"),
-					net.minecraft.world.level.block.Blocks.INFESTED_DEEPSLATE
+					net.minecraft.world.level.block.Blocks.COBBLED_DEEPSLATE_SLAB
 			)
 	);
 
@@ -443,7 +443,7 @@ public final class ModBlocks {
 	private static BlockBehaviour.Properties createNormalOreProperties() {
 		return BlockBehaviour.Properties.of()
 				.mapColor(MapColor.STONE)
-				.strength(3.0f, 3.0f)
+				.strength(2.0f, 3.0f)
 				.sound(SoundType.STONE)
 				.noLootTable()
 				.setId(BITCOIN_ORE_KEY);
@@ -452,7 +452,7 @@ public final class ModBlocks {
 	private static BlockBehaviour.Properties createDeepslateOreProperties() {
 		return BlockBehaviour.Properties.of()
 				.mapColor(MapColor.DEEPSLATE)
-				.strength(4.5f, 3.0f)
+				.strength(3.5f, 3.0f)
 				.sound(SoundType.DEEPSLATE)
 				.noLootTable()
 				.setId(DEEPSLATE_BITCOIN_ORE_KEY);

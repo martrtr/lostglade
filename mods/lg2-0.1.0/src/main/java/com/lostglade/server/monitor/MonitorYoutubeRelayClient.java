@@ -87,11 +87,24 @@ public final class MonitorYoutubeRelayClient {
 	private static final long PREVIEW_CACHE_BUCKET_MS = Math.max(1L, Math.round(1000.0D / Math.max(1.0D, FRAME_RATE)));
 	private static final int MAX_CACHED_PREVIEW_FRAMES = 3600;
 	private static final long QUEUE_PRELOAD_DURATION_MS = TimeUnit.SECONDS.toMillis(readIntSetting("LG2_YT_QUEUE_PRELOAD_SEC", "lg2.youtube.queuePreloadSec", 20));
-	private static final long CURRENT_VIDEO_CACHE_BEHIND_MS = TimeUnit.MINUTES.toMillis(readIntSetting("LG2_YT_CURRENT_CACHE_BEHIND_MIN", "lg2.youtube.currentCacheBehindMin", 30));
-	private static final long CURRENT_VIDEO_CACHE_AHEAD_MS = TimeUnit.MINUTES.toMillis(readIntSetting("LG2_YT_CURRENT_CACHE_AHEAD_MIN", "lg2.youtube.currentCacheAheadMin", 30));
+	// This cache contains compressed JPEG frames, not source video. A 30 minute look-ahead at
+	// 12 FPS creates more than 21k images per monitor and makes ffmpeg decode continuously,
+	// starving both map rendering and the independent audio decoder. Keep a short playback
+	// cushion instead; sequential prefetch extends it as the video advances.
+	private static final long CURRENT_VIDEO_CACHE_BEHIND_MS = readCacheWindowMillis(
+			"LG2_YT_CURRENT_CACHE_BEHIND_SEC", "lg2.youtube.currentCacheBehindSec",
+			"LG2_YT_CURRENT_CACHE_BEHIND_MIN", "lg2.youtube.currentCacheBehindMin", 8
+	);
+	private static final long CURRENT_VIDEO_CACHE_AHEAD_MS = readCacheWindowMillis(
+			"LG2_YT_CURRENT_CACHE_AHEAD_SEC", "lg2.youtube.currentCacheAheadSec",
+			"LG2_YT_CURRENT_CACHE_AHEAD_MIN", "lg2.youtube.currentCacheAheadMin", 24
+	);
 	private static final int MAX_SESSION_CACHED_PREVIEW_FRAMES = Math.max(
-			MAX_CACHED_PREVIEW_FRAMES,
-			(int) Math.ceil((CURRENT_VIDEO_CACHE_BEHIND_MS + CURRENT_VIDEO_CACHE_AHEAD_MS) / (double) PREVIEW_CACHE_BUCKET_MS) + 512
+			512,
+			Math.min(
+					MAX_CACHED_PREVIEW_FRAMES,
+					(int) Math.ceil((CURRENT_VIDEO_CACHE_BEHIND_MS + CURRENT_VIDEO_CACHE_AHEAD_MS) / (double) PREVIEW_CACHE_BUCKET_MS) + 64
+			)
 	);
 	private static final long CACHE_LOOKUP_TOLERANCE_MS = Math.max(100L, PREVIEW_CACHE_BUCKET_MS * 2L);
 	private static final long CONTIGUOUS_BUFFER_TOLERANCE_MS = PREVIEW_CACHE_BUCKET_MS + CACHE_LOOKUP_TOLERANCE_MS;
@@ -1285,6 +1298,43 @@ public final class MonitorYoutubeRelayClient {
 		} catch (NumberFormatException ignored) {
 			return fallback;
 		}
+	}
+
+	private static long readCacheWindowMillis(
+			String secondsEnvKey,
+			String secondsPropertyKey,
+			String legacyMinutesEnvKey,
+			String legacyMinutesPropertyKey,
+			int defaultSeconds
+	) {
+		Integer configuredSeconds = readOptionalIntSetting(secondsEnvKey, secondsPropertyKey);
+		if (configuredSeconds != null) {
+			return TimeUnit.SECONDS.toMillis(clampCacheWindowSeconds(configuredSeconds));
+		}
+		// Keep the old minute-based switches working, but bound them. They used to make a
+		// single screen retain tens of thousands of decoded preview frames.
+		Integer configuredLegacyMinutes = readOptionalIntSetting(legacyMinutesEnvKey, legacyMinutesPropertyKey);
+		if (configuredLegacyMinutes != null) {
+			return TimeUnit.SECONDS.toMillis(clampCacheWindowSeconds(configuredLegacyMinutes * 60L));
+		}
+		return TimeUnit.SECONDS.toMillis(clampCacheWindowSeconds(defaultSeconds));
+	}
+
+	private static Integer readOptionalIntSetting(String envKey, String propertyKey) {
+		String property = System.getProperty(propertyKey);
+		String raw = property != null && !property.isBlank() ? property : System.getenv(envKey);
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		try {
+			return Integer.parseInt(raw.trim());
+		} catch (NumberFormatException ignored) {
+			return null;
+		}
+	}
+
+	private static long clampCacheWindowSeconds(long seconds) {
+		return Math.max(0L, Math.min(120L, seconds));
 	}
 
 	private static double readDoubleSetting(String envKey, String propertyKey, double fallback) {

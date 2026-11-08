@@ -874,6 +874,7 @@ public final class RendererBotCameraSystem {
 				fullHeight,
 				fovDegrees,
 				targetFps,
+				1.0F,
 				onFrame,
 				onFailure
 		);
@@ -895,6 +896,33 @@ public final class RendererBotCameraSystem {
 			int fullHeight,
 			int fovDegrees,
 			int targetFps,
+			Consumer<LiveStreamFrame> onFrame,
+			Consumer<String> onFailure
+	) {
+		return ensureLiveStream(
+				ownerKey, level, cameraPos, x, y, z, yaw, pitch, followEntityUuid, hiddenEntityUuids,
+				omnidirectionalChunkLoading, fullWidth, fullHeight, fovDegrees, targetFps, 1.0F, onFrame, onFailure
+		);
+	}
+
+	/** Uses a stream-owned FPV-bank strength, independent from the renderer player's local settings. */
+	public static boolean ensureLiveStream(
+			String ownerKey,
+			ServerLevel level,
+			BlockPos cameraPos,
+			double x,
+			double y,
+			double z,
+			float yaw,
+			float pitch,
+			UUID followEntityUuid,
+			Set<UUID> hiddenEntityUuids,
+			boolean omnidirectionalChunkLoading,
+			int fullWidth,
+			int fullHeight,
+			int fovDegrees,
+			int targetFps,
+			float droneTiltStrength,
 			Consumer<LiveStreamFrame> onFrame,
 			Consumer<String> onFailure
 	) {
@@ -941,7 +969,8 @@ public final class RendererBotCameraSystem {
 				Math.max(1, fullWidth),
 				Math.max(1, fullHeight),
 				Math.max(1, fovDegrees),
-				Math.clamp(Math.max(1, targetFps), 1, MAX_LIVE_STREAM_FPS)
+				Math.clamp(Math.max(1, targetFps), 1, MAX_LIVE_STREAM_FPS),
+				Math.clamp(Float.isFinite(droneTiltStrength) ? droneTiltStrength : 1.0F, 0.0F, 1.0F)
 		);
 		UUID existingStreamId = LIVE_STREAMS_BY_OWNER.get(ownerKey);
 		if (existingStreamId != null) {
@@ -956,6 +985,7 @@ public final class RendererBotCameraSystem {
 			// client every refresh, producing severe video stutter.
 			if (canReuseLiveStream(existing, existingRenderer, desiredSpec)
 					&& canBotRenderLevel(existingRenderer, level)) {
+				existing.replaceSpec(desiredSpec);
 				return true;
 			}
 			if (existing != null) {
@@ -1114,7 +1144,8 @@ public final class RendererBotCameraSystem {
 					current.fullWidth(),
 					current.fullHeight(),
 					current.fovDegrees(),
-					current.targetFps()
+					current.targetFps(),
+					current.droneTiltStrength()
 			));
 			ServerPlayer bot = server.getPlayerList().getPlayer(stream.botUuid());
 			if (bot != null && ServerPlayNetworking.canSend(bot, RendererBotPayloads.RendererBotLiveStreamPoseS2CPayload.TYPE)) {
@@ -2249,7 +2280,7 @@ public final class RendererBotCameraSystem {
 					? target.followTarget().position()
 					: target.followTarget().getEyePosition(1.0F);
 			float cameraBankRadians = DroneSystem.isDroneCameraAnchor(target.followTarget())
-					? droneCameraBankRadians(target.followTarget())
+					? droneCameraBankRadians(target.followTarget()) * spec.droneTiltStrength()
 					: 0.0F;
 			ServerPlayNetworking.send(
 					bot,
@@ -5928,7 +5959,8 @@ public final class RendererBotCameraSystem {
 			int fullWidth,
 			int fullHeight,
 			int fovDegrees,
-			int targetFps
+			int targetFps,
+			float droneTiltStrength
 	) {
 	}
 
