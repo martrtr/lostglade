@@ -297,7 +297,7 @@ public final class ServerBackroomsSystem {
 			} else {
 				ResourceKey<Level> dimension = ResourceKey.create(Registries.DIMENSION, Identifier.parse(returnPoint.dimension));
 				ServerLevel level = server.getLevel(dimension);
-				if (level == null) {
+				if (level == null || returnPoint.y < level.getMinY() - 64) {
 					teleportToFallback(server, player);
 				} else {
 					level.getChunkAt(BlockPos.containing(returnPoint.x, returnPoint.y, returnPoint.z));

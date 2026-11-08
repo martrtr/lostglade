@@ -11,5 +11,9 @@ public interface ServerGlitchHandler {
 
 	boolean sanitizeSettings(GlitchConfig.GlitchEntry entry);
 
+	default boolean isPeriodic() {
+		return true;
+	}
+
 	boolean trigger(MinecraftServer server, RandomSource random, GlitchConfig.GlitchEntry entry, double stabilityPercent);
 }
