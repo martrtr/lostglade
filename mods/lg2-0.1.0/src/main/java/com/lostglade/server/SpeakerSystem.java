@@ -62,6 +62,7 @@ public final class SpeakerSystem {
 	private static final int SHARED_SOURCE_STARTUP_BUFFER_FRAMES = 3;
 	private static final int SHARED_SOURCE_PLAYBACK_LEAD_FRAMES = 2;
 	private static final int SHARED_SOURCE_TARGET_LEAD_FRAMES = 256;
+	private static final int MAX_STARTUP_CATCH_UP_FRAMES = 75;
 	private static final long PROCESS_STARTUP_TIMEOUT_MS = 4_000L;
 	private static final long PROCESS_STALL_TIMEOUT_MS = 3_000L;
 	private static final long PROCESS_EOF_EXIT_TIMEOUT_MS = 1_000L;
@@ -931,6 +932,7 @@ public final class SpeakerSystem {
 		private long lastFrameAtMillis;
 		private long generation;
 		private boolean processEndedCleanly;
+		private long startupFramesToDiscard;
 
 		private SharedSourceFeed(String sourceKey) {
 			this.sourceKey = sourceKey;
@@ -1094,6 +1096,7 @@ public final class SpeakerSystem {
 			this.processStartedAtMillis = 0L;
 			this.lastFrameAtMillis = 0L;
 			this.processEndedCleanly = false;
+			this.startupFramesToDiscard = -1L;
 			this.generation++;
 
 			List<String> command = new ArrayList<>();
@@ -1174,6 +1177,7 @@ public final class SpeakerSystem {
 			this.processStartedAtMillis = 0L;
 			this.lastFrameAtMillis = 0L;
 			this.processEndedCleanly = false;
+			this.startupFramesToDiscard = -1L;
 			return true;
 		}
 
@@ -1197,6 +1201,21 @@ public final class SpeakerSystem {
 							return;
 						}
 						this.lastFrameAtMillis = System.currentTimeMillis();
+						if (!this.liveStream && this.startupFramesToDiscard < 0L) {
+							long startupDelayMs = Math.max(0L, this.lastFrameAtMillis - this.processStartedAtMillis);
+							this.startupFramesToDiscard = Math.min(
+									MAX_STARTUP_CATCH_UP_FRAMES,
+									startupDelayMs / AUDIO_FRAME_DURATION_MS
+							);
+						}
+						if (this.startupFramesToDiscard > 0L) {
+							// The monitor timeline has continued while the remote audio
+							// connection/decoder started. Consume the corresponding PCM lead
+							// so playback joins the already-running video instead of trailing it.
+							this.startupFramesToDiscard--;
+							this.nextFrameSequence++;
+							continue;
+						}
 						long frameSequence = this.nextFrameSequence++;
 						this.frameBuffer.put(frameSequence, frame);
 						if (this.playbackEpochNanos == 0L && this.frameBuffer.size() >= SHARED_SOURCE_STARTUP_BUFFER_FRAMES) {

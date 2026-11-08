@@ -38,6 +38,6 @@
   "monitorMediaIoThreads": 4,
   "monitorTileQuantizerThreads": 12,
   "monitorMapUpdateRadiusBlocks": 128,
-  "monitorYoutubePollActiveIntervalMs": 50,
+  "monitorYoutubePollActiveIntervalMs": 80,
   "monitorYoutubePollIdleIntervalMs": 200
 }

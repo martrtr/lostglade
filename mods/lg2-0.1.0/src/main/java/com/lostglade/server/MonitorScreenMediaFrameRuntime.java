@@ -366,6 +366,13 @@ final class MonitorScreenMediaFrameRuntime {
 				}
 				if (result.snapshot().ready()) {
 					if (wasLoading) {
+						// Audio is decoded by a separate ffmpeg process. Re-anchor it once the
+						// visual relay has an actual frame, otherwise it starts from the old
+						// load position and remains audibly behind the video for the whole track.
+						if (state.streamKind == PlaybackStreamKind.YOUTUBE && !state.userPaused) {
+							bumpAudioSyncTokenLocked(state);
+							speakerRefreshNeeded = true;
+						}
 						state.progress.complete("READY");
 						shouldFadeProgress = true;
 						shouldRender = true;
