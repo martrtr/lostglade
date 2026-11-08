@@ -11,8 +11,9 @@ public final class RendererModPolicyTest {
 		var suspend = policy.getMethod("suspendPack", String.class, boolean.class, boolean.class);
 		require(reason.invoke(null, List.of("fabricloader", "sodium", "iris", "voxy", "distanthorizons", "modmenu", "unknown-library", "xaerominimap")) == null,
 				"ordinary modpacks and unknown libraries must not need an allowlist entry");
-		for (String mod : List.of("advanced-xray", "advanced_xray", "advancedxray", "xray", "LITEMATICA", "meteor-client", "gammautils")) {
-			require(String.valueOf(reason.invoke(null, List.of("sodium", mod))).startsWith("blocked-visual-mod:"), "known visual conflict admitted: " + mod);
+		for (String mod : List.of("advanced-xray", "advanced_xray", "advancedxray", "xray", "LITEMATICA", "meteor-client", "gammautils", "wurst", "litematica", "axiom")) {
+			require(reason.invoke(null, List.of("sodium", mod)) == null,
+					"installed mod must not block a volunteer before its visual feature is active: " + mod);
 		}
 		require(String.valueOf(reason.invoke(null, List.of("vulkanmod"))).equals("unsupported-renderer:vulkanmod"), "OpenGL capture must not admit an incompatible graphics backend");
 		require(!(boolean) suspend.invoke(null, "vanilla", false, false), "vanilla resources were removed");

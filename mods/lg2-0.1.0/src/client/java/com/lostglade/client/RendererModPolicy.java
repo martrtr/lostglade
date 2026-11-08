@@ -6,22 +6,23 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Known incompatible visual modifications; unrelated mods and libraries are admitted. */
+/**
+ * Admission is based on the active render environment, never on a list of
+ * installed gameplay/client mods.  A mod being present does not mean that one
+ * of its visual features is enabled (Meteor is the most obvious example), and
+ * refusing such clients needlessly discards otherwise usable volunteers.
+ */
 public final class RendererModPolicy {
-	private static final Set<String> BLOCKED_VISUAL_MODS = Set.of(
-			"advanced-xray", "advanced_xray", "advancedxray", "xray", "xraymod",
-			"litematica", "forgematica", "axiom", "worldeditcui", "minihud", "fullbright", "fullbrightnesstoggle",
-			"gammautils", "boostedbrightness", "gammashifter",
-			"meteor-client", "wurst", "wurstclient", "bleachhack", "liquidbounce"
-	);
+	// These replace Minecraft's OpenGL renderer.  The off-screen camera uses
+	// OpenGL framebuffer/readback APIs and cannot be isolated reliably there.
 	private static final Set<String> UNSUPPORTED_RENDERERS = Set.of("vulkanmod", "canvas");
 
 	private RendererModPolicy() { }
 
 	public static String blockingReason(Collection<String> modIds) {
 		return modIds.stream().filter(java.util.Objects::nonNull).map(id -> id.toLowerCase(Locale.ROOT)).sorted()
-				.filter(id -> BLOCKED_VISUAL_MODS.contains(id) || UNSUPPORTED_RENDERERS.contains(id))
-				.map(id -> (UNSUPPORTED_RENDERERS.contains(id) ? "unsupported-renderer:" : "blocked-visual-mod:") + id)
+				.filter(UNSUPPORTED_RENDERERS::contains)
+				.map(id -> "unsupported-renderer:" + id)
 				.findFirst().orElse(null);
 	}
 
