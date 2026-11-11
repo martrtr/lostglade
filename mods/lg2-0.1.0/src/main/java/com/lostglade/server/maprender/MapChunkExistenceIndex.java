@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -152,7 +153,9 @@ public final class MapChunkExistenceIndex {
 		for (MapTileKey key : keys) {
 			result.put(key, MapTileSourceState.from(key, profile, grouped.get(key), entityIndex));
 		}
-		return Map.copyOf(result);
+		// result is local and no longer mutated. Keeping this sorted LinkedHashMap
+		// avoids rebuilding a very large immutable MapN just to make it read-only.
+		return Collections.unmodifiableMap(result);
 	}
 
 	private record ChunkCoordinate(int chunkX, int chunkZ) {

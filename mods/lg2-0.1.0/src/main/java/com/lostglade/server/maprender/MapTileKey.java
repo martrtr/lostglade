@@ -61,4 +61,22 @@ public record MapTileKey(
 		}
 		return Integer.compare(this.renderProfileVersion, other.renderProfileVersion);
 	}
+
+	/**
+	 * Tile coordinates are normally scanned as dense rectangular ranges. The
+	 * generated record hash combines the coordinates linearly, making many of
+	 * those keys collide in immutable maps. Mix both 64-bit coordinates before
+	 * narrowing to the map hash.
+	 */
+	@Override
+	public int hashCode() {
+		long hash = this.tileX * 0x9E3779B97F4A7C15L;
+		hash ^= Long.rotateLeft(this.tileZ * 0xC2B2AE3D27D4EB4FL, 29);
+		hash ^= (long) this.dimensionId.hashCode() * 0x165667B19E3779F9L;
+		hash ^= (long) this.renderProfileVersion * 0x85EBCA77C2B2AE63L;
+		hash ^= hash >>> 33;
+		hash *= 0xFF51AFD7ED558CCDL;
+		hash ^= hash >>> 33;
+		return (int) (hash ^ (hash >>> 32));
+	}
 }
