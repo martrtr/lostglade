@@ -156,6 +156,22 @@ public final class MapChunkExistenceIndex {
 	}
 
 	private record ChunkCoordinate(int chunkX, int chunkZ) {
+		/**
+		 * Region files commonly contain dense rectangular runs of chunk coordinates.
+		 * The record's generated {@code 31 * x + z} hash gives those coordinates long
+		 * collision chains in {@link java.util.ImmutableCollections.MapN}, which is
+		 * used by {@link Map#copyOf(Map)} below. Discovery performs many point
+		 * lookups, so mix both coordinates before handing them to the immutable map.
+		 */
+		@Override
+		public int hashCode() {
+			int hash = this.chunkX * 0x9E3779B9;
+			hash = Integer.rotateLeft(hash, 16) ^ this.chunkZ * 0x85EBCA6B;
+			hash ^= hash >>> 16;
+			hash *= 0x85EBCA6B;
+			hash ^= hash >>> 13;
+			return hash;
+		}
 	}
 
 	public record ChunkStamp(

@@ -22,7 +22,10 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MapRenderScheduler {
     private static final int DISPATCH_INTERVAL_TICKS = 20;
-    private static final int RESCAN_INTERVAL_TICKS = 20 * 60;
+    // Full-world header discovery is deliberately infrequent. A completed
+    // render publishes its freshness immediately, so periodic rescans are only
+    // needed to notice chunks saved outside the renderer's own workflow.
+    private static final int RESCAN_INTERVAL_TICKS = 20 * 60 * 10;
     private static final QueueClass[] FAIR_CYCLE = {
             QueueClass.DIRTY, QueueClass.DIRTY, QueueClass.DIRTY, QueueClass.DIRTY, QueueClass.DIRTY,
             QueueClass.VISIBLE, QueueClass.VISIBLE, QueueClass.VISIBLE, QueueClass.VISIBLE,
